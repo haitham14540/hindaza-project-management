@@ -16,7 +16,7 @@ type RuntimeEnvironment = { SETUP_KEY?: string };
 
 const SESSION_COOKIE = "hindaza_session";
 const SESSION_AGE_SECONDS = 60 * 60 * 24 * 7;
-const PASSWORD_ITERATIONS = 210_000;
+const PASSWORD_ITERATIONS = 100_000;
 
 function bytesToHex(bytes: Uint8Array) {
   return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
