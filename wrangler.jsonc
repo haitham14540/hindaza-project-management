@@ -16,7 +16,7 @@
     {
       "binding": "DB",
       "database_name": "hindaza-project-management-db",
-      "database_id": "12345678-abcd-1234-abcd-1234567890ab",
+      "database_id": "00000000-0000-0000-0000-000000000000",
       "migrations_dir": "drizzle"
     }
   ],
