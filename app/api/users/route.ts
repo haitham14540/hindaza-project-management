@@ -13,7 +13,7 @@ function role(value: unknown): "manager" | "member" {
   return value === "manager" ? "manager" : "member";
 }
 
-const disciplines = ["Architecture", "ID", "Structure", "Mechanical", "Electrical", "Infrastructure"] as const;
+const disciplines = ["Manager", "Architecture", "ID", "Structure", "Mechanical", "Electrical", "Infrastructure"] as const;
 
 function discipline(value: unknown) {
   return typeof value === "string" && disciplines.includes(value as (typeof disciplines)[number])

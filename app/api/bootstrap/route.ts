@@ -1,6 +1,6 @@
 import { asc, count, desc, eq } from "drizzle-orm";
 import { getDb } from "@/db";
-import { projects, tasks, users } from "@/db/schema";
+import { projects, taskComments, tasks, users } from "@/db/schema";
 import { getCurrentUser, unauthorizedResponse } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
@@ -112,7 +112,7 @@ export async function GET(request: Request) {
         .onConflictDoNothing({ target: projects.code });
     }
 
-    const [taskRows, userRows, projectRows] = await Promise.all([
+    const [taskRows, userRows, projectRows, commentRows] = await Promise.all([
       db
         .select()
         .from(tasks)
@@ -124,6 +124,7 @@ export async function GET(request: Request) {
         discipline: users.discipline,
       }).from(users).where(eq(users.active, true)).orderBy(asc(users.displayName)),
       db.select().from(projects).orderBy(asc(projects.code)),
+      db.select().from(taskComments).orderBy(asc(taskComments.createdAt), asc(taskComments.id)),
     ]);
 
     return Response.json({
@@ -131,6 +132,7 @@ export async function GET(request: Request) {
       tasks: taskRows,
       users: userRows,
       projects: projectRows,
+      comments: commentRows,
     });
   } catch (error) {
     const unauthorized = unauthorizedResponse(error);

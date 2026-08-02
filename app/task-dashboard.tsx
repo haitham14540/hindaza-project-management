@@ -3,7 +3,7 @@
 
 import { FormEvent, useEffect, useMemo, useState } from "react";
 
-type Discipline = "Architecture" | "ID" | "Structure" | "Mechanical" | "Electrical" | "Infrastructure";
+type Discipline = "Manager" | "Architecture" | "ID" | "Structure" | "Mechanical" | "Electrical" | "Infrastructure";
 
 type User = {
   email: string;
@@ -44,6 +44,21 @@ type Task = {
   updatedAt: string;
 };
 
+type TaskComment = {
+  id: number;
+  taskId: number;
+  authorEmail: string;
+  authorName: string;
+  body: string;
+  createdAt: string;
+};
+
+type PasswordForm = {
+  currentPassword: string;
+  newPassword: string;
+  confirmPassword: string;
+};
+
 type TaskForm = Omit<Task, "id" | "createdBy" | "createdAt" | "updatedAt">;
 type ProjectForm = Omit<Project, "id" | "createdAt">;
 type UserForm = Pick<User, "email" | "displayName" | "role" | "discipline"> & { temporaryPassword: string };
@@ -75,7 +90,7 @@ const projectStatusLabel: Record<Project["status"], string> = {
   completed: "مكتمل · Completed",
 };
 
-const disciplines: Discipline[] = ["Architecture", "ID", "Structure", "Mechanical", "Electrical", "Infrastructure"];
+const disciplines: Discipline[] = ["Manager", "Architecture", "ID", "Structure", "Mechanical", "Electrical", "Infrastructure"];
 
 function localToday() {
   const date = new Date();
@@ -127,7 +142,19 @@ function initials(name: string) {
 
 function formatDate(value: string) {
   if (!value) return "—";
-  return new Intl.DateTimeFormat("ar-JO", { day: "numeric", month: "short", year: "numeric" }).format(new Date(`${value}T12:00:00`));
+  return new Intl.DateTimeFormat("en-GB", { day: "2-digit", month: "short", year: "numeric" }).format(new Date(`${value}T12:00:00`));
+}
+
+function formatDateTime(value: string) {
+  if (!value) return "—";
+  const normalized = value.includes("T") ? value : `${value.replace(" ", "T")}Z`;
+  return new Intl.DateTimeFormat("en-GB", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(new Date(normalized));
 }
 
 function isoDate(date: Date) {
@@ -157,6 +184,7 @@ function escapeXml(value: unknown) {
 export default function TaskDashboard() {
   const [tab, setTab] = useState<Tab>("overview");
   const [tasks, setTasks] = useState<Task[]>([]);
+  const [comments, setComments] = useState<TaskComment[]>([]);
   const [users, setUsers] = useState<User[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
   const [currentUser, setCurrentUser] = useState<User | null>(null);
@@ -167,12 +195,16 @@ export default function TaskDashboard() {
   const [taskDrawerOpen, setTaskDrawerOpen] = useState(false);
   const [projectDrawerOpen, setProjectDrawerOpen] = useState(false);
   const [userDrawerOpen, setUserDrawerOpen] = useState(false);
+  const [passwordDrawerOpen, setPasswordDrawerOpen] = useState(false);
   const [selectedTaskId, setSelectedTaskId] = useState<number | null>(null);
   const [selectedProjectId, setSelectedProjectId] = useState<number | null>(null);
   const [selectedUserEmail, setSelectedUserEmail] = useState<string | null>(null);
   const [taskForm, setTaskForm] = useState<TaskForm>(blankTask());
   const [projectForm, setProjectForm] = useState<ProjectForm>(blankProject());
   const [userForm, setUserForm] = useState<UserForm>(blankUser());
+  const [passwordForm, setPasswordForm] = useState<PasswordForm>({ currentPassword: "", newPassword: "", confirmPassword: "" });
+  const [commentDraft, setCommentDraft] = useState("");
+  const [savingComment, setSavingComment] = useState(false);
   const [search, setSearch] = useState("");
   const [employeeFilter, setEmployeeFilter] = useState("all");
   const [projectFilter, setProjectFilter] = useState("all");
@@ -195,6 +227,7 @@ export default function TaskDashboard() {
         if (!data) return;
         if (!active) return;
         setTasks(data.tasks);
+        setComments(data.comments || []);
         setUsers(data.users);
         setProjects(data.projects || []);
         setCurrentUser(data.currentUser);
@@ -217,6 +250,7 @@ export default function TaskDashboard() {
         setTaskDrawerOpen(false);
         setProjectDrawerOpen(false);
         setUserDrawerOpen(false);
+        setPasswordDrawerOpen(false);
       }
     }
     window.addEventListener("keydown", onKeyDown);
@@ -304,6 +338,7 @@ export default function TaskDashboard() {
   function openNewTask() {
     setSelectedTaskId(null);
     setTaskForm(blankTask(currentUser || undefined));
+    setCommentDraft("");
     setTaskDrawerOpen(true);
   }
 
@@ -315,6 +350,7 @@ export default function TaskDashboard() {
       plannedHours: task.plannedHours, startTime: task.startTime, endTime: task.endTime,
       actualHours: task.actualHours, status: task.status, managerCheck: task.managerCheck, managerNote: task.managerNote,
     });
+    setCommentDraft("");
     setTaskDrawerOpen(true);
   }
 
@@ -364,6 +400,27 @@ export default function TaskDashboard() {
     finally { setSaving(false); }
   }
 
+  async function addComment() {
+    if (!selectedTaskId || !commentDraft.trim()) return;
+    setSavingComment(true); setError("");
+    try {
+      const response = await fetch("/api/task-comments", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ taskId: selectedTaskId, body: commentDraft }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "Unable to post comment");
+      setComments((current) => [...current, data.comment]);
+      setCommentDraft("");
+      setToast("تمت إضافة الملاحظة إلى سجل المهمة");
+    } catch (commentError) {
+      setError(commentError instanceof Error ? commentError.message : "تعذر إضافة الملاحظة");
+    } finally {
+      setSavingComment(false);
+    }
+  }
+
   async function deleteTask() {
     if (!selectedTaskId || !window.confirm("هل تريد حذف هذه المهمة؟")) return;
     setSaving(true);
@@ -371,6 +428,7 @@ export default function TaskDashboard() {
       const response = await fetch(`/api/tasks?id=${selectedTaskId}`, { method: "DELETE" });
       const data = await response.json(); if (!response.ok) throw new Error(data.error || "تعذر حذف المهمة");
       setTasks((current) => current.filter((task) => task.id !== selectedTaskId));
+      setComments((current) => current.filter((comment) => comment.taskId !== selectedTaskId));
       setTaskDrawerOpen(false); setToast("تم حذف المهمة");
     } catch (deleteError) { setError(deleteError instanceof Error ? deleteError.message : "تعذر حذف المهمة"); }
     finally { setSaving(false); }
@@ -427,6 +485,34 @@ export default function TaskDashboard() {
     window.location.replace("/login");
   }
 
+  async function changePassword(event: FormEvent) {
+    event.preventDefault(); setSaving(true); setError("");
+    if (passwordForm.newPassword !== passwordForm.confirmPassword) {
+      setError("New passwords do not match.");
+      setSaving(false);
+      return;
+    }
+    try {
+      const response = await fetch("/api/auth/change-password", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          currentPassword: passwordForm.currentPassword,
+          newPassword: passwordForm.newPassword,
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "Unable to change password.");
+      setPasswordForm({ currentPassword: "", newPassword: "", confirmPassword: "" });
+      setPasswordDrawerOpen(false);
+      setToast("تم تغيير كلمة المرور بنجاح");
+    } catch (passwordError) {
+      setError(passwordError instanceof Error ? passwordError.message : "تعذر تغيير كلمة المرور");
+    } finally {
+      setSaving(false);
+    }
+  }
+
   function moveReport(direction: number) {
     const date = new Date(`${reportAnchor}T12:00:00`);
     if (reportPeriod === "week") date.setDate(date.getDate() + direction * 7);
@@ -471,12 +557,20 @@ export default function TaskDashboard() {
         <nav className="nav-list">
           {navItems.map((item) => <button key={item.key} className={tab === item.key ? "active" : ""} onClick={() => setTab(item.key)}><span className="nav-icon">{item.icon}</span><span>{item.ar}<small>{item.en}</small></span></button>)}
         </nav>
-        <div className="sidebar-user"><div className="avatar">{initials(currentUser?.displayName || "H")}</div><div><strong>{currentUser?.displayName || "جاري التحميل"}</strong><span>{currentUser?.role === "manager" ? "Manager · مسؤول" : "Team member · موظف"}</span></div><button className="logout-button" onClick={logout} aria-label="تسجيل الخروج">خروج</button></div>
+        <div className="sidebar-user">
+          <div className="avatar">{initials(currentUser?.displayName || "H")}</div>
+          <div className="sidebar-user-copy">
+            <strong>{currentUser?.displayName || "جاري التحميل"}</strong>
+            <span>{currentUser?.role === "manager" ? "Manager · مسؤول" : "Team member · موظف"}</span>
+            <button className="password-link" onClick={() => setPasswordDrawerOpen(true)}>Change password</button>
+          </div>
+          <button className="logout-button" onClick={logout} aria-label="تسجيل الخروج">خروج</button>
+        </div>
       </aside>
 
       <main className="main-content">
         <header className="topbar">
-          <div><p className="eyebrow">HINDAZA · PROJECT MANAGEMENT</p><h1>{pageTitle[tab]}</h1><p className="subhead">{new Intl.DateTimeFormat("ar-JO", { weekday: "long", year: "numeric", month: "long", day: "numeric" }).format(new Date())}</p></div>
+          <div><p className="eyebrow">HINDAZA · PROJECT MANAGEMENT</p><h1>{pageTitle[tab]}</h1><p className="subhead" dir="ltr">{new Intl.DateTimeFormat("en-GB", { weekday: "long", year: "numeric", month: "long", day: "numeric" }).format(new Date())}</p></div>
           {(tab === "overview" || tab === "tasks") && <button className="primary-button" onClick={openNewTask}><span>＋</span> مهمة جديدة <small>New Task</small></button>}
           {tab === "projects" && currentUser?.role === "manager" && <button className="primary-button" onClick={openNewProject}><span>＋</span> مشروع جديد <small>New Project</small></button>}
           {tab === "team" && currentUser?.role === "manager" && <button className="primary-button" onClick={openNewUser}><span>＋</span> إضافة موظف <small>Add Employee</small></button>}
@@ -535,9 +629,10 @@ export default function TaskDashboard() {
         </section>}
       </main>
 
-      {taskDrawerOpen && <TaskDrawer selectedId={selectedTaskId} form={taskForm} setOpen={setTaskDrawerOpen} saveTask={saveTask} deleteTask={deleteTask} saving={saving} currentUser={currentUser} users={users} projects={projectCodes} updateForm={updateTaskForm} />}
+      {taskDrawerOpen && <TaskDrawer selectedId={selectedTaskId} form={taskForm} setOpen={setTaskDrawerOpen} saveTask={saveTask} deleteTask={deleteTask} saving={saving} currentUser={currentUser} users={users} projects={projectCodes} updateForm={updateTaskForm} comments={comments.filter((comment) => comment.taskId === selectedTaskId)} commentDraft={commentDraft} setCommentDraft={setCommentDraft} addComment={addComment} savingComment={savingComment} />}
       {projectDrawerOpen && <ProjectDrawer selectedId={selectedProjectId} form={projectForm} setForm={setProjectForm} setOpen={setProjectDrawerOpen} saveProject={saveProject} saving={saving} />}
       {userDrawerOpen && <UserDrawer selectedEmail={selectedUserEmail} form={userForm} setForm={setUserForm} setOpen={setUserDrawerOpen} saveUser={saveUser} deleteUser={deleteUser} saving={saving} currentUser={currentUser} />}
+      {passwordDrawerOpen && <PasswordDrawer form={passwordForm} setForm={setPasswordForm} setOpen={setPasswordDrawerOpen} changePassword={changePassword} saving={saving} />}
       {toast && <div className="toast">✓ {toast}</div>}
     </div>
   );
@@ -559,15 +654,48 @@ function TaskTable(props: TaskTableProps) {
   </section>;
 }
 
-type TaskDrawerProps = { selectedId: number | null; form: TaskForm; setOpen: (value: boolean) => void; saveTask: (event: FormEvent) => void; deleteTask: () => void; saving: boolean; currentUser: User | null; users: User[]; projects: string[]; updateForm: <K extends keyof TaskForm>(key: K, value: TaskForm[K]) => void; };
+type TaskDrawerProps = {
+  selectedId: number | null;
+  form: TaskForm;
+  setOpen: (value: boolean) => void;
+  saveTask: (event: FormEvent) => void;
+  deleteTask: () => void;
+  saving: boolean;
+  currentUser: User | null;
+  users: User[];
+  projects: string[];
+  updateForm: <K extends keyof TaskForm>(key: K, value: TaskForm[K]) => void;
+  comments: TaskComment[];
+  commentDraft: string;
+  setCommentDraft: (value: string) => void;
+  addComment: () => void;
+  savingComment: boolean;
+};
 
-function TaskDrawer({ selectedId, form, setOpen, saveTask, deleteTask, saving, currentUser, users, projects, updateForm }: TaskDrawerProps) {
-  return <div className="drawer-layer" role="dialog" aria-modal="true" aria-label="تفاصيل المهمة"><button className="drawer-backdrop" onClick={() => setOpen(false)} aria-label="إغلاق" /><aside className="task-drawer"><div className="drawer-head"><div><p>{selectedId ? `TASK #${selectedId}` : "NEW TASK"}</p><h2>{selectedId ? "تفاصيل وتحديث المهمة" : "إضافة مهمة جديدة"}</h2></div><button className="close-button" onClick={() => setOpen(false)} aria-label="إغلاق">×</button></div><form onSubmit={saveTask} className="task-form">
-    <div className="form-section"><h3>معلومات المهمة <span>Task Information</span></h3><label className="wide"><span>اسم المهمة · Task</span><input required value={form.title} onChange={(event) => updateForm("title", event.target.value)} placeholder="مثال: تدقيق موديل المنطقة 02" /></label><label className="wide"><span>المخرج المتوقع · Expected Output</span><textarea value={form.expectedOutput} onChange={(event) => updateForm("expectedOutput", event.target.value)} rows={3} placeholder="ما المطلوب تسليمه عند اكتمال المهمة؟" /></label><div className="form-grid"><label><span>المشروع · Project</span><select required value={form.project} onChange={(event) => updateForm("project", event.target.value)}><option value="">اختر المشروع</option>{projects.map((project) => <option key={project}>{project}</option>)}</select></label><label><span>التاريخ · Date</span><input type="date" value={form.taskDate} onChange={(event) => updateForm("taskDate", event.target.value)} /></label><label><span>الأولوية · Priority</span><select value={form.priority} onChange={(event) => updateForm("priority", event.target.value as Task["priority"])}>{Object.entries(priorityLabel).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></label><label><span>الحالة · Status</span><select value={form.status} onChange={(event) => updateForm("status", event.target.value as Task["status"])}>{Object.entries(statusLabel).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></label></div></div>
-    <div className="form-section"><h3>الموظف والوقت <span>Assignment & Time</span></h3><div className="form-grid"><label><span>الموظف · Employee</span><select disabled={currentUser?.role !== "manager"} value={form.employeeEmail} onChange={(event) => { const user = users.find((item) => item.email === event.target.value); updateForm("employeeEmail", event.target.value); if (user) updateForm("employeeName", user.displayName); }}><option value="">اختر الموظف</option>{users.map((user) => <option key={user.email} value={user.email}>{user.displayName}{user.discipline ? ` · ${user.discipline}` : ""}</option>)}</select></label><label><span>البريد · Email</span><input disabled value={form.employeeEmail} placeholder="يُعبأ تلقائيًا" /></label><label><span>ساعات مخططة · Planned</span><input type="number" min="0" step="0.25" value={form.plannedHours} onChange={(event) => updateForm("plannedHours", Number(event.target.value))} /></label><label><span>ساعات فعلية · Actual</span><input type="number" min="0" step="0.25" value={form.actualHours} onChange={(event) => updateForm("actualHours", Number(event.target.value))} /></label><label><span>وقت البدء · Start</span><input type="time" value={form.startTime} onChange={(event) => updateForm("startTime", event.target.value)} /></label><label><span>وقت النهاية · End</span><input type="time" value={form.endTime} onChange={(event) => updateForm("endTime", event.target.value)} /></label></div></div>
-    {currentUser?.role === "manager" && <div className="form-section manager-section"><h3>مراجعة المسؤول <span>Manager Review</span></h3><div className="review-choice">{(["pending", "approved", "returned"] as const).map((value) => <button type="button" key={value} className={form.managerCheck === value ? `selected ${value}` : value} onClick={() => updateForm("managerCheck", value)}>{checkLabel[value]}</button>)}</div><label className="wide"><span>ملاحظة المسؤول · Manager Note</span><textarea rows={3} value={form.managerNote} onChange={(event) => updateForm("managerNote", event.target.value)} placeholder="ملاحظات التدقيق أو سبب الإرجاع..." /></label></div>}
-    <div className="drawer-actions">{selectedId && currentUser?.role === "manager" && <button type="button" className="delete-button" onClick={deleteTask} disabled={saving}>حذف</button>}<button type="button" className="secondary-button" onClick={() => setOpen(false)}>إلغاء</button><button type="submit" className="primary-button" disabled={saving}>{saving ? "جاري الحفظ..." : selectedId ? "حفظ التعديلات" : "إضافة المهمة"}</button></div>
-  </form></aside></div>;
+function TaskDrawer({ selectedId, form, setOpen, saveTask, deleteTask, saving, currentUser, users, projects, updateForm, comments, commentDraft, setCommentDraft, addComment, savingComment }: TaskDrawerProps) {
+  return <div className="drawer-layer" role="dialog" aria-modal="true" aria-label="تفاصيل المهمة">
+    <button className="drawer-backdrop" onClick={() => setOpen(false)} aria-label="إغلاق" />
+    <aside className="task-drawer">
+      <div className="drawer-head"><div><p>{selectedId ? `TASK #${selectedId}` : "NEW TASK"}</p><h2>{selectedId ? "تفاصيل وتحديث المهمة" : "إضافة مهمة جديدة"}</h2></div><button className="close-button" onClick={() => setOpen(false)} aria-label="إغلاق">×</button></div>
+      <form onSubmit={saveTask} className="task-form">
+        <div className="form-section"><h3>معلومات المهمة <span>Task Information</span></h3><label className="wide"><span>اسم المهمة · Task</span><input required value={form.title} onChange={(event) => updateForm("title", event.target.value)} placeholder="مثال: تدقيق موديل المنطقة 02" /></label><label className="wide"><span>المخرج المتوقع · Expected Output</span><textarea value={form.expectedOutput} onChange={(event) => updateForm("expectedOutput", event.target.value)} rows={3} placeholder="ما المطلوب تسليمه عند اكتمال المهمة؟" /></label><div className="form-grid"><label><span>المشروع · Project</span><select required value={form.project} onChange={(event) => updateForm("project", event.target.value)}><option value="">اختر المشروع</option>{projects.map((project) => <option key={project}>{project}</option>)}</select></label><label><span>التاريخ · Date</span><input type="date" lang="en-GB" value={form.taskDate} onChange={(event) => updateForm("taskDate", event.target.value)} /></label><label><span>الأولوية · Priority</span><select value={form.priority} onChange={(event) => updateForm("priority", event.target.value as Task["priority"])}>{Object.entries(priorityLabel).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></label><label><span>الحالة · Status</span><select value={form.status} onChange={(event) => updateForm("status", event.target.value as Task["status"])}>{Object.entries(statusLabel).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></label></div></div>
+        <div className="form-section"><h3>الموظف والوقت <span>Assignment & Time</span></h3><div className="form-grid"><label><span>الموظف · Employee</span><select disabled={currentUser?.role !== "manager"} value={form.employeeEmail} onChange={(event) => { const user = users.find((item) => item.email === event.target.value); updateForm("employeeEmail", event.target.value); if (user) updateForm("employeeName", user.displayName); }}><option value="">اختر الموظف</option>{users.map((user) => <option key={user.email} value={user.email}>{user.displayName}{user.discipline ? ` · ${user.discipline}` : ""}</option>)}</select></label><label><span>البريد · Email</span><input disabled value={form.employeeEmail} placeholder="يُعبأ تلقائيًا" /></label><label><span>ساعات مخططة · Planned</span><input type="number" min="0" step="0.25" value={form.plannedHours} onChange={(event) => updateForm("plannedHours", Number(event.target.value))} /></label><label><span>ساعات فعلية · Actual</span><input type="number" min="0" step="0.25" value={form.actualHours} onChange={(event) => updateForm("actualHours", Number(event.target.value))} /></label><label><span>وقت البدء · Start</span><input type="time" value={form.startTime} onChange={(event) => updateForm("startTime", event.target.value)} /></label><label><span>وقت النهاية · End</span><input type="time" value={form.endTime} onChange={(event) => updateForm("endTime", event.target.value)} /></label></div></div>
+        {currentUser?.role === "manager" && <div className="form-section manager-section"><h3>مراجعة المسؤول <span>Manager Review</span></h3><div className="review-choice">{(["pending", "approved", "returned"] as const).map((value) => <button type="button" key={value} className={form.managerCheck === value ? `selected ${value}` : value} onClick={() => updateForm("managerCheck", value)}>{checkLabel[value]}</button>)}</div><label className="wide"><span>ملاحظة المسؤول · Manager Note</span><textarea rows={3} value={form.managerNote} onChange={(event) => updateForm("managerNote", event.target.value)} placeholder="ملاحظات التدقيق أو سبب الإرجاع..." /></label></div>}
+        {selectedId && <div className="form-section comments-section">
+          <div className="comments-heading"><h3>سجل الملاحظات <span>Activity Notes</span></h3><span>{comments.length}</span></div>
+          {comments.length === 0 ? <div className="comments-empty">لا توجد ملاحظات حتى الآن · No notes yet</div> : <div className="comment-list">{comments.map((comment) => {
+            const author = users.find((user) => user.email === comment.authorEmail);
+            return <article className="comment-entry" key={comment.id}>
+              <div className="avatar comment-avatar">{initials(comment.authorName)}</div>
+              <div className="comment-content"><div className="comment-meta"><strong>{comment.authorName}</strong><span className="comment-role">{author?.role === "manager" ? "Manager" : author?.discipline || "Team member"}</span><time dir="ltr">{formatDateTime(comment.createdAt)}</time></div><p>{comment.body}</p></div>
+            </article>;
+          })}</div>}
+          <div className="comment-composer"><label className="wide"><span>أضف ملاحظة · Add a note</span><textarea maxLength={2000} rows={3} value={commentDraft} onChange={(event) => setCommentDraft(event.target.value)} placeholder="اكتب تحديثًا أو ملاحظة مرتبطة بهذه المهمة..." /></label><div><small>{commentDraft.length}/2000</small><button type="button" className="comment-button" onClick={addComment} disabled={savingComment || !commentDraft.trim()}>{savingComment ? "جاري الإضافة..." : "إضافة الملاحظة · Post note"}</button></div></div>
+        </div>}
+        <div className="drawer-actions">{selectedId && currentUser?.role === "manager" && <button type="button" className="delete-button" onClick={deleteTask} disabled={saving}>حذف</button>}<button type="button" className="secondary-button" onClick={() => setOpen(false)}>إلغاء</button><button type="submit" className="primary-button" disabled={saving}>{saving ? "جاري الحفظ..." : selectedId ? "حفظ التعديلات" : "إضافة المهمة"}</button></div>
+      </form>
+    </aside>
+  </div>;
 }
 
 function ProjectDrawer({ selectedId, form, setForm, setOpen, saveProject, saving }: { selectedId: number | null; form: ProjectForm; setForm: (value: ProjectForm) => void; setOpen: (value: boolean) => void; saveProject: (event: FormEvent) => void; saving: boolean; }) {
@@ -575,5 +703,23 @@ function ProjectDrawer({ selectedId, form, setForm, setOpen, saveProject, saving
 }
 
 function UserDrawer({ selectedEmail, form, setForm, setOpen, saveUser, deleteUser, saving, currentUser }: { selectedEmail: string | null; form: UserForm; setForm: (value: UserForm) => void; setOpen: (value: boolean) => void; saveUser: (event: FormEvent) => void; deleteUser: () => void; saving: boolean; currentUser: User | null; }) {
-  return <div className="drawer-layer" role="dialog" aria-modal="true" aria-label="بيانات الموظف"><button className="drawer-backdrop" onClick={() => setOpen(false)} aria-label="إغلاق" /><aside className="task-drawer compact-drawer"><div className="drawer-head"><div><p>TEAM MEMBER</p><h2>{selectedEmail ? "تحديث بيانات الموظف" : "إضافة حساب موظف"}</h2></div><button className="close-button" onClick={() => setOpen(false)}>×</button></div><form onSubmit={saveUser} className="task-form"><div className="form-section"><h3>بيانات الموظف <span>Employee Information</span></h3><label className="wide"><span>الاسم · Name</span><input required value={form.displayName} onChange={(event) => setForm({ ...form, displayName: event.target.value })} placeholder="اسم الموظف" /></label><label className="wide"><span>التخصص · Discipline</span><select required value={form.discipline} onChange={(event) => setForm({ ...form, discipline: event.target.value as Discipline })}><option value="" disabled>اختر التخصص</option>{disciplines.map((item) => <option value={item} key={item}>{item}</option>)}</select></label><label className="wide"><span>البريد · Email</span><input required type="email" disabled={Boolean(selectedEmail)} value={form.email} onChange={(event) => setForm({ ...form, email: event.target.value })} placeholder="name@eng-bim.com" /></label><label className="wide"><span>{selectedEmail ? "كلمة مرور جديدة · New Password" : "كلمة مرور مؤقتة · Temporary Password"}</span><input required={!selectedEmail} minLength={10} type="password" value={form.temporaryPassword} onChange={(event) => setForm({ ...form, temporaryPassword: event.target.value })} placeholder={selectedEmail ? "اتركها فارغة دون تغيير" : "10 أحرف على الأقل"} autoComplete="new-password" /></label><label className="wide"><span>الصلاحية داخل النظام · Role</span><select value={form.role} onChange={(event) => setForm({ ...form, role: event.target.value as User["role"] })}><option value="member">Member · موظف</option><option value="manager">Manager · مسؤول</option></select></label><div className="temporary-note">أرسل للموظف كلمة المرور المؤقتة بطريقة آمنة، ويمكن تغييرها لاحقًا من خلال المسؤول.</div></div><div className="drawer-actions">{selectedEmail && selectedEmail !== currentUser?.email && <button type="button" className="delete-button" onClick={deleteUser} disabled={saving}>حذف</button>}<button type="button" className="secondary-button" onClick={() => setOpen(false)}>إلغاء</button><button type="submit" className="primary-button" disabled={saving}>{saving ? "جاري الحفظ..." : selectedEmail ? "حفظ التعديلات" : "إضافة الموظف"}</button></div></form></aside></div>;
+  return <div className="drawer-layer" role="dialog" aria-modal="true" aria-label="بيانات الموظف"><button className="drawer-backdrop" onClick={() => setOpen(false)} aria-label="إغلاق" /><aside className="task-drawer compact-drawer"><div className="drawer-head"><div><p>TEAM MEMBER</p><h2>{selectedEmail ? "تحديث بيانات الموظف" : "إضافة حساب موظف"}</h2></div><button className="close-button" onClick={() => setOpen(false)}>×</button></div><form onSubmit={saveUser} className="task-form"><div className="form-section"><h3>بيانات الموظف <span>Employee Information</span></h3><label className="wide"><span>الاسم · Name</span><input required value={form.displayName} onChange={(event) => setForm({ ...form, displayName: event.target.value })} placeholder="اسم الموظف" /></label><label className="wide"><span>التخصص · Discipline</span><select required value={form.discipline} onChange={(event) => setForm({ ...form, discipline: event.target.value as Discipline })}><option value="" disabled>اختر التخصص</option>{disciplines.map((item) => <option value={item} key={item}>{item}</option>)}</select></label><label className="wide"><span>البريد · Email</span><input required type="email" disabled={Boolean(selectedEmail)} value={form.email} onChange={(event) => setForm({ ...form, email: event.target.value })} placeholder="name@eng-bim.com" /></label><label className="wide"><span>{selectedEmail ? "كلمة مرور جديدة · New Password" : "كلمة مرور مؤقتة · Temporary Password"}</span><input required={!selectedEmail} minLength={10} type="password" value={form.temporaryPassword} onChange={(event) => setForm({ ...form, temporaryPassword: event.target.value })} placeholder={selectedEmail ? "اتركها فارغة دون تغيير" : "10 أحرف على الأقل"} autoComplete="new-password" /></label><label className="wide"><span>الصلاحية داخل النظام · Role</span><select value={form.role} onChange={(event) => setForm({ ...form, role: event.target.value as User["role"] })}><option value="member">Member · موظف</option><option value="manager">Manager · مسؤول</option></select></label><div className="temporary-note">أرسل للموظف كلمة المرور المؤقتة بطريقة آمنة. يستطيع الموظف تغييرها من حسابه بعد تسجيل الدخول.</div></div><div className="drawer-actions">{selectedEmail && selectedEmail !== currentUser?.email && <button type="button" className="delete-button" onClick={deleteUser} disabled={saving}>حذف</button>}<button type="button" className="secondary-button" onClick={() => setOpen(false)}>إلغاء</button><button type="submit" className="primary-button" disabled={saving}>{saving ? "جاري الحفظ..." : selectedEmail ? "حفظ التعديلات" : "إضافة الموظف"}</button></div></form></aside></div>;
+}
+
+function PasswordDrawer({ form, setForm, setOpen, changePassword, saving }: { form: PasswordForm; setForm: (value: PasswordForm) => void; setOpen: (value: boolean) => void; changePassword: (event: FormEvent) => void; saving: boolean; }) {
+  return <div className="drawer-layer" role="dialog" aria-modal="true" aria-label="Change password">
+    <button className="drawer-backdrop" onClick={() => setOpen(false)} aria-label="Close" />
+    <aside className="task-drawer compact-drawer password-drawer" dir="ltr">
+      <div className="drawer-head"><div><p>ACCOUNT SECURITY</p><h2>Change password</h2></div><button className="close-button" onClick={() => setOpen(false)} aria-label="Close">×</button></div>
+      <form onSubmit={changePassword} className="task-form password-form">
+        <div className="password-intro"><span>•••</span><div><strong>Keep your account secure</strong><p>Use at least 10 characters. Changing your password signs out your other sessions.</p></div></div>
+        <div className="form-section">
+          <label className="wide"><span>Current password</span><input required type="password" value={form.currentPassword} onChange={(event) => setForm({ ...form, currentPassword: event.target.value })} autoComplete="current-password" /></label>
+          <label className="wide"><span>New password</span><input required minLength={10} type="password" value={form.newPassword} onChange={(event) => setForm({ ...form, newPassword: event.target.value })} autoComplete="new-password" /></label>
+          <label className="wide"><span>Confirm new password</span><input required minLength={10} type="password" value={form.confirmPassword} onChange={(event) => setForm({ ...form, confirmPassword: event.target.value })} autoComplete="new-password" /></label>
+        </div>
+        <div className="drawer-actions"><button type="button" className="secondary-button" onClick={() => setOpen(false)}>Cancel</button><button type="submit" className="primary-button" disabled={saving}>{saving ? "Updating…" : "Update password"}</button></div>
+      </form>
+    </aside>
+  </div>;
 }

@@ -4,14 +4,14 @@ import { createSession, passwordRecord, setupKeyIsValid, setupRequired } from "@
 
 export const dynamic = "force-dynamic";
 
-const disciplines = ["Architecture", "ID", "Structure", "Mechanical", "Electrical", "Infrastructure"] as const;
+const disciplines = ["Manager", "Architecture", "ID", "Structure", "Mechanical", "Electrical", "Infrastructure"] as const;
 
 export async function POST(request: Request) {
   try {
-    if (!(await setupRequired())) return Response.json({ error: "تم إعداد حساب المدير مسبقًا." }, { status: 409 });
+    if (!(await setupRequired())) return Response.json({ error: "The manager account has already been configured." }, { status: 409 });
     const payload = (await request.json()) as Record<string, unknown>;
     const setupKey = typeof payload.setupKey === "string" ? payload.setupKey : "";
-    if (!(await setupKeyIsValid(setupKey))) return Response.json({ error: "رمز إعداد النظام غير صحيح." }, { status: 403 });
+    if (!(await setupKeyIsValid(setupKey))) return Response.json({ error: "The setup key is incorrect." }, { status: 403 });
 
     const displayName = typeof payload.displayName === "string" ? payload.displayName.trim().slice(0, 120) : "";
     const email = typeof payload.email === "string" ? payload.email.trim().toLowerCase().slice(0, 180) : "";
@@ -20,9 +20,9 @@ export async function POST(request: Request) {
       ? (payload.discipline as (typeof disciplines)[number])
       : null;
     if (!displayName || !email || !email.includes("@") || !discipline) {
-      return Response.json({ error: "أكمل الاسم والبريد والتخصص." }, { status: 400 });
+      return Response.json({ error: "Complete the name, email, and discipline fields." }, { status: 400 });
     }
-    if (password.length < 10) return Response.json({ error: "كلمة المرور يجب ألا تقل عن 10 أحرف." }, { status: 400 });
+    if (password.length < 10) return Response.json({ error: "Password must be at least 10 characters." }, { status: 400 });
 
     const db = await getDb();
     const credentials = await passwordRecord(password);
@@ -33,6 +33,6 @@ export async function POST(request: Request) {
       { status: 201, headers: { "Set-Cookie": cookie } },
     );
   } catch (error) {
-    return Response.json({ error: error instanceof Error ? error.message : "تعذر إعداد حساب المدير." }, { status: 500 });
+    return Response.json({ error: error instanceof Error ? error.message : "Unable to configure the manager account." }, { status: 500 });
   }
 }

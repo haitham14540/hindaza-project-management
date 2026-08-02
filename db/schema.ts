@@ -6,7 +6,7 @@ export const users = sqliteTable("users", {
   displayName: text("display_name").notNull(),
   role: text("role", { enum: ["manager", "member"] }).notNull().default("member"),
   discipline: text("discipline", {
-    enum: ["Architecture", "ID", "Structure", "Mechanical", "Electrical", "Infrastructure", ""],
+    enum: ["Manager", "Architecture", "ID", "Structure", "Mechanical", "Electrical", "Infrastructure", ""],
   }).notNull().default(""),
   passwordHash: text("password_hash").notNull().default(""),
   passwordSalt: text("password_salt").notNull().default(""),
@@ -73,5 +73,21 @@ export const tasks = sqliteTable(
   (table) => [
     index("tasks_date_idx").on(table.taskDate),
     index("tasks_employee_idx").on(table.employeeEmail),
+  ],
+);
+
+export const taskComments = sqliteTable(
+  "task_comments",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    taskId: integer("task_id").notNull(),
+    authorEmail: text("author_email").notNull(),
+    authorName: text("author_name").notNull(),
+    body: text("body").notNull(),
+    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  },
+  (table) => [
+    index("task_comments_task_idx").on(table.taskId),
+    index("task_comments_created_idx").on(table.createdAt),
   ],
 );

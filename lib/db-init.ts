@@ -60,6 +60,16 @@ export async function ensureDatabase() {
           created_at TEXT DEFAULT CURRENT_TIMESTAMP NOT NULL
         )
       `),
+      d1.prepare(`
+        CREATE TABLE IF NOT EXISTS task_comments (
+          id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+          task_id INTEGER NOT NULL,
+          author_email TEXT NOT NULL,
+          author_name TEXT NOT NULL,
+          body TEXT NOT NULL,
+          created_at TEXT DEFAULT CURRENT_TIMESTAMP NOT NULL
+        )
+      `),
       d1.prepare(
         "CREATE INDEX IF NOT EXISTS tasks_date_idx ON tasks (task_date)",
       ),
@@ -75,7 +85,13 @@ export async function ensureDatabase() {
       d1.prepare(
         "CREATE INDEX IF NOT EXISTS sessions_expiry_idx ON sessions (expires_at)",
       ),
-    ]).catch((error) => {
+      d1.prepare(
+        "CREATE INDEX IF NOT EXISTS task_comments_task_idx ON task_comments (task_id)",
+      ),
+      d1.prepare(
+        "CREATE INDEX IF NOT EXISTS task_comments_created_idx ON task_comments (created_at)",
+      ),
+    ]).catch((error: unknown) => {
       initialization = null;
       throw error;
     });

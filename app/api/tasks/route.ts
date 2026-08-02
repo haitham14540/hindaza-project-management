@@ -1,6 +1,6 @@
 import { eq, sql } from "drizzle-orm";
 import { getDb } from "@/db";
-import { tasks } from "@/db/schema";
+import { taskComments, tasks } from "@/db/schema";
 import { getCurrentUser, unauthorizedResponse } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
@@ -194,6 +194,7 @@ export async function DELETE(request: Request) {
       return Response.json({ error: "Invalid task id." }, { status: 400 });
     }
     const db = await getDb();
+    await db.delete(taskComments).where(eq(taskComments.taskId, id));
     await db.delete(tasks).where(eq(tasks.id, id));
     return Response.json({ ok: true });
   } catch (error) {

@@ -3,7 +3,7 @@ import { getDb } from "@/db";
 import { sessions, users } from "@/db/schema";
 import { ensureDatabase } from "@/lib/db-init";
 
-export type Discipline = "Architecture" | "ID" | "Structure" | "Mechanical" | "Electrical" | "Infrastructure" | "";
+export type Discipline = "Manager" | "Architecture" | "ID" | "Structure" | "Mechanical" | "Electrical" | "Infrastructure" | "";
 
 export type AppUser = {
   email: string;

@@ -12,13 +12,13 @@ export async function POST(request: Request) {
     const payload = (await request.json()) as Record<string, unknown>;
     const email = typeof payload.email === "string" ? payload.email.trim().toLowerCase() : "";
     const password = typeof payload.password === "string" ? payload.password : "";
-    if (!email || !password) return Response.json({ error: "أدخل البريد وكلمة المرور." }, { status: 400 });
+    if (!email || !password) return Response.json({ error: "Enter your email and password." }, { status: 400 });
 
     const db = await getDb();
     const rows = await db.select().from(users).where(eq(users.email, email)).limit(1);
     const user = rows[0];
     const valid = user?.active && await verifyPassword(password, user.passwordHash, user.passwordSalt);
-    if (!valid) return Response.json({ error: "البريد أو كلمة المرور غير صحيحة." }, { status: 401 });
+    if (!valid) return Response.json({ error: "Incorrect email or password." }, { status: 401 });
 
     const cookie = await createSession(user.email, request);
     return Response.json(
@@ -26,6 +26,6 @@ export async function POST(request: Request) {
       { headers: { "Set-Cookie": cookie } },
     );
   } catch (error) {
-    return Response.json({ error: error instanceof Error ? error.message : "تعذر تسجيل الدخول." }, { status: 500 });
+    return Response.json({ error: error instanceof Error ? error.message : "Unable to sign in." }, { status: 500 });
   }
 }
