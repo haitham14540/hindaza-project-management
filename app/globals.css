@@ -207,6 +207,8 @@ button { cursor: pointer; }
 .login-submit:hover { background: #ebc200; transform: translateY(-1px); box-shadow: 0 9px 24px rgba(183,148,0,.2); }
 .login-submit span { font-size: 17px; line-height: 1; }
 .login-submit:disabled { opacity: .6; cursor: wait; transform: none; }
+.login-mode-link { width: 100%; margin-top: 13px; border: 0; background: transparent; color: #6f5a00; font-size: 10px; font-weight: 800; cursor: pointer; text-align: center; }
+.login-mode-link:hover { color: #171717; text-decoration: underline; text-underline-offset: 3px; }
 .login-error { margin-top: 15px; padding: 10px 12px; border: 1px solid #f1cfd2; border-radius: 9px; background: #fff0f1; color: #a52c2c; font-size: 10px; line-height: 1.5; }
 .login-loading { min-height: 165px; display: flex; align-items: center; justify-content: center; gap: 10px; color: #66747b; font-size: 11px; }
 .login-loading i { width: 18px; height: 18px; border-radius: 50%; border: 2px solid #e1e1db; border-top-color: var(--yellow-dark); animation: spin .8s linear infinite; }
