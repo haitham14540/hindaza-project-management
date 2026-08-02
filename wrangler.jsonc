@@ -1,7 +1,7 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "hindaza-project-management",
-  "compatibility_date": "2026-08-01",
+  "compatibility_date": "2026-08-03",
   "compatibility_flags": ["nodejs_compat"],
   "main": "./worker/index.ts",
   "assets": {
@@ -9,13 +9,18 @@
     "not_found_handling": "none",
     "binding": "ASSETS"
   },
-  "images": { "binding": "IMAGES" },
+  "images": {
+    "binding": "IMAGES"
+  },
   "d1_databases": [
     {
       "binding": "DB",
       "database_name": "hindaza-project-management-db",
-      "database_id": "8a4b8aaf-21f6-418e-adaf-0122d0a7b42e",
+      "database_id": "00000000-0000-0000-0000-000000000000",
       "migrations_dir": "drizzle"
     }
-  ]
+  ],
+  "observability": {
+    "enabled": true
+  }
 }

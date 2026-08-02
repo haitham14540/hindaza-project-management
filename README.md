@@ -1,37 +1,112 @@
 # HINDAZA Project Management
 
-An Arabic-first project, task, team, and performance management application for HINDAZA Engineering BIM.
+نظام داخلي لإدارة مشاريع ومهام فريق HINDAZA Engineering BIM. يدعم حسابات المدير والموظفين، المشاريع، المهام، مراجعة المسؤول، سجل الملاحظات، الإشعارات، مؤقت العمل متعدد الجلسات، المهام الخاصة، والتقارير الأسبوعية والشهرية.
 
-## Platform
+## المتطلبات
 
-- Cloudflare Workers
-- Cloudflare D1
-- Vinext / React
-- GitHub-connected automatic deployments
+- Node.js 22.13 أو أحدث
+- حساب Cloudflare يدعم Workers وD1
+- GitHub repository مرتبط بـCloudflare Workers Builds
 
-## Security model
-
-The application has its own email/password authentication and does not require ChatGPT seats. Passwords are stored as PBKDF2-SHA256 hashes with unique salts. Login sessions use hashed random tokens in D1 and `HttpOnly`, `SameSite=Strict` cookies.
-
-## First Cloudflare deployment
-
-1. Create a D1 database named `hindaza-project-management-db`.
-2. Copy its database ID into `wrangler.jsonc`, replacing the all-zero placeholder.
-3. Add a Worker secret named `SETUP_KEY`. Use a long random value and do not commit it.
-4. Apply the database migrations with `npm run db:migrate:remote`.
-5. Connect this repository to Cloudflare Workers Builds and use `npm run deploy` as the deploy command.
-6. Open `/login`, choose the first-manager setup form, and enter the same setup key once.
-
-After the first manager is created, the setup form is disabled. Managers can add employee accounts, assign roles and disciplines, and reset passwords from the Team screen.
-
-Detailed dashboard instructions are in [CLOUDFLARE_DEPLOYMENT.md](./CLOUDFLARE_DEPLOYMENT.md).
-
-## Local development
+## التشغيل محليًا
 
 ```bash
 npm ci
-cp .dev.vars.example .dev.vars
+npm run db:migrate:local
 npm run dev
 ```
 
-Do not commit `.dev.vars` or any real secret.
+ملفات البناء الحالية تستخدم Bash، لذلك على Windows استخدم Git Bash أو WSL.
+
+## الإعداد لأول مرة على Cloudflare
+
+### 1. إنشاء قاعدة البيانات
+
+بعد تسجيل الدخول إلى Wrangler:
+
+```bash
+npx wrangler login
+npx wrangler d1 create hindaza-project-management-db
+```
+
+انسخ قيمة `database_id` التي يعرضها Cloudflare، ثم ضعها داخل `wrangler.jsonc` بدل القيمة:
+
+```text
+00000000-0000-0000-0000-000000000000
+```
+
+لا تغيّر اسم الربط `DB` لأن التطبيق يعتمد عليه.
+
+### 2. تطبيق جداول قاعدة البيانات
+
+```bash
+npm run db:migrate:remote
+```
+
+### 3. النشر المباشر
+
+```bash
+npm run deploy:cloudflare
+```
+
+أمر النشر ينفّذ البناء أولًا، ثم يرفع Worker والملفات الموجودة في `dist/client`. هذا يمنع خطأ Cloudflare السابق المتعلق بعدم وجود مجلد `dist/client`.
+
+### 4. إعداد مفتاح إنشاء المدير
+
+بعد أول نشر، أضف Secret باسم `SETUP_KEY` من:
+
+`Cloudflare Dashboard → Workers & Pages → hindaza-project-management → Settings → Variables and Secrets`
+
+اختر قيمة قوية لا تقل عن 16 حرفًا، ولا تحفظها داخل GitHub. عند فتح التطبيق لأول مرة سيطلب منك هذا المفتاح لإنشاء حساب المدير الأساسي.
+
+## الربط التلقائي مع GitHub وCloudflare
+
+عند إنشاء Worker من GitHub استخدم الإعدادات التالية:
+
+| الإعداد | القيمة |
+|---|---|
+| Repository | `haitham14540/hindaza-project-management` |
+| Production branch | `main` |
+| Root directory | `/` |
+| Build command | اتركه فارغًا |
+| Deploy command | `npm run deploy:cloudflare` |
+| Node version | `22.13` أو أحدث |
+
+بعد ربط المستودع، أي تحديث جديد على فرع `main` سيُبنى ويُنشر تلقائيًا.
+
+## الأمان
+
+- لا ترفع `.env` أو `.dev.vars` أو API tokens إلى GitHub.
+- لا تضع `SETUP_KEY` داخل `wrangler.jsonc`.
+- حساب الموظف التجريبي غير موجود في حزمة GitHub الإنتاجية. أضف الموظفين من بوابة الفريق بعد إنشاء حساب المدير.
+- كلمات المرور تُخزّن كـPBKDF2 hash داخل D1 ولا تُحفظ كنص واضح.
+
+## نقل بيانات النسخة الحالية
+
+1. افتح النسخة الحالية بحساب المدير.
+2. انتقل إلى **الفريق · Team**.
+3. اختر **تنزيل Backup** واحفظ ملف JSON في مكان آمن.
+4. بعد نشر التطبيق الجديد وإنشاء حساب المدير الأول، افتح بوابة الفريق واختر **استعادة البيانات**.
+5. حدد ملف الـBackup. سيستبدل التطبيق الجديد بياناته بمحتويات الملف، ثم يسجّل خروجك تلقائيًا.
+6. سجّل الدخول باستخدام حساب المدير وكلمة المرور الموجودين في النسخة القديمة.
+
+النسخة الاحتياطية تشمل الموظفين ومعلومات تسجيل الدخول المشفرة والمشاريع والمهام والملاحظات والإشعارات وسجلات الوقت. لا تشمل جلسات الدخول النشطة، ولا يجب رفع ملف الـBackup إلى GitHub.
+
+## أوامر الفحص
+
+```bash
+npm run lint
+npm test
+npm run deploy:dry-run
+```
+
+## بنية المشروع
+
+- `app/` واجهة التطبيق ومسارات API
+- `db/` تعريف قاعدة البيانات
+- `drizzle/` ترحيلات D1
+- `worker/` نقطة تشغيل Cloudflare Worker
+- `public/` شعار HINDAZA والأصول العامة
+- `wrangler.jsonc` إعداد Cloudflare وD1
+
+رفع الكود إلى GitHub وإنشاء D1 جديدة لا ينقل البيانات تلقائيًا؛ استخدم خطوات Backup & Restore أعلاه بعد تشغيل التطبيق الجديد.
