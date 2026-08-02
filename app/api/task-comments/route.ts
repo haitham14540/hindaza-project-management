@@ -20,9 +20,21 @@ export async function POST(request: Request) {
     }
 
     const db = await getDb();
-    const task = await db.select({ id: tasks.id }).from(tasks).where(eq(tasks.id, taskId)).limit(1);
+    const task = await db.select({
+      id: tasks.id,
+      employeeEmail: tasks.employeeEmail,
+      createdBy: tasks.createdBy,
+      visibility: tasks.visibility,
+      submittedToManager: tasks.submittedToManager,
+    }).from(tasks).where(eq(tasks.id, taskId)).limit(1);
     if (!task[0]) {
       return Response.json({ error: "Task not found." }, { status: 404 });
+    }
+    const canComment = currentUser.role === "manager"
+      ? task[0].visibility === "team" || task[0].submittedToManager
+      : task[0].employeeEmail === currentUser.email || (task[0].visibility === "private" && task[0].createdBy === currentUser.email);
+    if (!canComment) {
+      return Response.json({ error: "You cannot comment on this task." }, { status: 403 });
     }
 
     const inserted = await db

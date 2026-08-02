@@ -1,6 +1,5 @@
 /** Cloudflare Worker entry point for the vinext-starter template. */
 import { handleImageOptimization, DEFAULT_DEVICE_SIZES, DEFAULT_IMAGE_SIZES } from "vinext/server/image-optimization";
-import type { D1Database, Fetcher } from "@cloudflare/workers-types";
 import handler from "vinext/server/app-router-entry";
 
 interface Env {

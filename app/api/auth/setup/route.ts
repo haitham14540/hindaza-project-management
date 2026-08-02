@@ -26,7 +26,13 @@ export async function POST(request: Request) {
 
     const db = await getDb();
     const credentials = await passwordRecord(password);
-    await db.insert(users).values({ email, displayName, role: "manager", discipline, ...credentials });
+    await db
+      .insert(users)
+      .values({ email, displayName, role: "manager", discipline, ...credentials })
+      .onConflictDoUpdate({
+        target: users.email,
+        set: { displayName, role: "manager", discipline, active: true, ...credentials },
+      });
     const cookie = await createSession(email, request);
     return Response.json(
       { user: { email, displayName, role: "manager", discipline } },

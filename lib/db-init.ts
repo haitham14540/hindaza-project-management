@@ -41,8 +41,10 @@ export async function ensureDatabase() {
           end_time TEXT DEFAULT '' NOT NULL,
           actual_hours REAL DEFAULT 0 NOT NULL,
           status TEXT DEFAULT 'not_started' NOT NULL,
-          manager_check TEXT DEFAULT 'pending' NOT NULL,
+          manager_check TEXT DEFAULT 'new' NOT NULL,
           manager_note TEXT DEFAULT '' NOT NULL,
+          visibility TEXT DEFAULT 'team' NOT NULL,
+          submitted_to_manager INTEGER DEFAULT 0 NOT NULL,
           created_by TEXT NOT NULL,
           created_at TEXT DEFAULT CURRENT_TIMESTAMP NOT NULL,
           updated_at TEXT DEFAULT CURRENT_TIMESTAMP NOT NULL
@@ -70,6 +72,37 @@ export async function ensureDatabase() {
           created_at TEXT DEFAULT CURRENT_TIMESTAMP NOT NULL
         )
       `),
+      d1.prepare(`
+        CREATE TABLE IF NOT EXISTS project_members (
+          id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+          project_id INTEGER NOT NULL,
+          employee_email TEXT NOT NULL,
+          created_at TEXT DEFAULT CURRENT_TIMESTAMP NOT NULL
+        )
+      `),
+      d1.prepare(`
+        CREATE TABLE IF NOT EXISTS notifications (
+          id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+          recipient_email TEXT NOT NULL,
+          type TEXT NOT NULL,
+          task_id INTEGER,
+          title TEXT NOT NULL,
+          message TEXT NOT NULL,
+          read INTEGER DEFAULT 0 NOT NULL,
+          created_at TEXT DEFAULT CURRENT_TIMESTAMP NOT NULL
+        )
+      `),
+      d1.prepare(`
+        CREATE TABLE IF NOT EXISTS task_time_entries (
+          id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+          task_id INTEGER NOT NULL,
+          employee_email TEXT NOT NULL,
+          started_at TEXT NOT NULL,
+          ended_at TEXT,
+          duration_seconds INTEGER DEFAULT 0 NOT NULL,
+          created_at TEXT DEFAULT CURRENT_TIMESTAMP NOT NULL
+        )
+      `),
       d1.prepare(
         "CREATE INDEX IF NOT EXISTS tasks_date_idx ON tasks (task_date)",
       ),
@@ -90,6 +123,30 @@ export async function ensureDatabase() {
       ),
       d1.prepare(
         "CREATE INDEX IF NOT EXISTS task_comments_created_idx ON task_comments (created_at)",
+      ),
+      d1.prepare(
+        "CREATE UNIQUE INDEX IF NOT EXISTS project_members_project_employee_idx ON project_members (project_id, employee_email)",
+      ),
+      d1.prepare(
+        "CREATE INDEX IF NOT EXISTS project_members_employee_idx ON project_members (employee_email)",
+      ),
+      d1.prepare(
+        "CREATE INDEX IF NOT EXISTS notifications_recipient_idx ON notifications (recipient_email)",
+      ),
+      d1.prepare(
+        "CREATE INDEX IF NOT EXISTS notifications_recipient_read_idx ON notifications (recipient_email, read)",
+      ),
+      d1.prepare(
+        "CREATE INDEX IF NOT EXISTS notifications_created_idx ON notifications (created_at)",
+      ),
+      d1.prepare(
+        "CREATE INDEX IF NOT EXISTS task_time_entries_task_idx ON task_time_entries (task_id)",
+      ),
+      d1.prepare(
+        "CREATE INDEX IF NOT EXISTS task_time_entries_employee_idx ON task_time_entries (employee_email)",
+      ),
+      d1.prepare(
+        "CREATE INDEX IF NOT EXISTS task_time_entries_active_idx ON task_time_entries (employee_email, ended_at)",
       ),
     ]).catch((error: unknown) => {
       initialization = null;

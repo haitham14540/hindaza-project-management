@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { index, integer, real, sqliteTable, text } from "drizzle-orm/sqlite-core";
+import { index, integer, real, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 
 export const users = sqliteTable("users", {
   email: text("email").primaryKey(),
@@ -38,6 +38,20 @@ export const projects = sqliteTable("projects", {
   createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 });
 
+export const projectMembers = sqliteTable(
+  "project_members",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    projectId: integer("project_id").notNull(),
+    employeeEmail: text("employee_email").notNull(),
+    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  },
+  (table) => [
+    uniqueIndex("project_members_project_employee_idx").on(table.projectId, table.employeeEmail),
+    index("project_members_employee_idx").on(table.employeeEmail),
+  ],
+);
+
 export const tasks = sqliteTable(
   "tasks",
   {
@@ -56,16 +70,18 @@ export const tasks = sqliteTable(
     endTime: text("end_time").notNull().default(""),
     actualHours: real("actual_hours").notNull().default(0),
     status: text("status", {
-      enum: ["not_started", "in_progress", "blocked", "needs_revision", "done"],
+      enum: ["not_started", "in_progress", "paused", "blocked", "needs_revision", "done"],
     })
       .notNull()
       .default("not_started"),
     managerCheck: text("manager_check", {
-      enum: ["pending", "approved", "returned"],
+      enum: ["new", "pending", "approved", "returned"],
     })
       .notNull()
-      .default("pending"),
+      .default("new"),
     managerNote: text("manager_note").notNull().default(""),
+    visibility: text("visibility", { enum: ["team", "private"] }).notNull().default("team"),
+    submittedToManager: integer("submitted_to_manager", { mode: "boolean" }).notNull().default(false),
     createdBy: text("created_by").notNull(),
     createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
     updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
@@ -73,6 +89,43 @@ export const tasks = sqliteTable(
   (table) => [
     index("tasks_date_idx").on(table.taskDate),
     index("tasks_employee_idx").on(table.employeeEmail),
+  ],
+);
+
+export const taskTimeEntries = sqliteTable(
+  "task_time_entries",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    taskId: integer("task_id").notNull(),
+    employeeEmail: text("employee_email").notNull(),
+    startedAt: text("started_at").notNull(),
+    endedAt: text("ended_at"),
+    durationSeconds: integer("duration_seconds").notNull().default(0),
+    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  },
+  (table) => [
+    index("task_time_entries_task_idx").on(table.taskId),
+    index("task_time_entries_employee_idx").on(table.employeeEmail),
+    index("task_time_entries_active_idx").on(table.employeeEmail, table.endedAt),
+  ],
+);
+
+export const notifications = sqliteTable(
+  "notifications",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    recipientEmail: text("recipient_email").notNull(),
+    type: text("type", { enum: ["task_assigned", "review_updated", "private_task_submitted", "task_ready_for_review"] }).notNull(),
+    taskId: integer("task_id"),
+    title: text("title").notNull(),
+    message: text("message").notNull(),
+    read: integer("read", { mode: "boolean" }).notNull().default(false),
+    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  },
+  (table) => [
+    index("notifications_recipient_idx").on(table.recipientEmail),
+    index("notifications_recipient_read_idx").on(table.recipientEmail, table.read),
+    index("notifications_created_idx").on(table.createdAt),
   ],
 );
 

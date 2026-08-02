@@ -1,6 +1,6 @@
 import { asc, count, desc, eq } from "drizzle-orm";
 import { getDb } from "@/db";
-import { projects, taskComments, tasks, users } from "@/db/schema";
+import { notifications, projectMembers, projects, taskComments, taskTimeEntries, tasks, users } from "@/db/schema";
 import { getCurrentUser, unauthorizedResponse } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
@@ -103,7 +103,8 @@ export async function GET(request: Request) {
 
     const taskProjects = await db
       .selectDistinct({ code: tasks.project })
-      .from(tasks);
+      .from(tasks)
+      .where(eq(tasks.visibility, "team"));
     for (const item of taskProjects) {
       if (!item.code) continue;
       await db
@@ -112,7 +113,7 @@ export async function GET(request: Request) {
         .onConflictDoNothing({ target: projects.code });
     }
 
-    const [taskRows, userRows, projectRows, commentRows] = await Promise.all([
+    const [allTaskRows, userRows, allProjectRows, membershipRows, allCommentRows, allTimeRows, notificationRows] = await Promise.all([
       db
         .select()
         .from(tasks)
@@ -124,8 +125,33 @@ export async function GET(request: Request) {
         discipline: users.discipline,
       }).from(users).where(eq(users.active, true)).orderBy(asc(users.displayName)),
       db.select().from(projects).orderBy(asc(projects.code)),
+      db.select().from(projectMembers),
       db.select().from(taskComments).orderBy(asc(taskComments.createdAt), asc(taskComments.id)),
+      db.select().from(taskTimeEntries).orderBy(asc(taskTimeEntries.startedAt), asc(taskTimeEntries.id)),
+      db.select().from(notifications).where(eq(notifications.recipientEmail, currentUser.email)).orderBy(desc(notifications.createdAt), desc(notifications.id)),
     ]);
+
+    const taskRows = currentUser.role === "manager"
+      ? allTaskRows.filter((task) => task.visibility === "team" || task.submittedToManager)
+      : allTaskRows.filter((task) => task.employeeEmail === currentUser.email || (task.visibility === "private" && task.createdBy === currentUser.email));
+    const visibleTaskIds = new Set(taskRows.map((task) => task.id));
+    const assignedProjectIds = new Set(
+      membershipRows
+        .filter((membership) => membership.employeeEmail === currentUser.email)
+        .map((membership) => membership.projectId),
+    );
+    const taskProjectCodes = new Set(taskRows.map((task) => task.project));
+    const visibleProjects = currentUser.role === "manager"
+      ? allProjectRows
+      : allProjectRows.filter((project) => assignedProjectIds.has(project.id) || taskProjectCodes.has(project.code));
+    const projectRows = visibleProjects.map((project) => ({
+      ...project,
+      memberEmails: membershipRows
+        .filter((membership) => membership.projectId === project.id)
+        .map((membership) => membership.employeeEmail),
+    }));
+    const commentRows = allCommentRows.filter((comment) => visibleTaskIds.has(comment.taskId));
+    const timeRows = allTimeRows.filter((entry) => visibleTaskIds.has(entry.taskId));
 
     return Response.json({
       currentUser,
@@ -133,6 +159,8 @@ export async function GET(request: Request) {
       users: userRows,
       projects: projectRows,
       comments: commentRows,
+      timeEntries: timeRows,
+      notifications: notificationRows,
     });
   } catch (error) {
     const unauthorized = unauthorizedResponse(error);
