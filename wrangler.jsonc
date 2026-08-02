@@ -1,7 +1,7 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "hindaza-project-management",
-  "compatibility_date": "2026-08-01",
+  "compatibility_date": "2026-08-03",
   "compatibility_flags": ["nodejs_compat"],
   "main": "./worker/index.ts",
   "assets": {
