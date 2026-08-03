@@ -8,8 +8,9 @@ export type Discipline = "Manager" | "Architecture" | "ID" | "Structure" | "Mech
 export type AppUser = {
   email: string;
   displayName: string;
-  role: "manager" | "member";
+  role: "owner" | "manager" | "member";
   discipline: Discipline;
+  profileImageKey: string;
 };
 
 type RuntimeEnvironment = { SETUP_KEY?: string };
@@ -38,8 +39,16 @@ async function runtimeEnvironment() {
   return env;
 }
 
-function safeUser(row: typeof users.$inferSelect): AppUser {
-  return { email: row.email, displayName: row.displayName, role: row.role, discipline: row.discipline };
+export function safeUser(row: typeof users.$inferSelect): AppUser {
+  return { email: row.email, displayName: row.displayName, role: row.role, discipline: row.discipline, profileImageKey: row.profileImageKey };
+}
+
+export function isManagement(user: Pick<AppUser, "role">) {
+  return user.role === "owner" || user.role === "manager";
+}
+
+export function isOwner(user: Pick<AppUser, "role">) {
+  return user.role === "owner";
 }
 
 function cookieValue(request: Request, name: string) {

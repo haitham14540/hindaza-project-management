@@ -1,4 +1,4 @@
-import { and, asc, eq, isNull } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull } from "drizzle-orm";
 import { getDb } from "@/db";
 import { notifications, taskTimeEntries, tasks, users } from "@/db/schema";
 import { getCurrentUser, unauthorizedResponse } from "@/lib/auth";
@@ -139,7 +139,7 @@ export async function POST(request: Request) {
         .returning();
       affectedTasks.push(reviewed[0] || finished);
       if (task.visibility === "team" || task.submittedToManager) {
-        const managers = await db.select({ email: users.email }).from(users).where(and(eq(users.role, "manager"), eq(users.active, true)));
+        const managers = await db.select({ email: users.email }).from(users).where(and(inArray(users.role, ["owner", "manager"]), eq(users.active, true)));
         if (managers.length) {
           await db.insert(notifications).values(managers.map((manager) => ({
             recipientEmail: manager.email,

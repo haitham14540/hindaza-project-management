@@ -26,23 +26,23 @@ export async function POST(request: Request) {
 
     const db = await getDb();
     const rows = await db.select().from(users).where(eq(users.email, email)).limit(1);
-    const manager = rows[0];
-    if (!manager || manager.role !== "manager" || !manager.active) {
-      return Response.json({ error: "An active manager account was not found for this email." }, { status: 404 });
+    const owner = rows[0];
+    if (!owner || !["owner", "manager"].includes(owner.role) || !owner.active) {
+      return Response.json({ error: "An active owner account was not found for this email." }, { status: 404 });
     }
 
     const credentials = await passwordRecord(password);
     await db.delete(sessions).where(eq(sessions.email, email));
-    await db.update(users).set(credentials).where(eq(users.email, email));
+    await db.update(users).set({ ...credentials, role: "owner" }).where(eq(users.email, email));
     const cookie = await createSession(email, request);
 
     return Response.json(
-      { user: { email, displayName: manager.displayName, role: manager.role, discipline: manager.discipline } },
+      { user: { email, displayName: owner.displayName, role: "owner", discipline: owner.discipline, profileImageKey: owner.profileImageKey } },
       { headers: { "Set-Cookie": cookie, "Cache-Control": "no-store" } },
     );
   } catch (error) {
     return Response.json(
-      { error: error instanceof Error ? error.message : "Unable to recover manager access." },
+      { error: error instanceof Error ? error.message : "Unable to recover owner access." },
       { status: 500 },
     );
   }

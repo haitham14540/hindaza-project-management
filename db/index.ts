@@ -1,7 +1,7 @@
 import { drizzle } from "drizzle-orm/d1";
 import * as schema from "./schema";
 
-type RuntimeEnvironment = { DB?: D1Database };
+type RuntimeEnvironment = { DB?: D1Database; BUCKET?: R2Bucket };
 
 export async function getD1() {
   const runtimeModule = "cloudflare:workers";
@@ -18,4 +18,11 @@ export async function getD1() {
 
 export async function getDb() {
   return drizzle(await getD1(), { schema });
+}
+
+export async function getBucket() {
+  const runtimeModule = "cloudflare:workers";
+  const { env } = (await import(/* @vite-ignore */ runtimeModule)) as { env: RuntimeEnvironment };
+  if (!env.BUCKET) throw new Error("Cloudflare R2 binding `BUCKET` is unavailable.");
+  return env.BUCKET;
 }

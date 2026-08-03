@@ -56,8 +56,8 @@ export default function LoginPage() {
         <form className="login-card" onSubmit={submit}>
           <div className="login-card-head">
             <p>{setup ? "FIRST-TIME SETUP" : recovery ? "MANAGER RECOVERY" : "SECURE WORKSPACE"}</p>
-            <h1>{setup ? "Set up your workspace" : recovery ? "Recover manager access" : "Welcome back"}</h1>
-            <span>{setup ? "Create the primary manager account to start using the system." : recovery ? "Use the Cloudflare setup key to create a compatible new password without changing your restored data." : "Sign in to manage your projects, tasks, and team."}</span>
+            <h1>{setup ? "Set up your workspace" : recovery ? "Recover owner access" : "Welcome back"}</h1>
+            <span>{setup ? "Create the primary owner account to start using the system." : recovery ? "Use the Cloudflare setup key to create a compatible new password without changing your restored data." : "Sign in to manage your projects, tasks, and team."}</span>
           </div>
           {checking ? <div className="login-loading"><i /> Checking access…</div> : <>
             {(setup || recovery) && <label><span>Setup key</span><input required type="password" value={form.setupKey} onChange={(event) => setForm({ ...form, setupKey: event.target.value })} autoComplete="off" placeholder="Enter the Cloudflare setup key" /></label>}
@@ -66,9 +66,9 @@ export default function LoginPage() {
             {setup && <label><span>Discipline</span><select required value={form.discipline} onChange={(event) => setForm({ ...form, discipline: event.target.value })}><option value="" disabled>Select discipline</option>{disciplines.map((item) => <option key={item}>{item}</option>)}</select></label>}
             <label><span>{recovery ? "New password" : "Password"}</span><input required minLength={setup || recovery ? 10 : undefined} type="password" value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} autoComplete={setup || recovery ? "new-password" : "current-password"} placeholder={setup || recovery ? "At least 10 characters" : "Enter your password"} /></label>
             {error && <div className="login-error" role="alert">{error}</div>}
-            <button className="login-submit" disabled={saving}>{saving ? "Please wait…" : setup ? "Create manager account" : recovery ? "Set new password" : "Sign in"}<span>→</span></button>
+            <button className="login-submit" disabled={saving}>{saving ? "Please wait…" : setup ? "Create owner account" : recovery ? "Set new password" : "Sign in"}<span>→</span></button>
             {!setup && <button type="button" className="login-mode-link" onClick={() => { setRecovery(!recovery); setError(""); setForm({ ...form, setupKey: "", password: "" }); }}>
-              {recovery ? "← Back to sign in" : "Recover manager access"}
+              {recovery ? "← Back to sign in" : "Recover owner access"}
             </button>}
           </>}
         </form>

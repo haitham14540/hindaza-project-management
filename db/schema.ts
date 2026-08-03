@@ -4,12 +4,13 @@ import { index, integer, real, sqliteTable, text, uniqueIndex } from "drizzle-or
 export const users = sqliteTable("users", {
   email: text("email").primaryKey(),
   displayName: text("display_name").notNull(),
-  role: text("role", { enum: ["manager", "member"] }).notNull().default("member"),
+  role: text("role", { enum: ["owner", "manager", "member"] }).notNull().default("member"),
   discipline: text("discipline", {
     enum: ["Manager", "Architecture", "ID", "Structure", "Mechanical", "Electrical", "Infrastructure", ""],
   }).notNull().default(""),
   passwordHash: text("password_hash").notNull().default(""),
   passwordSalt: text("password_salt").notNull().default(""),
+  profileImageKey: text("profile_image_key").notNull().default(""),
   active: integer("active", { mode: "boolean" }).notNull().default(true),
   createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 });

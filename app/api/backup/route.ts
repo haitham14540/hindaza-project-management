@@ -1,4 +1,4 @@
-import { asc } from "drizzle-orm";
+import { asc, eq } from "drizzle-orm";
 import { getD1, getDb } from "@/db";
 import {
   notifications,
@@ -9,14 +9,16 @@ import {
   tasks,
   users,
 } from "@/db/schema";
-import { clearSession, getCurrentUser, unauthorizedResponse } from "@/lib/auth";
+import { createSession, getCurrentUser, unauthorizedResponse } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
 const APP_NAME = "HINDAZA Project Management";
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 2;
 const MAX_BACKUP_BYTES = 20 * 1024 * 1024;
 const MAX_TABLE_ROWS = 100_000;
+const MAX_D1_BOUND_PARAMETERS = 100;
+const MAX_RESTORE_BATCH_STATEMENTS = 45;
 
 class BackupValidationError extends Error {}
 
@@ -32,7 +34,7 @@ type BackupData = {
 
 type BackupPayload = {
   app: typeof APP_NAME;
-  schemaVersion: typeof SCHEMA_VERSION;
+  schemaVersion: number;
   exportedAt: string;
   recordCounts: Record<keyof BackupData, number>;
   data: BackupData;
@@ -120,7 +122,7 @@ function nullablePositiveInteger(source: Record<string, unknown>, key: string) {
 
 function validateBackup(value: unknown): BackupData {
   const payload = record(value, "Backup");
-  if (payload.app !== APP_NAME || payload.schemaVersion !== SCHEMA_VERSION) {
+  if (payload.app !== APP_NAME || ![1, 2].includes(Number(payload.schemaVersion))) {
     fail("This file is not a compatible HINDAZA backup.");
   }
   const data = record(payload.data, "data");
@@ -128,15 +130,18 @@ function validateBackup(value: unknown): BackupData {
   const restoredUsers: BackupData["users"] = rows(data.users, "users").map((item) => ({
     email: emailField(item, "email"),
     displayName: stringField(item, "displayName", 120, false),
-    role: enumField(item, "role", ["manager", "member"] as const),
+    role: enumField(item, "role", ["owner", "manager", "member"] as const),
     discipline: enumField(item, "discipline", ["Manager", "Architecture", "ID", "Structure", "Mechanical", "Electrical", "Infrastructure", ""] as const, true),
     passwordHash: stringField(item, "passwordHash", 256),
     passwordSalt: stringField(item, "passwordSalt", 256),
+    profileImageKey: "",
     active: booleanField(item, "active"),
     createdAt: stringField(item, "createdAt", 50, false),
   }));
-  if (!restoredUsers.some((user) => user.role === "manager" && user.active && user.passwordHash && user.passwordSalt)) {
-    fail("The backup must contain at least one active manager account.");
+  if (!restoredUsers.some((user) => user.role === "owner" && user.active && user.passwordHash && user.passwordSalt)) {
+    const legacyManager = restoredUsers.find((user) => user.role === "manager" && user.active && user.passwordHash && user.passwordSalt);
+    if (!legacyManager) fail("The backup must contain at least one active owner or manager account.");
+    legacyManager.role = "owner";
   }
 
   const restoredProjects: BackupData["projects"] = rows(data.projects, "projects").map((item) => ({
@@ -237,16 +242,28 @@ function validateBackup(value: unknown): BackupData {
   };
 }
 
-async function insertChunks<T>(items: T[], insert: (chunk: T[]) => Promise<unknown>) {
-  for (let index = 0; index < items.length; index += 25) {
-    await insert(items.slice(index, index + 25));
+function insertStatements<T>(
+  d1: D1Database,
+  table: string,
+  columns: string[],
+  items: T[],
+  values: (item: T) => Array<string | number | null | boolean>,
+) {
+  const chunkSize = Math.max(1, Math.floor(MAX_D1_BOUND_PARAMETERS / columns.length));
+  const statements: D1PreparedStatement[] = [];
+  for (let index = 0; index < items.length; index += chunkSize) {
+    const chunk = items.slice(index, index + chunkSize);
+    const placeholders = chunk.map(() => `(${columns.map(() => "?").join(", ")})`).join(", ");
+    const bindings = chunk.flatMap((item) => values(item).map((value) => typeof value === "boolean" ? Number(value) : value));
+    statements.push(d1.prepare(`INSERT INTO ${table} (${columns.join(", ")}) VALUES ${placeholders}`).bind(...bindings));
   }
+  return statements;
 }
 
 export async function GET(request: Request) {
   try {
     const currentUser = await getCurrentUser(request);
-    if (currentUser.role !== "manager") return Response.json({ error: "Manager access required." }, { status: 403 });
+    if (currentUser.role !== "owner") return Response.json({ error: "Owner access required." }, { status: 403 });
     const db = await getDb();
     const [userRows, projectRows, membershipRows, taskRows, commentRows, timeRows, notificationRows] = await Promise.all([
       db.select().from(users).orderBy(asc(users.createdAt), asc(users.email)),
@@ -258,7 +275,7 @@ export async function GET(request: Request) {
       db.select().from(notifications).orderBy(asc(notifications.id)),
     ]);
     const data: BackupData = {
-      users: userRows,
+      users: userRows.map((user) => ({ ...user, profileImageKey: "" })),
       projects: projectRows,
       projectMembers: membershipRows,
       tasks: taskRows,
@@ -288,14 +305,31 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   try {
     const currentUser = await getCurrentUser(request);
-    if (currentUser.role !== "manager") return Response.json({ error: "Manager access required." }, { status: 403 });
+    if (currentUser.role !== "owner") return Response.json({ error: "Owner access required." }, { status: 403 });
     const contentLength = Number(request.headers.get("content-length") || 0);
     if (contentLength > MAX_BACKUP_BYTES) return Response.json({ error: "Backup file is too large." }, { status: 413 });
     const source = await request.text();
     if (new TextEncoder().encode(source).byteLength > MAX_BACKUP_BYTES) return Response.json({ error: "Backup file is too large." }, { status: 413 });
     const data = validateBackup(JSON.parse(source));
+    const db = await getDb();
+    const [ownerRecord] = await db.select().from(users).where(eq(users.email, currentUser.email)).limit(1);
+    if (!ownerRecord) return Response.json({ error: "The current owner account could not be verified." }, { status: 401 });
+
+    const restoredOwnerIndex = data.users.findIndex((user) => user.email === currentUser.email);
+    const preservedOwner = {
+      ...(restoredOwnerIndex >= 0 ? data.users[restoredOwnerIndex] : ownerRecord),
+      email: ownerRecord.email,
+      role: "owner" as const,
+      passwordHash: ownerRecord.passwordHash,
+      passwordSalt: ownerRecord.passwordSalt,
+      profileImageKey: ownerRecord.profileImageKey,
+      active: true,
+    };
+    if (restoredOwnerIndex >= 0) data.users[restoredOwnerIndex] = preservedOwner;
+    else data.users.push(preservedOwner);
+
     const d1 = await getD1();
-    await d1.batch([
+    const statements: D1PreparedStatement[] = [
       d1.prepare("DELETE FROM task_time_entries"),
       d1.prepare("DELETE FROM task_comments"),
       d1.prepare("DELETE FROM notifications"),
@@ -304,26 +338,29 @@ export async function POST(request: Request) {
       d1.prepare("DELETE FROM projects"),
       d1.prepare("DELETE FROM sessions"),
       d1.prepare("DELETE FROM users"),
-    ]);
-    const db = await getDb();
-    await insertChunks(data.users, async (chunk) => db.insert(users).values(chunk));
-    await insertChunks(data.projects, async (chunk) => db.insert(projects).values(chunk));
-    await insertChunks(data.tasks, async (chunk) => db.insert(tasks).values(chunk));
-    await insertChunks(data.projectMembers, async (chunk) => db.insert(projectMembers).values(chunk));
-    await insertChunks(data.taskComments, async (chunk) => db.insert(taskComments).values(chunk));
-    await insertChunks(data.taskTimeEntries, async (chunk) => db.insert(taskTimeEntries).values(chunk));
-    await insertChunks(data.notifications, async (chunk) => db.insert(notifications).values(chunk));
-    const expiredCookie = await clearSession(request);
+      ...insertStatements(d1, "users", ["email", "display_name", "role", "discipline", "password_hash", "password_salt", "profile_image_key", "active", "created_at"], data.users, (user) => [user.email, user.displayName, user.role, user.discipline, user.passwordHash, user.passwordSalt, user.profileImageKey ?? "", user.active, user.createdAt]),
+      ...insertStatements(d1, "projects", ["id", "code", "name", "client", "status", "start_date", "target_date", "created_at"], data.projects, (project) => [project.id!, project.code, project.name, project.client, project.status, project.startDate, project.targetDate, project.createdAt]),
+      ...insertStatements(d1, "tasks", ["id", "task_date", "employee_name", "employee_email", "project", "title", "expected_output", "priority", "planned_hours", "start_time", "end_time", "actual_hours", "status", "manager_check", "manager_note", "visibility", "submitted_to_manager", "created_by", "created_at", "updated_at"], data.tasks, (task) => [task.id!, task.taskDate, task.employeeName, task.employeeEmail, task.project, task.title, task.expectedOutput, task.priority, task.plannedHours, task.startTime, task.endTime, task.actualHours, task.status, task.managerCheck, task.managerNote, task.visibility, task.submittedToManager, task.createdBy, task.createdAt, task.updatedAt]),
+      ...insertStatements(d1, "project_members", ["id", "project_id", "employee_email", "created_at"], data.projectMembers, (membership) => [membership.id!, membership.projectId, membership.employeeEmail, membership.createdAt]),
+      ...insertStatements(d1, "task_comments", ["id", "task_id", "author_email", "author_name", "body", "created_at"], data.taskComments, (comment) => [comment.id!, comment.taskId, comment.authorEmail, comment.authorName, comment.body, comment.createdAt]),
+      ...insertStatements(d1, "task_time_entries", ["id", "task_id", "employee_email", "started_at", "ended_at", "duration_seconds", "created_at"], data.taskTimeEntries, (entry) => [entry.id!, entry.taskId, entry.employeeEmail, entry.startedAt, entry.endedAt ?? null, entry.durationSeconds, entry.createdAt]),
+      ...insertStatements(d1, "notifications", ["id", "recipient_email", "type", "task_id", "title", "message", "read", "created_at"], data.notifications, (notification) => [notification.id!, notification.recipientEmail, notification.type, notification.taskId ?? null, notification.title, notification.message, notification.read, notification.createdAt]),
+    ];
+    if (statements.length > MAX_RESTORE_BATCH_STATEMENTS) {
+      return Response.json({ error: "This backup contains too many records for one safe restore. Please contact support before retrying." }, { status: 400 });
+    }
+    await d1.batch(statements);
+    const sessionCookie = await createSession(currentUser.email, request);
     const recordCounts = Object.fromEntries(Object.entries(data).map(([key, value]) => [key, value.length]));
     return Response.json(
-      { ok: true, recordCounts, message: "Backup restored. Sign in using an account from the imported backup." },
-      { headers: { "Set-Cookie": expiredCookie, "Cache-Control": "no-store" } },
+      { ok: true, recordCounts, message: "Backup restored. The current owner account and password were preserved." },
+      { headers: { "Set-Cookie": sessionCookie, "Cache-Control": "no-store" } },
     );
   } catch (error) {
     const unauthorized = unauthorizedResponse(error);
     if (unauthorized) return unauthorized;
     if (error instanceof SyntaxError) return Response.json({ error: "The selected file is not valid JSON." }, { status: 400 });
     if (error instanceof BackupValidationError) return Response.json({ error: error.message }, { status: 400 });
-    return Response.json({ error: error instanceof Error ? error.message : "Unable to restore backup." }, { status: 500 });
+    return Response.json({ error: "The backup could not be restored. Your current data was kept unchanged." }, { status: 500 });
   }
 }

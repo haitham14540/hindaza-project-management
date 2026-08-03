@@ -1,7 +1,7 @@
 import { eq, sql } from "drizzle-orm";
 import { getDb } from "@/db";
 import { taskComments, tasks } from "@/db/schema";
-import { getCurrentUser, unauthorizedResponse } from "@/lib/auth";
+import { getCurrentUser, isManagement, unauthorizedResponse } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
@@ -30,7 +30,7 @@ export async function POST(request: Request) {
     if (!task[0]) {
       return Response.json({ error: "Task not found." }, { status: 404 });
     }
-    const canComment = currentUser.role === "manager"
+    const canComment = isManagement(currentUser)
       ? task[0].visibility === "team" || task[0].submittedToManager
       : task[0].employeeEmail === currentUser.email || (task[0].visibility === "private" && task[0].createdBy === currentUser.email);
     if (!canComment) {

@@ -1,7 +1,7 @@
-import { eq, sql } from "drizzle-orm";
+import { eq, inArray, sql } from "drizzle-orm";
 import { getDb } from "@/db";
-import { projectMembers, projects, tasks } from "@/db/schema";
-import { getCurrentUser, unauthorizedResponse } from "@/lib/auth";
+import { projectMembers, projects, tasks, users } from "@/db/schema";
+import { getCurrentUser, isManagement, unauthorizedResponse } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
@@ -25,10 +25,19 @@ function memberEmails(value: unknown) {
     .filter(Boolean))].slice(0, 500);
 }
 
+type Database = Awaited<ReturnType<typeof getDb>>;
+
+async function validMemberEmails(db: Database, emails: string[]) {
+  if (!emails.length) return [];
+  const rows = await db.select({ email: users.email }).from(users).where(inArray(users.email, emails));
+  const existing = new Set(rows.map((row) => row.email));
+  return emails.filter((email) => existing.has(email));
+}
+
 export async function POST(request: Request) {
   try {
     const currentUser = await getCurrentUser(request);
-    if (currentUser.role !== "manager") {
+    if (!isManagement(currentUser)) {
       return Response.json({ error: "Manager access required." }, { status: 403 });
     }
     const payload = (await request.json()) as Record<string, unknown>;
@@ -38,7 +47,9 @@ export async function POST(request: Request) {
       return Response.json({ error: "Project code and name are required." }, { status: 400 });
     }
     const db = await getDb();
-    const assignedMembers = memberEmails(payload.memberEmails);
+    const requestedMembers = memberEmails(payload.memberEmails);
+    const assignedMembers = await validMemberEmails(db, requestedMembers);
+    if (assignedMembers.length !== requestedMembers.length) return Response.json({ error: "One or more project members are invalid." }, { status: 400 });
     const inserted = await db
       .insert(projects)
       .values({
@@ -68,7 +79,7 @@ export async function POST(request: Request) {
 export async function PATCH(request: Request) {
   try {
     const currentUser = await getCurrentUser(request);
-    if (currentUser.role !== "manager") {
+    if (!isManagement(currentUser)) {
       return Response.json({ error: "Manager access required." }, { status: 403 });
     }
     const payload = (await request.json()) as Record<string, unknown>;
@@ -80,7 +91,9 @@ export async function PATCH(request: Request) {
     const existing = await db.select().from(projects).where(eq(projects.id, id)).limit(1);
     if (!existing[0]) return Response.json({ error: "Project not found." }, { status: 404 });
     const code = text(payload.code, 30).toUpperCase() || existing[0].code;
-    const assignedMembers = memberEmails(payload.memberEmails);
+    const requestedMembers = memberEmails(payload.memberEmails);
+    const assignedMembers = await validMemberEmails(db, requestedMembers);
+    if (assignedMembers.length !== requestedMembers.length) return Response.json({ error: "One or more project members are invalid." }, { status: 400 });
     const updated = await db
       .update(projects)
       .set({

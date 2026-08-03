@@ -1,7 +1,7 @@
 import { asc, count, desc, eq } from "drizzle-orm";
 import { getDb } from "@/db";
 import { notifications, projectMembers, projects, taskComments, taskTimeEntries, tasks, users } from "@/db/schema";
-import { getCurrentUser, unauthorizedResponse } from "@/lib/auth";
+import { getCurrentUser, isManagement, unauthorizedResponse } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
@@ -97,7 +97,7 @@ export async function GET(request: Request) {
     const db = await getDb();
     const [{ total }] = await db.select({ total: count() }).from(tasks);
 
-    if (process.env.NODE_ENV !== "production" && total === 0 && currentUser.role === "manager") {
+    if (process.env.NODE_ENV !== "production" && total === 0 && isManagement(currentUser)) {
       await db.insert(tasks).values(sampleTasks(currentUser.email));
     }
 
@@ -123,6 +123,7 @@ export async function GET(request: Request) {
         displayName: users.displayName,
         role: users.role,
         discipline: users.discipline,
+        profileImageKey: users.profileImageKey,
       }).from(users).where(eq(users.active, true)).orderBy(asc(users.displayName)),
       db.select().from(projects).orderBy(asc(projects.code)),
       db.select().from(projectMembers),
@@ -131,7 +132,7 @@ export async function GET(request: Request) {
       db.select().from(notifications).where(eq(notifications.recipientEmail, currentUser.email)).orderBy(desc(notifications.createdAt), desc(notifications.id)),
     ]);
 
-    const taskRows = currentUser.role === "manager"
+    const taskRows = isManagement(currentUser)
       ? allTaskRows.filter((task) => task.visibility === "team" || task.submittedToManager)
       : allTaskRows.filter((task) => task.employeeEmail === currentUser.email || (task.visibility === "private" && task.createdBy === currentUser.email));
     const visibleTaskIds = new Set(taskRows.map((task) => task.id));
@@ -141,7 +142,7 @@ export async function GET(request: Request) {
         .map((membership) => membership.projectId),
     );
     const taskProjectCodes = new Set(taskRows.map((task) => task.project));
-    const visibleProjects = currentUser.role === "manager"
+    const visibleProjects = isManagement(currentUser)
       ? allProjectRows
       : allProjectRows.filter((project) => assignedProjectIds.has(project.id) || taskProjectCodes.has(project.code));
     const projectRows = visibleProjects.map((project) => ({

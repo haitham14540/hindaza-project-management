@@ -22,7 +22,7 @@ export async function POST(request: Request) {
 
     const cookie = await createSession(user.email, request);
     return Response.json(
-      { user: { email: user.email, displayName: user.displayName, role: user.role, discipline: user.discipline } },
+      { user: { email: user.email, displayName: user.displayName, role: user.role, discipline: user.discipline, profileImageKey: user.profileImageKey } },
       { headers: { "Set-Cookie": cookie } },
     );
   } catch (error) {

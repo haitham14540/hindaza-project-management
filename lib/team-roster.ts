@@ -1,7 +1,7 @@
 export type TeamMember = {
   email: string;
   displayName: string;
-  role: "manager" | "member";
+  role: "owner" | "manager" | "member";
   aliases?: string[];
 };
 
@@ -9,7 +9,7 @@ export const teamRoster: TeamMember[] = [
   {
     email: "h.abusalem@gmail.com",
     displayName: "Haitham Abu Salem",
-    role: "manager",
+    role: "owner",
     aliases: ["haitham@eng-bim.com"],
   },
   {

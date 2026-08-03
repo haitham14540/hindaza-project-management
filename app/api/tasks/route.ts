@@ -1,7 +1,7 @@
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { getDb } from "@/db";
 import { notifications, projectMembers, projects, taskComments, taskTimeEntries, tasks, users } from "@/db/schema";
-import { getCurrentUser, unauthorizedResponse } from "@/lib/auth";
+import { getCurrentUser, isManagement, unauthorizedResponse } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
@@ -33,6 +33,18 @@ function enumValue<T extends readonly string[]>(
   return typeof value === "string" && values.includes(value) ? value : fallback;
 }
 
+type Database = Awaited<ReturnType<typeof getDb>>;
+
+async function isProjectMember(db: Database, projectCode: string, employeeEmail: string) {
+  if (projectCode === "PERSONAL") return true;
+  const row = await db.select({ id: projectMembers.id })
+    .from(projectMembers)
+    .innerJoin(projects, eq(projectMembers.projectId, projects.id))
+    .where(and(eq(projects.code, projectCode), eq(projectMembers.employeeEmail, employeeEmail)))
+    .limit(1);
+  return Boolean(row[0]);
+}
+
 export async function POST(request: Request) {
   try {
     const currentUser = await getCurrentUser(request);
@@ -46,12 +58,16 @@ export async function POST(request: Request) {
       );
     }
 
-    const employeeName = currentUser.role === "manager" ? text(payload.employeeName, 120) : currentUser.displayName;
-    const employeeEmail = currentUser.role === "manager" ? text(payload.employeeEmail, 180).toLowerCase() : currentUser.email;
+    const management = isManagement(currentUser);
+    const employeeName = management ? text(payload.employeeName, 120) : currentUser.displayName;
+    const employeeEmail = management ? text(payload.employeeEmail, 180).toLowerCase() : currentUser.email;
     if (!employeeName || !employeeEmail) {
       return Response.json({ error: "Select an employee for this task." }, { status: 400 });
     }
     const db = await getDb();
+    if (!(await isProjectMember(db, project, employeeEmail))) {
+      return Response.json({ error: "Select an employee assigned to this project." }, { status: 400 });
+    }
     const inserted = await db
       .insert(tasks)
       .values({
@@ -84,11 +100,7 @@ export async function POST(request: Request) {
       })
       .returning();
 
-    const projectRow = await db.select({ id: projects.id }).from(projects).where(eq(projects.code, project)).limit(1);
-    if (projectRow[0]) {
-      await db.insert(projectMembers).values({ projectId: projectRow[0].id, employeeEmail }).onConflictDoNothing();
-    }
-    if (currentUser.role === "manager") {
+    if (management) {
       await db.insert(notifications).values({
         recipientEmail: employeeEmail,
         type: "task_assigned",
@@ -136,7 +148,7 @@ export async function PATCH(request: Request) {
         .set({ submittedToManager: true, managerCheck: "new", updatedAt: sql`CURRENT_TIMESTAMP` })
         .where(eq(tasks.id, id))
         .returning();
-      const managers = await db.select({ email: users.email }).from(users).where(and(eq(users.role, "manager"), eq(users.active, true)));
+      const managers = await db.select({ email: users.email }).from(users).where(and(inArray(users.role, ["owner", "manager"]), eq(users.active, true)));
       if (managers.length) {
         await db.insert(notifications).values(managers.map((manager) => ({
           recipientEmail: manager.email,
@@ -149,7 +161,7 @@ export async function PATCH(request: Request) {
       return Response.json({ task: submitted[0] });
     }
     const canEdit =
-      (currentUser.role === "manager" && (existing[0].visibility === "team" || existing[0].submittedToManager)) ||
+      (isManagement(currentUser) && (existing[0].visibility === "team" || existing[0].submittedToManager)) ||
       existing[0].employeeEmail === currentUser.email;
     if (!canEdit) {
       return Response.json({ error: "You cannot edit this task." }, { status: 403 });
@@ -166,49 +178,49 @@ export async function PATCH(request: Request) {
       && existing[0].visibility === "private"
       && !existing[0].submittedToManager
       && existing[0].createdBy === currentUser.email;
-    if (currentUser.role === "manager" && requestedCheck === "approved" && existing[0].status !== "done") {
+    const management = isManagement(currentUser);
+    if (management && requestedCheck === "approved" && existing[0].status !== "done") {
       return Response.json({ error: "Only a completed task can be approved." }, { status: 409 });
     }
-    const employeeEmail = currentUser.role === "manager"
+    const employeeEmail = management
       ? text(payload.employeeEmail, 180).toLowerCase() || existing[0].employeeEmail
       : existing[0].employeeEmail;
-    const employeeName = currentUser.role === "manager"
+    const employeeName = management
       ? text(payload.employeeName, 120) || existing[0].employeeName
       : existing[0].employeeName;
+    if ((management || canEditPrivateDetails) && !(await isProjectMember(db, project, employeeEmail))) {
+      return Response.json({ error: "Select an employee assigned to this project." }, { status: 400 });
+    }
     const updated = await db
       .update(tasks)
       .set({
-        taskDate: currentUser.role === "manager" || canEditPrivateDetails ? text(payload.taskDate, 10) || existing[0].taskDate : existing[0].taskDate,
+        taskDate: management || canEditPrivateDetails ? text(payload.taskDate, 10) || existing[0].taskDate : existing[0].taskDate,
         employeeName,
         employeeEmail,
-        project: currentUser.role === "manager" || canEditPrivateDetails ? project : existing[0].project,
-        title: currentUser.role === "manager" || canEditPrivateDetails ? title : existing[0].title,
-        expectedOutput: currentUser.role === "manager" || canEditPrivateDetails ? text(payload.expectedOutput, 800) : existing[0].expectedOutput,
-        priority: currentUser.role === "manager" || canEditPrivateDetails
+        project: management || canEditPrivateDetails ? project : existing[0].project,
+        title: management || canEditPrivateDetails ? title : existing[0].title,
+        expectedOutput: management || canEditPrivateDetails ? text(payload.expectedOutput, 800) : existing[0].expectedOutput,
+        priority: management || canEditPrivateDetails
           ? enumValue(payload.priority, priorities, existing[0].priority) as "high" | "medium" | "low"
           : existing[0].priority,
-        plannedHours: currentUser.role === "manager" || canEditPrivateDetails ? number(payload.plannedHours) : existing[0].plannedHours,
+        plannedHours: management || canEditPrivateDetails ? number(payload.plannedHours) : existing[0].plannedHours,
         startTime: existing[0].startTime,
         endTime: existing[0].endTime,
         actualHours: existing[0].actualHours,
         status: existing[0].status,
         managerCheck:
-          currentUser.role === "manager"
+          management
             ? requestedCheck
             : existing[0].managerCheck,
         managerNote: existing[0].managerNote,
-        visibility: currentUser.role === "manager" && employeeEmail !== existing[0].employeeEmail ? "team" : existing[0].visibility,
+        visibility: management && employeeEmail !== existing[0].employeeEmail ? "team" : existing[0].visibility,
         submittedToManager: existing[0].submittedToManager,
         updatedAt: sql`CURRENT_TIMESTAMP`,
       })
       .where(eq(tasks.id, id))
       .returning();
 
-    if (currentUser.role === "manager") {
-      const projectRow = await db.select({ id: projects.id }).from(projects).where(eq(projects.code, updated[0].project)).limit(1);
-      if (projectRow[0] && employeeEmail) {
-        await db.insert(projectMembers).values({ projectId: projectRow[0].id, employeeEmail }).onConflictDoNothing();
-      }
+    if (management) {
       if (employeeEmail && employeeEmail !== existing[0].employeeEmail) {
         await db.insert(notifications).values({
           recipientEmail: employeeEmail,
@@ -243,7 +255,7 @@ export async function PATCH(request: Request) {
 export async function DELETE(request: Request) {
   try {
     const currentUser = await getCurrentUser(request);
-    if (currentUser.role !== "manager") {
+    if (!isManagement(currentUser)) {
       return Response.json({ error: "Manager access required." }, { status: 403 });
     }
     const id = Number(new URL(request.url).searchParams.get("id"));

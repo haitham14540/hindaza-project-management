@@ -8,7 +8,7 @@ const disciplines = ["Manager", "Architecture", "ID", "Structure", "Mechanical",
 
 export async function POST(request: Request) {
   try {
-    if (!(await setupRequired())) return Response.json({ error: "The manager account has already been configured." }, { status: 409 });
+    if (!(await setupRequired())) return Response.json({ error: "The owner account has already been configured." }, { status: 409 });
     const payload = (await request.json()) as Record<string, unknown>;
     const setupKey = typeof payload.setupKey === "string" ? payload.setupKey : "";
     if (!(await setupKeyIsValid(setupKey))) return Response.json({ error: "The setup key is incorrect." }, { status: 403 });
@@ -28,17 +28,17 @@ export async function POST(request: Request) {
     const credentials = await passwordRecord(password);
     await db
       .insert(users)
-      .values({ email, displayName, role: "manager", discipline, ...credentials })
+      .values({ email, displayName, role: "owner", discipline, ...credentials })
       .onConflictDoUpdate({
         target: users.email,
-        set: { displayName, role: "manager", discipline, active: true, ...credentials },
+        set: { displayName, role: "owner", discipline, active: true, ...credentials },
       });
     const cookie = await createSession(email, request);
     return Response.json(
-      { user: { email, displayName, role: "manager", discipline } },
+      { user: { email, displayName, role: "owner", discipline, profileImageKey: "" } },
       { status: 201, headers: { "Set-Cookie": cookie } },
     );
   } catch (error) {
-    return Response.json({ error: error instanceof Error ? error.message : "Unable to configure the manager account." }, { status: 500 });
+    return Response.json({ error: error instanceof Error ? error.message : "Unable to configure the owner account." }, { status: 500 });
   }
 }

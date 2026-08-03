@@ -5,7 +5,8 @@ let initialization: Promise<unknown> | null = null;
 export async function ensureDatabase() {
   const d1 = await getD1();
   if (!initialization) {
-    initialization = d1.batch([
+    initialization = (async () => {
+      await d1.batch([
       d1.prepare(`
         CREATE TABLE IF NOT EXISTS users (
           email TEXT PRIMARY KEY NOT NULL,
@@ -14,6 +15,7 @@ export async function ensureDatabase() {
           discipline TEXT DEFAULT '' NOT NULL,
           password_hash TEXT DEFAULT '' NOT NULL,
           password_salt TEXT DEFAULT '' NOT NULL,
+          profile_image_key TEXT DEFAULT '' NOT NULL,
           active INTEGER DEFAULT 1 NOT NULL,
           created_at TEXT DEFAULT CURRENT_TIMESTAMP NOT NULL
         )
@@ -148,7 +150,19 @@ export async function ensureDatabase() {
       d1.prepare(
         "CREATE INDEX IF NOT EXISTS task_time_entries_active_idx ON task_time_entries (employee_email, ended_at)",
       ),
-    ]).catch((error: unknown) => {
+      ]);
+      const columns = await d1.prepare("PRAGMA table_info(users)").all<{ name: string }>();
+      if (!columns.results.some((column) => column.name === "profile_image_key")) {
+        await d1.prepare("ALTER TABLE users ADD COLUMN profile_image_key TEXT DEFAULT '' NOT NULL").run();
+      }
+      await d1.prepare(`
+        UPDATE users SET role = 'owner'
+        WHERE email = (
+          SELECT email FROM users WHERE role = 'manager' AND active = 1 ORDER BY created_at, email LIMIT 1
+        ) AND NOT EXISTS (SELECT 1 FROM users WHERE role = 'owner')
+      `).run();
+      return true;
+    })().catch((error: unknown) => {
       initialization = null;
       throw error;
     });

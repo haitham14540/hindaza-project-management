@@ -1,9 +1,25 @@
-import { and, eq } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 import { getDb } from "@/db";
 import { notifications } from "@/db/schema";
 import { getCurrentUser, unauthorizedResponse } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
+
+export async function GET(request: Request) {
+  try {
+    const currentUser = await getCurrentUser(request);
+    const db = await getDb();
+    const rows = await db.select().from(notifications)
+      .where(eq(notifications.recipientEmail, currentUser.email))
+      .orderBy(desc(notifications.createdAt), desc(notifications.id))
+      .limit(100);
+    return Response.json({ notifications: rows }, { headers: { "Cache-Control": "no-store" } });
+  } catch (error) {
+    const unauthorized = unauthorizedResponse(error);
+    if (unauthorized) return unauthorized;
+    return Response.json({ error: error instanceof Error ? error.message : "Unable to load notifications." }, { status: 500 });
+  }
+}
 
 export async function PATCH(request: Request) {
   try {
