@@ -57,6 +57,18 @@ test("manager scope follows discipline while owner keeps full access", async () 
   assert.match(dashboard, /managerLimited/);
 });
 
+test("editing a legacy project removes stale members without blocking the update", async () => {
+  const [projectsApi, dashboard] = await Promise.all([
+    source("app/api/projects/route.ts"),
+    source("app/task-dashboard.tsx"),
+  ]);
+  assert.match(projectsApi, /eq\(users\.active, true\)/);
+  assert.match(projectsApi, /const removedInvalidMembers = requestedMembers\.length - assignedMembers\.length/);
+  assert.match(projectsApi, /removedInvalidMembers,/);
+  assert.match(dashboard, /data\.removedInvalidMembers > 0/);
+  assert.match(dashboard, /عضو قديم أو غير صالح/);
+});
+
 test("task created date, due date label, and creation-time ordering are used", async () => {
   const [dashboard, bootstrapApi, schema] = await Promise.all([
     source("app/task-dashboard.tsx"),

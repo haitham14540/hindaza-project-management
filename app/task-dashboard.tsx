@@ -703,7 +703,12 @@ export default function TaskDashboard() {
       const oldCode = projects.find((project) => project.id === selectedProjectId)?.code;
       setProjects((current) => selectedProjectId ? current.map((project) => project.id === selectedProjectId ? data.project : project) : [...current, data.project]);
       if (oldCode && oldCode !== data.project.code) setTasks((current) => current.map((task) => task.project === oldCode ? { ...task, project: data.project.code } : task));
-      setProjectDrawerOpen(false); setToast(selectedProjectId ? "تم تحديث المشروع" : "تمت إضافة المشروع");
+      setProjectDrawerOpen(false);
+      setToast(selectedProjectId
+        ? data.removedInvalidMembers > 0
+          ? `تم تحديث المشروع وإزالة ${data.removedInvalidMembers} عضو قديم أو غير صالح`
+          : "تم تحديث المشروع"
+        : "تمت إضافة المشروع");
     } catch (saveError) { setError(saveError instanceof Error ? saveError.message : "تعذر حفظ المشروع"); }
     finally { setSaving(false); }
   }

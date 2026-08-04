@@ -1,4 +1,4 @@
-import { eq, inArray, sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { getDb } from "@/db";
 import { projectMembers, projects, tasks, users } from "@/db/schema";
 import { getCurrentUser, isOwner, unauthorizedResponse } from "@/lib/auth";
@@ -29,7 +29,10 @@ type Database = Awaited<ReturnType<typeof getDb>>;
 
 async function validMemberEmails(db: Database, emails: string[]) {
   if (!emails.length) return [];
-  const rows = await db.select({ email: users.email, role: users.role }).from(users).where(inArray(users.email, emails));
+  const rows = await db
+    .select({ email: users.email, role: users.role })
+    .from(users)
+    .where(and(inArray(users.email, emails), eq(users.active, true)));
   const existing = new Set(rows.filter((row) => row.role === "member").map((row) => row.email));
   return emails.filter((email) => existing.has(email));
 }
@@ -49,7 +52,9 @@ export async function POST(request: Request) {
     const db = await getDb();
     const requestedMembers = memberEmails(payload.memberEmails);
     const assignedMembers = await validMemberEmails(db, requestedMembers);
-    if (assignedMembers.length !== requestedMembers.length) return Response.json({ error: "One or more project members are invalid." }, { status: 400 });
+    if (assignedMembers.length !== requestedMembers.length) {
+      return Response.json({ error: "One or more project members are invalid." }, { status: 400 });
+    }
     const inserted = await db
       .insert(projects)
       .values({
@@ -93,7 +98,7 @@ export async function PATCH(request: Request) {
     const code = text(payload.code, 30).toUpperCase() || existing[0].code;
     const requestedMembers = memberEmails(payload.memberEmails);
     const assignedMembers = await validMemberEmails(db, requestedMembers);
-    if (assignedMembers.length !== requestedMembers.length) return Response.json({ error: "One or more project members are invalid." }, { status: 400 });
+    const removedInvalidMembers = requestedMembers.length - assignedMembers.length;
     const updated = await db
       .update(projects)
       .set({
@@ -113,7 +118,10 @@ export async function PATCH(request: Request) {
     if (assignedMembers.length) {
       await db.insert(projectMembers).values(assignedMembers.map((employeeEmail) => ({ projectId: id, employeeEmail })));
     }
-    return Response.json({ project: { ...updated[0], memberEmails: assignedMembers } });
+    return Response.json({
+      project: { ...updated[0], memberEmails: assignedMembers },
+      removedInvalidMembers,
+    });
   } catch (error) {
     const unauthorized = unauthorizedResponse(error);
     if (unauthorized) return unauthorized;
