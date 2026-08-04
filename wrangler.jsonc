@@ -1,39 +1,32 @@
 {
-	"$schema": "node_modules/wrangler/config-schema.json",
-	"name": "hindaza-project-management",
-	"compatibility_date": "2026-05-22",
-	"compatibility_flags": [
-		"nodejs_compat"
-	],
-	"main": "./worker/index.ts",
-	"assets": {
-		"directory": "dist/client",
-		"not_found_handling": "none",
-		"binding": "ASSETS"
-	},
-	"images": {
-		"binding": "IMAGES"
-	},
-	"d1_databases": [
-		{
-			"binding": "DB",
-			"database_name": "hindaza-project-management-db",
-			"database_id": "e3ed32f9-767b-4d8a-809c-f12189d334b5",
-			"migrations_dir": "drizzle"
-		}
-	],
-	"r2_buckets": [
-		{
-			"binding": "BUCKET",
-			"bucket_name": "hindaza-project-management-files"
-		},
-		{
-			"bucket_name": "hindaza-project-management-files",
-			"binding": "hindaza_project_management_files",
-			"remote": true
-		}
-	],
-	"observability": {
-		"enabled": true
-	}
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "hindaza-project-management",
+  "compatibility_date": "2026-05-22",
+  "compatibility_flags": ["nodejs_compat"],
+  "main": "./worker/index.ts",
+  "assets": {
+    "directory": "dist/client",
+    "not_found_handling": "none",
+    "binding": "ASSETS"
+  },
+  "images": {
+    "binding": "IMAGES"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "hindaza-project-management-db",
+      "database_id": "e3ed32f9-767b-4d8a-809c-f12189d334b5",
+      "migrations_dir": "drizzle"
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "BUCKET",
+      "bucket_name": "hindaza-project-management-files"
+    }
+  ],
+  "observability": {
+    "enabled": true
+  }
 }

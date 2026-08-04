@@ -1,7 +1,7 @@
 import { eq, inArray, sql } from "drizzle-orm";
 import { getDb } from "@/db";
 import { projectMembers, projects, tasks, users } from "@/db/schema";
-import { getCurrentUser, isManagement, unauthorizedResponse } from "@/lib/auth";
+import { getCurrentUser, isOwner, unauthorizedResponse } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
@@ -29,16 +29,16 @@ type Database = Awaited<ReturnType<typeof getDb>>;
 
 async function validMemberEmails(db: Database, emails: string[]) {
   if (!emails.length) return [];
-  const rows = await db.select({ email: users.email }).from(users).where(inArray(users.email, emails));
-  const existing = new Set(rows.map((row) => row.email));
+  const rows = await db.select({ email: users.email, role: users.role }).from(users).where(inArray(users.email, emails));
+  const existing = new Set(rows.filter((row) => row.role === "member").map((row) => row.email));
   return emails.filter((email) => existing.has(email));
 }
 
 export async function POST(request: Request) {
   try {
     const currentUser = await getCurrentUser(request);
-    if (!isManagement(currentUser)) {
-      return Response.json({ error: "Manager access required." }, { status: 403 });
+    if (!isOwner(currentUser)) {
+      return Response.json({ error: "Owner access required." }, { status: 403 });
     }
     const payload = (await request.json()) as Record<string, unknown>;
     const code = text(payload.code, 30).toUpperCase();
@@ -79,8 +79,8 @@ export async function POST(request: Request) {
 export async function PATCH(request: Request) {
   try {
     const currentUser = await getCurrentUser(request);
-    if (!isManagement(currentUser)) {
-      return Response.json({ error: "Manager access required." }, { status: 403 });
+    if (!isOwner(currentUser)) {
+      return Response.json({ error: "Owner access required." }, { status: 403 });
     }
     const payload = (await request.json()) as Record<string, unknown>;
     const id = Number(payload.id);

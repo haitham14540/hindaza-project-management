@@ -54,6 +54,9 @@ export async function POST(request: Request) {
     if (!displayName) return Response.json({ error: "Employee name is required." }, { status: 400 });
     const employeeDiscipline = discipline(payload.discipline);
     if (!employeeDiscipline) return Response.json({ error: "Employee discipline is required." }, { status: 400 });
+    if (currentUser.role === "manager" && (!currentUser.discipline || requestedRole !== "member" || employeeDiscipline !== currentUser.discipline)) {
+      return Response.json({ error: "Managers can add team members only within their own discipline." }, { status: 403 });
+    }
     const email = text(payload.email).toLowerCase();
     const temporaryPassword = typeof payload.temporaryPassword === "string" ? payload.temporaryPassword : "";
     if (!email || !email.includes("@")) return Response.json({ error: "Employee email is required." }, { status: 400 });
@@ -85,6 +88,15 @@ export async function PATCH(request: Request) {
     const existing = await db.select().from(users).where(eq(users.email, email)).limit(1);
     if (!existing[0]) return Response.json({ error: "Employee not found." }, { status: 404 });
     const requestedRole = role(payload.role);
+    if (currentUser.role === "manager" && (
+      !currentUser.discipline ||
+      existing[0].role !== "member" ||
+      existing[0].discipline !== currentUser.discipline ||
+      requestedRole !== "member" ||
+      employeeDiscipline !== currentUser.discipline
+    )) {
+      return Response.json({ error: "Managers can update team members only within their own discipline." }, { status: 403 });
+    }
     if ((existing[0].role === "owner" || requestedRole === "owner") && !isOwner(currentUser)) {
       return Response.json({ error: "Only an owner can manage owner accounts." }, { status: 403 });
     }
@@ -116,6 +128,13 @@ export async function DELETE(request: Request) {
     const db = await getDb();
     const target = await db.select().from(users).where(eq(users.email, email)).limit(1);
     if (!target[0]) return Response.json({ error: "Employee not found." }, { status: 404 });
+    if (currentUser.role === "manager" && (
+      !currentUser.discipline ||
+      target[0].role !== "member" ||
+      target[0].discipline !== currentUser.discipline
+    )) {
+      return Response.json({ error: "Managers can remove team members only within their own discipline." }, { status: 403 });
+    }
     if (target[0].role === "owner" && !isOwner(currentUser)) {
       return Response.json({ error: "Only an owner can remove another owner." }, { status: 403 });
     }

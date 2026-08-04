@@ -139,7 +139,8 @@ export async function POST(request: Request) {
         .returning();
       affectedTasks.push(reviewed[0] || finished);
       if (task.visibility === "team" || task.submittedToManager) {
-        const managers = await db.select({ email: users.email }).from(users).where(and(inArray(users.role, ["owner", "manager"]), eq(users.active, true)));
+        const managers = (await db.select({ email: users.email, role: users.role, discipline: users.discipline }).from(users).where(and(inArray(users.role, ["owner", "manager"]), eq(users.active, true))))
+          .filter((manager) => manager.role === "owner" || (Boolean(currentUser.discipline) && manager.discipline === currentUser.discipline));
         if (managers.length) {
           await db.insert(notifications).values(managers.map((manager) => ({
             recipientEmail: manager.email,

@@ -117,7 +117,7 @@ export async function GET(request: Request) {
       db
         .select()
         .from(tasks)
-        .orderBy(desc(tasks.taskDate), desc(tasks.updatedAt), desc(tasks.id)),
+        .orderBy(desc(tasks.createdAt), desc(tasks.id)),
       db.select({
         email: users.email,
         displayName: users.displayName,
@@ -132,9 +132,18 @@ export async function GET(request: Request) {
       db.select().from(notifications).where(eq(notifications.recipientEmail, currentUser.email)).orderBy(desc(notifications.createdAt), desc(notifications.id)),
     ]);
 
-    const taskRows = isManagement(currentUser)
+    const managerDisciplineEmails = new Set(
+      userRows
+        .filter((user) => user.discipline === currentUser.discipline)
+        .map((user) => user.email),
+    );
+    const taskRows = currentUser.role === "owner"
       ? allTaskRows.filter((task) => task.visibility === "team" || task.submittedToManager)
-      : allTaskRows.filter((task) => task.employeeEmail === currentUser.email || (task.visibility === "private" && task.createdBy === currentUser.email));
+      : currentUser.role === "manager"
+        ? allTaskRows.filter((task) =>
+          (task.visibility === "team" || task.submittedToManager) && managerDisciplineEmails.has(task.employeeEmail),
+        )
+        : allTaskRows.filter((task) => task.employeeEmail === currentUser.email || (task.visibility === "private" && task.createdBy === currentUser.email));
     const visibleTaskIds = new Set(taskRows.map((task) => task.id));
     const assignedProjectIds = new Set(
       membershipRows
@@ -154,15 +163,21 @@ export async function GET(request: Request) {
     const commentRows = allCommentRows.filter((comment) => visibleTaskIds.has(comment.taskId));
     const timeRows = allTimeRows.filter((entry) => visibleTaskIds.has(entry.taskId));
 
+    const visibleUsers = currentUser.role === "owner"
+      ? userRows
+      : currentUser.role === "manager"
+        ? userRows.filter((user) => user.discipline === currentUser.discipline && user.role === "member")
+        : userRows;
+
     return Response.json({
       currentUser,
       tasks: taskRows,
-      users: userRows,
+      users: visibleUsers,
       projects: projectRows,
       comments: commentRows,
       timeEntries: timeRows,
       notifications: notificationRows,
-    });
+    }, { headers: { "Cache-Control": "no-store, no-cache, must-revalidate" } });
   } catch (error) {
     const unauthorized = unauthorizedResponse(error);
     if (unauthorized) return unauthorized;
