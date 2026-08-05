@@ -1,4 +1,4 @@
-import { and, count, eq, or } from "drizzle-orm";
+import { and, count, eq } from "drizzle-orm";
 import { getDb } from "@/db";
 import { projectMembers, tasks, users } from "@/db/schema";
 import { getCurrentUser, isManagement, isOwner, passwordRecord, unauthorizedResponse } from "@/lib/auth";
@@ -142,8 +142,18 @@ export async function DELETE(request: Request) {
       const [{ total: ownerCount }] = await db.select({ total: count() }).from(users).where(and(eq(users.role, "owner"), eq(users.active, true)));
       if (ownerCount <= 1) return Response.json({ error: "The last owner account cannot be removed." }, { status: 409 });
     }
-    const [{ total }] = await db.select({ total: count() }).from(tasks).where(or(eq(tasks.employeeEmail, email), eq(tasks.createdBy, email)));
-    if (total > 0) return Response.json({ error: "Employee has related tasks and cannot be removed." }, { status: 409 });
+    const assignedProjects = await db.select({ project: tasks.project, taskCount: count() })
+      .from(tasks)
+      .where(eq(tasks.employeeEmail, email))
+      .groupBy(tasks.project)
+      .orderBy(tasks.project);
+    const total = assignedProjects.reduce((sum, item) => sum + item.taskCount, 0);
+    if (total > 0) return Response.json({
+      code: "EMPLOYEE_HAS_ASSIGNED_TASKS",
+      error: "Employee has assigned tasks and cannot be removed. Reassign the tasks first. · لدى الموظف مهام موكلة ويجب تغيير الموظف المسؤول عنها أولًا.",
+      taskCount: total,
+      projects: assignedProjects,
+    }, { status: 409 });
     await db.delete(projectMembers).where(eq(projectMembers.employeeEmail, email));
     await db.delete(users).where(eq(users.email, email));
     return Response.json({ ok: true });

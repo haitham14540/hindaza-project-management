@@ -2,6 +2,7 @@ import { eq, sql } from "drizzle-orm";
 import { getDb } from "@/db";
 import { taskComments, tasks, users } from "@/db/schema";
 import { getCurrentUser, unauthorizedResponse } from "@/lib/auth";
+import { recordActivity } from "@/lib/activity";
 
 export const dynamic = "force-dynamic";
 
@@ -56,6 +57,8 @@ export async function POST(request: Request) {
       .returning();
 
     await db.update(tasks).set({ updatedAt: sql`CURRENT_TIMESTAMP` }).where(eq(tasks.id, taskId));
+    const [taskDetails] = await db.select({ title: tasks.title, project: tasks.project }).from(tasks).where(eq(tasks.id, taskId)).limit(1);
+    if (taskDetails) await recordActivity(db, currentUser, { action: "note_added", entityType: "task", entityId: taskId, entityLabel: taskDetails.title, projectCode: taskDetails.project, details: body });
     return Response.json({ comment: inserted[0] }, { status: 201 });
   } catch (error) {
     const unauthorized = unauthorizedResponse(error);

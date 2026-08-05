@@ -2,6 +2,7 @@ import { and, asc, eq, inArray, isNull } from "drizzle-orm";
 import { getDb } from "@/db";
 import { notifications, taskTimeEntries, tasks, users } from "@/db/schema";
 import { getCurrentUser, unauthorizedResponse } from "@/lib/auth";
+import { recordActivity } from "@/lib/activity";
 
 export const dynamic = "force-dynamic";
 
@@ -161,6 +162,7 @@ export async function POST(request: Request) {
       if (row[0]) freshTasks.push(row[0]);
       entries.push(...await db.select().from(taskTimeEntries).where(eq(taskTimeEntries.taskId, id)).orderBy(asc(taskTimeEntries.startedAt), asc(taskTimeEntries.id)));
     }
+    await recordActivity(db, currentUser, { action: "timer_updated", entityType: "task", entityId: taskId, entityLabel: task.title, projectCode: task.project, details: `Timer action: ${action}` });
     return Response.json({ tasks: freshTasks, timeEntries: entries });
   } catch (error) {
     const unauthorized = unauthorizedResponse(error);

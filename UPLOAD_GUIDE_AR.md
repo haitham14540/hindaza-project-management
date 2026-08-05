@@ -1,52 +1,115 @@
 # دليل رفع HINDAZA Project Management إلى GitHub وCloudflare
 
-هذه الحزمة هي النسخة التجريبية الأخيرة بعد إصلاح تحميل البيانات، وتحتوي كامل الكود والترحيلات والشعار والاختبارات.
+هذه الحزمة هي الإصدار التجريبي الكامل رقم **44**. تحتوي على كود التطبيق، قاعدة البيانات وتعريفاتها، جميع ترحيلات D1، الشعار، واجهات المهام ومشاكل المشاريع، الاختبارات، وإعدادات Cloudflare.
 
-## مهم قبل الرفع
+> مهم: الحزمة لا تحتوي على بيانات قاعدة D1 الفعلية ولا الملفات المرفوعة إلى R2 ولا كلمات السر. للحفاظ على بيانات التطبيق الحالي، اربط الكود بنفس D1 وR2 الموجودين في حساب Cloudflare.
 
-ملف `wrangler.jsonc` داخل الحزمة يحتوي رقم قاعدة بيانات مؤقتًا:
+## المتطلبات
+
+- Git for Windows، ويتضمن Git Bash.
+- Node.js 22.13 أو أحدث.
+- حساب GitHub.
+- حساب Cloudflare المرتبط بالمستودع.
+
+تحقق من البرامج داخل Git Bash:
+
+```bash
+git --version
+node -v
+npm -v
+```
+
+## 1. فتح Git Bash من المجلد الجديد
+
+1. فك ضغط ملف ZIP في أي مكان تختاره على القرص `C:` أو أي قرص آخر.
+2. افتح المجلد الناتج في File Explorer.
+3. اضغط بزر الفأرة الأيمن داخل مساحة فارغة في المجلد.
+4. اختر **Open Git Bash here**. في Windows 11 قد تحتاج أولًا إلى **Show more options**.
+5. تأكد أنك داخل المجلد الصحيح:
+
+```bash
+pwd
+ls
+```
+
+يجب أن ترى ملفات مثل `package.json` و`wrangler.jsonc` ومجلدات `app` و`db` و`drizzle`.
+
+## 2. الطريقة الآمنة لمزامنة النسخة مع GitHub
+
+استخدم نسخة جديدة من المستودع حتى نتجنب تعارضات المحاولات السابقة.
+
+انتقل إلى المجلد الأب، ثم استنسخ المستودع في مجلد جديد:
+
+```bash
+cd ..
+git clone https://github.com/haitham14540/hindaza-project-management.git hindaza-project-management-sync
+```
+
+بعد انتهاء الاستنساخ:
+
+1. افتح مجلد الحزمة `HINDAZA_Project_Management_v44_GitHub`.
+2. انسخ **جميع الملفات والمجلدات** الموجودة داخله، بما فيها `.openai` و`.npmrc` و`.gitignore`.
+3. الصقها داخل مجلد `hindaza-project-management-sync` واختر **Replace** عند السؤال.
+4. لا تحذف مجلد `.git` الموجود داخل `hindaza-project-management-sync`.
+
+بعد ذلك افتح Git Bash داخل مجلد `hindaza-project-management-sync` أو نفّذ:
+
+```bash
+cd ../hindaza-project-management-sync
+git status
+```
+
+## 3. ضبط اسم المستخدم في Git عند الحاجة
+
+نفّذ هذين الأمرين مرة واحدة فقط على جهازك، واستخدم بريد حساب GitHub الخاص بك:
+
+```bash
+git config --global user.name "Haitham AbuSalem"
+git config --global user.email "YOUR_GITHUB_EMAIL"
+```
+
+## 4. ربط قاعدة D1 الحالية قبل الرفع
+
+ملف `wrangler.jsonc` يحتوي مؤقتًا على:
 
 ```text
 00000000-0000-0000-0000-000000000000
 ```
 
-إذا كنت تريد الاحتفاظ بالمعلومات الموجودة حاليًا، لا تنشئ قاعدة D1 جديدة. انسخ `database_id` الحقيقي من ملف `wrangler.jsonc` الموجود في مستودعك الحالي، أو من:
+استبدله برقم قاعدة D1 الحالية في Cloudflare. يمكنك الحصول عليه من:
 
 `Cloudflare Dashboard → Storage & Databases → D1 → hindaza-project-management-db`
 
-ثم استبدل الرقم المؤقت داخل الحزمة قبل الرفع أو النشر. لا تغيّر أسماء الربط `DB` و`BUCKET` و`IMAGES`.
+أو بعد تسجيل الدخول من Git Bash:
 
-## الطريقة الموصى بها: Git Bash
+```bash
+npx wrangler login
+npx wrangler d1 list
+```
 
-### 1. فك ضغط الحزمة
+انسخ قيمة `uuid` الخاصة بقاعدة `hindaza-project-management-db` وضعها في `database_id` داخل `wrangler.jsonc`.
 
-فك الملف في مجلد Downloads. يجب أن يصبح المسار قريبًا من:
+لا تنشئ قاعدة جديدة إذا كنت تريد الاحتفاظ بالمستخدمين والمشاريع والمهام الحالية.
+
+## 5. التأكد من R2
+
+التطبيق يستخدم حاوية الملفات التالية:
 
 ```text
-C:\Users\ADMIN\Downloads\HINDAZA_Project_Management_v26_GitHub
+hindaza-project-management-files
 ```
 
-### 2. إنشاء نسخة نظيفة من مستودع GitHub
-
-افتح Git Bash ونفّذ كل أمر منفردًا:
+تحقق من وجودها:
 
 ```bash
-cd /c/Users/ADMIN
-git clone https://github.com/haitham14540/hindaza-project-management.git hindaza-project-management-latest
-cd hindaza-project-management-latest
+npx wrangler r2 bucket list
 ```
 
-استخدام مجلد جديد يمنع مشاكل `rebase` و`non-fast-forward` التي ظهرت سابقًا.
+إذا كانت موجودة، لا تنشئها مرة أخرى ولا تغيّر اسمها في `wrangler.jsonc`.
 
-### 3. نسخ ملفات الإصدار الجديد
+## 6. تثبيت الحزم وفحص التطبيق
 
-```bash
-cp -a /c/Users/ADMIN/Downloads/HINDAZA_Project_Management_v26_GitHub/. .
-```
-
-بعد النسخ افتح `wrangler.jsonc` وتأكد أن `database_id` هو رقم قاعدة D1 الحقيقية، وليس الرقم المؤقت.
-
-### 4. فحص النسخة قبل الرفع
+من داخل مجلد `hindaza-project-management-sync`:
 
 ```bash
 npm ci
@@ -54,68 +117,110 @@ npm run lint
 npm test
 ```
 
-يجب أن تنتهي الاختبارات دون أخطاء.
+قد تستغرق الاختبارات بضع دقائق. لا تتابع الرفع إذا ظهر خطأ أحمر؛ احتفظ بصورة الخطأ كاملة.
 
-### 5. تسجيل اسمك في Git مرة واحدة
+## 7. تطبيق تحديثات قاعدة البيانات الحالية
 
-```bash
-git config --global user.name "Haitham Abu Salem"
-git config --global user.email "haitham@eng-bim.com"
-```
-
-يمكنك تغيير البريد إذا كان بريد حساب GitHub مختلفًا.
-
-### 6. رفع الملفات إلى GitHub
+بعد وضع رقم D1 الصحيح:
 
 ```bash
-git add -A
-git commit -m "Update HINDAZA Project Management"
-git push origin main
-```
-
-إذا طلب GitHub تسجيل الدخول، أكمل تسجيل الدخول من نافذة المتصفح التي تظهر.
-
-## تحديث قاعدة البيانات على Cloudflare
-
-بعد التأكد من رقم `database_id` نفّذ:
-
-```bash
-npx wrangler login
 npm run db:migrate:remote
 ```
 
-الترحيلات تضيف التحديثات المطلوبة ولا تحذف المعلومات الموجودة.
+هذا الأمر يطبق الترحيلات الجديدة على قاعدة البيانات نفسها، ولا يفترض أن يحذف البيانات الحالية.
 
-## النشر
+قبل أي ترحيل مهم، يفضل تنزيل Backup من حساب المالك والاحتفاظ به خارج مجلد المشروع.
 
-إذا كان GitHub مرتبطًا بـCloudflare، يبدأ النشر تلقائيًا بعد `git push`.
+## 8. رفع الملفات إلى GitHub
 
-إعدادات Cloudflare الصحيحة:
+اعرض التغييرات أولًا:
+
+```bash
+git status
+```
+
+ثم نفّذ:
+
+```bash
+git add -A
+git commit -m "Update HINDAZA project management to version 44"
+git push origin main
+```
+
+إذا ظهر أن المستودع محدث ولا توجد تغييرات، فهذا يعني أن الملفات الموجودة في GitHub مطابقة للحزمة.
+
+## 9. إذا رفض GitHub عملية Push
+
+إذا ظهر الخطأ `fetch first`، لا تستخدم `push --force`. نفّذ:
+
+```bash
+git pull --rebase origin main
+git push origin main
+```
+
+إذا ظهر تعارض أثناء `rebase`، أوقف العملية بأمان:
+
+```bash
+git rebase --abort
+```
+
+ثم أرسل صورة كاملة للخطأ قبل تنفيذ أوامر أخرى.
+
+## 10. المزامنة مع Cloudflare
+
+إذا كان مشروع Cloudflare مرتبطًا بالمستودع وفرع `main`، يبدأ النشر تلقائيًا بعد نجاح `git push`.
+
+الإعدادات المطلوبة في Cloudflare:
 
 | الإعداد | القيمة |
 |---|---|
+| Repository | `haitham14540/hindaza-project-management` |
 | Production branch | `main` |
 | Root directory | `/` |
-| Build command | فارغ |
+| Build command | يترك فارغًا |
 | Deploy command | `npm run deploy:cloudflare` |
-| Node version | `22.13` أو أحدث |
+| Node.js | `22.13` أو أحدث |
 
-للنشر يدويًا من Git Bash:
+تابع النشر من:
+
+`Cloudflare Dashboard → Workers & Pages → hindaza-project-management → Deployments`
+
+إذا لم يكن الربط التلقائي مفعلًا، يمكنك النشر يدويًا من Git Bash:
 
 ```bash
+npx wrangler login
 npm run deploy:cloudflare
 ```
 
-## إذا ظهر الإصدار القديم بعد نجاح النشر
+## 11. التحقق بعد النشر
 
-1. تأكد أن آخر Deployment في Cloudflare حالته `Success` ومرتبط بآخر Commit.
-2. افتح الموقع واضغط `Ctrl + F5` مرة واحدة.
-3. جرّب نافذة Incognito للتأكد أن المتصفح لا يعرض ملفات قديمة.
+افتح الموقع واختبر بالترتيب:
+
+1. تسجيل دخول المالك.
+2. ظهور الموظفين والمشاريع والمهام.
+3. فتح Project Issues ومشاهدة المشاكل والمرفقات.
+4. تعديل مشروع موجود.
+5. إضافة مهمة تجريبية ثم حذفها.
+6. فتح التنبيهات والتأكد من المحاذاة الجديدة.
 
 ## حماية البيانات
 
 - لا ترفع ملفات Backup إلى GitHub.
-- لا ترفع `.env` أو `.dev.vars` أو كلمات المرور أو مفاتيح Cloudflare.
-- احتفظ بنسخة Backup حديثة قبل تطبيق الترحيلات أو الاستعادة.
-- لا تستبدل `database_id` الحالي بقاعدة جديدة إذا كنت تريد بقاء الموظفين والمشاريع والمهام.
+- لا ترفع `.env` أو `.dev.vars` أو أي Token.
+- لا تضع `SETUP_KEY` داخل الكود.
+- استخدام نفس `database_id` يحافظ على اتصال التطبيق بقاعدة البيانات الحالية.
+- استخدام نفس اسم R2 يحافظ على اتصال التطبيق بالمرفقات الحالية.
 
+## تحديثات التطبيق لاحقًا
+
+بعد أي تعديل مستقبلي داخل مجلد `hindaza-project-management-sync`:
+
+```bash
+git status
+git add -A
+git commit -m "Describe the update"
+git pull --rebase origin main
+git push origin main
+```
+
+بعد `push` سيبدأ Cloudflare نشر النسخة الجديدة تلقائيًا عند تفعيل Git integration.

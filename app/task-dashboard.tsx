@@ -2,6 +2,7 @@
 "use client";
 
 import { ChangeEvent, FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { IssueReportPanel, IssuesModule, type IssuesModuleHandle } from "./issues-module";
 
 type Discipline = "Manager" | "Architecture" | "ID" | "Structure" | "Mechanical" | "Electrical" | "Infrastructure";
 
@@ -67,14 +68,34 @@ type TaskComment = {
   createdAt: string;
 };
 
+type UserRemovalWarning = {
+  employeeName: string;
+  taskCount: number;
+  projects: Array<{ project: string; taskCount: number }>;
+};
+
 type Notification = {
   id: number;
   recipientEmail: string;
-  type: "task_assigned" | "review_updated" | "private_task_submitted" | "task_ready_for_review";
+  type: "task_assigned" | "review_updated" | "private_task_submitted" | "task_ready_for_review" | "issue_created" | "issue_updated";
   taskId: number | null;
+  issueId: number | null;
   title: string;
   message: string;
   read: boolean;
+  createdAt: string;
+};
+
+type ActivityLog = {
+  id: number;
+  actorEmail: string;
+  actorName: string;
+  action: "created" | "updated" | "deleted" | "note_added" | "timer_updated" | "attachment_added" | "attachment_deleted" | "converted";
+  entityType: "task" | "issue";
+  entityId: number | null;
+  entityLabel: string;
+  projectCode: string;
+  details: string;
   createdAt: string;
 };
 
@@ -87,7 +108,7 @@ type PasswordForm = {
 type TaskForm = Omit<Task, "id" | "createdBy" | "createdAt" | "updatedAt" | "managerNote" | "submittedToManager">;
 type ProjectForm = Omit<Project, "id" | "createdAt">;
 type UserForm = Pick<User, "email" | "displayName" | "role" | "discipline"> & { temporaryPassword: string };
-type Tab = "overview" | "tasks" | "rfi" | "issues" | "projects" | "team" | "reports";
+type Tab = "overview" | "tasks" | "rfi" | "issues" | "projects" | "team" | "reports" | "activity";
 
 type WorkspaceData = {
   currentUser: User;
@@ -99,7 +120,7 @@ type WorkspaceData = {
   notifications: Notification[];
 };
 
-const tabValues: Tab[] = ["overview", "tasks", "rfi", "issues", "projects", "team", "reports"];
+const tabValues: Tab[] = ["overview", "tasks", "rfi", "issues", "projects", "team", "reports", "activity"];
 const activeTabStorageKey = "hindaza-project-management-active-tab";
 
 function savedTab(): Tab {
@@ -135,31 +156,31 @@ async function fetchWorkspaceData(timeoutMs = 12_000): Promise<WorkspaceData | n
 }
 
 const statusLabel: Record<Task["status"], string> = {
-  not_started: "لم تبدأ · Not started",
-  in_progress: "قيد التنفيذ · In progress",
-  paused: "متوقفة مؤقتًا · Paused",
-  blocked: "متوقفة · Blocked",
-  needs_revision: "تحتاج تعديل · Revision",
-  done: "مكتملة · Done",
+  not_started: "Not started · لم تبدأ",
+  in_progress: "In progress · قيد التنفيذ",
+  paused: "Paused · متوقفة مؤقتًا",
+  blocked: "Blocked · متوقفة",
+  needs_revision: "Revision · تحتاج تعديل",
+  done: "Done · مكتملة",
 };
 
 const priorityLabel: Record<Task["priority"], string> = {
-  high: "عالية · High",
-  medium: "متوسطة · Medium",
-  low: "منخفضة · Low",
+  high: "High · عالية",
+  medium: "Medium · متوسطة",
+  low: "Low · منخفضة",
 };
 
 const checkLabel: Record<Task["managerCheck"], string> = {
-  new: "جديدة/قيد العمل · New/WIP",
-  pending: "بانتظار التدقيق · Pending",
-  approved: "معتمدة · Approved",
-  returned: "مُعادة · Returned",
+  new: "New/WIP · جديدة/قيد العمل",
+  pending: "Pending · بانتظار التدقيق",
+  approved: "Approved · معتمدة",
+  returned: "Returned · مُعادة",
 };
 
 const projectStatusLabel: Record<Project["status"], string> = {
-  active: "نشط · Active",
-  on_hold: "معلّق · On hold",
-  completed: "مكتمل · Completed",
+  active: "Active · نشط",
+  on_hold: "On hold · معلّق",
+  completed: "Completed · مكتمل",
 };
 
 const disciplines: Discipline[] = ["Manager", "Architecture", "ID", "Structure", "Mechanical", "Electrical", "Infrastructure"];
@@ -201,11 +222,11 @@ const blankProject = (): ProjectForm => ({
 const blankUser = (): UserForm => ({ email: "", displayName: "", role: "member", discipline: "", temporaryPassword: "" });
 
 function taskFlag(task: Task) {
-  if (task.managerCheck === "returned" || task.status === "needs_revision") return { key: "revision", label: "تعديل · Revision" };
-  if (task.status === "blocked") return { key: "blocked", label: "متوقفة · Blocked" };
-  if (task.taskDate < localToday() && task.status !== "done") return { key: "late", label: "متأخرة · Late" };
-  if (task.plannedHours > 0 && task.actualHours > task.plannedHours * 1.2) return { key: "overtime", label: "تجاوز وقت · Overtime" };
-  return { key: "ok", label: "سليمة · OK" };
+  if (task.managerCheck === "returned" || task.status === "needs_revision") return { key: "revision", label: "Revision · تعديل" };
+  if (task.status === "blocked") return { key: "blocked", label: "Blocked · متوقفة" };
+  if (task.taskDate < localToday() && task.status !== "done") return { key: "late", label: "Late · متأخرة" };
+  if (task.plannedHours > 0 && task.actualHours > task.plannedHours * 1.2) return { key: "overtime", label: "Overtime · تجاوز وقت" };
+  return { key: "ok", label: "OK · سليمة" };
 }
 
 function initials(name: string) {
@@ -220,6 +241,10 @@ function roleLabel(role: User["role"]) {
   if (role === "owner") return "Owner · المالك";
   if (role === "manager") return "Manager · مسؤول";
   return "Team member · موظف";
+}
+
+function ButtonLabel({ en, ar }: { en: string; ar: string }) {
+  return <span className="button-label"><strong>{en}</strong><small dir="rtl">{ar}</small></span>;
 }
 
 function formatDate(value: string) {
@@ -302,6 +327,8 @@ export default function TaskDashboard() {
   const [users, setUsers] = useState<User[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
   const [notifications, setNotifications] = useState<Notification[]>([]);
+  const [activity, setActivity] = useState<ActivityLog[]>([]);
+  const [activityLoading, setActivityLoading] = useState(false);
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -314,6 +341,7 @@ export default function TaskDashboard() {
   const [selectedTaskId, setSelectedTaskId] = useState<number | null>(null);
   const [selectedProjectId, setSelectedProjectId] = useState<number | null>(null);
   const [selectedUserEmail, setSelectedUserEmail] = useState<string | null>(null);
+  const [userRemovalWarning, setUserRemovalWarning] = useState<UserRemovalWarning | null>(null);
   const [taskForm, setTaskForm] = useState<TaskForm>(blankTask());
   const [projectForm, setProjectForm] = useState<ProjectForm>(blankProject());
   const [userForm, setUserForm] = useState<UserForm>(blankUser());
@@ -327,6 +355,7 @@ export default function TaskDashboard() {
   const [notificationMenuOpen, setNotificationMenuOpen] = useState(false);
   const accountMenuRef = useRef<HTMLDivElement>(null);
   const notificationMenuRef = useRef<HTMLDivElement>(null);
+  const issuesModuleRef = useRef<IssuesModuleHandle>(null);
   const syncInFlightRef = useRef(false);
   const [clock, setClock] = useState(0);
   const [search, setSearch] = useState("");
@@ -334,10 +363,20 @@ export default function TaskDashboard() {
   const [projectFilter, setProjectFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState("all");
   const [reviewFilter, setReviewFilter] = useState("all");
+  const [teamDisciplineFilter, setTeamDisciplineFilter] = useState("all");
+  const [teamRoleFilter, setTeamRoleFilter] = useState("all");
+  const [projectStatusFilter, setProjectStatusFilter] = useState("all");
   const [reportPeriod, setReportPeriod] = useState<"week" | "month">("week");
+  const [reportType, setReportType] = useState<"tasks" | "issues" | "rfi">("tasks");
   const [reportGroup, setReportGroup] = useState<"project" | "employee">("project");
   const [reportAnchor, setReportAnchor] = useState(localToday());
   const [reportScope, setReportScope] = useState("all");
+
+  const taskCommentCounts = useMemo(() => {
+    const counts = new Map<number, number>();
+    comments.forEach((comment) => counts.set(comment.taskId, (counts.get(comment.taskId) || 0) + 1));
+    return counts;
+  }, [comments]);
 
   const applyWorkspaceData = useCallback((data: WorkspaceData, initialize = false) => {
     setTasks(data.tasks || []);
@@ -348,7 +387,9 @@ export default function TaskDashboard() {
     setNotifications(data.notifications || []);
     setCurrentUser(data.currentUser);
     if (data.currentUser.role === "member") {
-      setTab((current) => current === "team" ? "overview" : current);
+      setTab((current) => current === "team" || current === "activity" ? "overview" : current);
+    } else if (data.currentUser.role !== "owner") {
+      setTab((current) => current === "activity" ? "overview" : current);
     }
     if (initialize) setTaskForm(blankTask(data.currentUser));
   }, []);
@@ -427,6 +468,7 @@ export default function TaskDashboard() {
         setProjectDrawerOpen(false);
         setUserDrawerOpen(false);
         setPasswordDrawerOpen(false);
+        setUserRemovalWarning(null);
         setAccountMenuOpen(false);
         setNotificationMenuOpen(false);
       }
@@ -478,6 +520,11 @@ export default function TaskDashboard() {
     };
   }).sort((a, b) => b.total - a.total || a.displayName.localeCompare(b.displayName)), [users, tasks]);
 
+  const filteredTeamRows = useMemo(() => teamRows.filter((user) =>
+    (teamDisciplineFilter === "all" || user.discipline === teamDisciplineFilter) &&
+    (teamRoleFilter === "all" || user.role === teamRoleFilter)
+  ), [teamRows, teamDisciplineFilter, teamRoleFilter]);
+
   const projectRows = useMemo(() => projects.map((project) => {
     const rows = tasks.filter((task) => task.project === project.code);
     const done = rows.filter((task) => task.status === "done").length;
@@ -490,6 +537,10 @@ export default function TaskDashboard() {
       actual: rows.reduce((sum, task) => sum + task.actualHours, 0),
     };
   }), [projects, tasks]);
+
+  const filteredProjectRows = useMemo(() => projectRows.filter((project) =>
+    projectStatusFilter === "all" || project.status === projectStatusFilter
+  ), [projectRows, projectStatusFilter]);
 
   const range = useMemo(() => reportRange(reportAnchor, reportPeriod), [reportAnchor, reportPeriod]);
   const reportTasks = useMemo(() => tasks.filter((task) => task.taskDate >= range.start && task.taskDate <= range.end && (
@@ -552,6 +603,20 @@ export default function TaskDashboard() {
     setTaskDrawerOpen(true);
   }
 
+  async function openLinkedTask(id: number) {
+    setTab("tasks");
+    const current = tasks.find((task) => task.id === id);
+    if (current) {
+      openTask(current);
+      return;
+    }
+    const data = await fetchWorkspaceData();
+    if (!data) return;
+    applyWorkspaceData(data);
+    const linked = data.tasks.find((task) => task.id === id);
+    if (linked) openTask(linked);
+  }
+
   function openNewProject() {
     if (currentUser?.role !== "owner") return;
     setSelectedProjectId(null);
@@ -566,7 +631,31 @@ export default function TaskDashboard() {
     setProjectDrawerOpen(true);
   }
 
+  function reviewMemberProjectTasks(user: User, projectCode: string) {
+    setProjectDrawerOpen(false);
+    setTab("tasks");
+    setSearch("");
+    setEmployeeFilter(user.displayName);
+    setProjectFilter(projectCode);
+    setStatusFilter("all");
+    setReviewFilter("all");
+    setToast(`تم عرض مهام ${user.displayName} على مشروع ${projectCode} لتغيير الموظف المسؤول`);
+  }
+
+  function reviewEmployeeTasks(employeeName: string, projectCode: string) {
+    setUserRemovalWarning(null);
+    setUserDrawerOpen(false);
+    setTab("tasks");
+    setSearch("");
+    setEmployeeFilter(employeeName);
+    setProjectFilter(projectCode);
+    setStatusFilter("all");
+    setReviewFilter("all");
+    setToast(`Showing ${employeeName} tasks for ${projectCode} · تم عرض المهام المفلترة`);
+  }
+
   function openNewUser() {
+    setUserRemovalWarning(null);
     setSelectedUserEmail(null);
     setUserForm(currentUser?.role === "manager"
       ? { ...blankUser(), role: "member", discipline: currentUser.discipline }
@@ -578,6 +667,7 @@ export default function TaskDashboard() {
     if (!isManagement(currentUser)) return;
     if (currentUser?.role === "manager" && (user.role !== "member" || user.discipline !== currentUser.discipline)) return;
     if (user.role === "owner" && currentUser?.role !== "owner") return;
+    setUserRemovalWarning(null);
     setSelectedUserEmail(user.email);
     setUserForm({ email: user.email, displayName: user.displayName, role: user.role, discipline: user.discipline, temporaryPassword: "" });
     setUserDrawerOpen(true);
@@ -735,7 +825,17 @@ export default function TaskDashboard() {
     setSaving(true);
     try {
       const response = await fetch(`/api/users?email=${encodeURIComponent(selectedUserEmail)}`, { method: "DELETE" });
-      const data = await response.json(); if (!response.ok) throw new Error(data.error || "تعذر حذف الموظف");
+      const data = await response.json();
+      if (!response.ok) {
+        if (response.status === 409 && data.code === "EMPLOYEE_HAS_ASSIGNED_TASKS" && Array.isArray(data.projects)) {
+          const employeeName = users.find((user) => user.email === selectedUserEmail)?.displayName || userForm.displayName;
+          setUserRemovalWarning({ employeeName, taskCount: Number(data.taskCount) || 0, projects: data.projects });
+          setUserDrawerOpen(false);
+          setError("");
+          return;
+        }
+        throw new Error(data.error || "تعذر حذف الموظف");
+      }
       setUsers((current) => current.filter((user) => user.email !== selectedUserEmail));
       setUserDrawerOpen(false); setToast("تم حذف الموظف");
     } catch (deleteError) { setError(deleteError instanceof Error ? deleteError.message : "تعذر حذف الموظف"); }
@@ -747,6 +847,23 @@ export default function TaskDashboard() {
     window.location.replace("/login");
   }
 
+  async function openActivityLog() {
+    setAccountMenuOpen(false);
+    setTab("activity");
+    setActivityLoading(true);
+    setError("");
+    try {
+      const response = await fetch("/api/activity-log", { cache: "no-store" });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "Unable to load the activity log.");
+      setActivity(data.activity || []);
+    } catch (activityError) {
+      setError(activityError instanceof Error ? activityError.message : "Unable to load the activity log.");
+    } finally {
+      setActivityLoading(false);
+    }
+  }
+
   async function markNotification(notification?: Notification) {
     try {
       const response = await fetch("/api/notifications", {
@@ -756,7 +873,12 @@ export default function TaskDashboard() {
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || "Unable to update notification.");
-      if (notification?.taskId) {
+      if (notification?.issueId) {
+        setNotifications((current) => current.map((item) => item.id === notification.id ? { ...item, read: true } : item));
+        setNotificationMenuOpen(false);
+        setTab("issues");
+        window.setTimeout(() => issuesModuleRef.current?.openIssue(notification.issueId!), 150);
+      } else if (notification?.taskId) {
         const freshData = await fetchWorkspaceData();
         if (freshData) applyWorkspaceData(freshData);
         const task = freshData?.tasks.find((item) => item.id === notification.taskId);
@@ -922,7 +1044,7 @@ export default function TaskDashboard() {
     if (!popup) { setError("يرجى السماح بالنوافذ المنبثقة لتنزيل تقرير PDF."); return; }
     const rows = reportRows.map((row) => `<tr><td>${escapeXml(row.key)}</td><td>${row.total}</td><td>${row.done}</td><td>${row.open}</td><td>${row.blocked}</td><td>${row.planned.toFixed(1)}</td><td>${row.actual.toFixed(1)}</td></tr>`).join("");
     const bars = reportRows.map((row) => `<div class="bar-row"><strong>${escapeXml(row.key)}</strong><div class="bar"><i style="width:${(row.total / maxReportTotal) * 100}%"></i></div><span>${row.total}</span></div>`).join("");
-    popup.document.write(`<!doctype html><html dir="rtl"><head><meta charset="utf-8"><title>HINDAZA Project Management Report</title><style>body{font-family:Arial,Tahoma,sans-serif;color:#1d1d1d;padding:30px}.logo{display:block;width:250px;height:auto;margin:0 0 20px auto;background:#171717;border-radius:10px;padding:12px}h1{color:#171717;margin:0;border-right:5px solid #ffd200;padding-right:12px}.meta{color:#737373;margin:8px 0 24px}.summary{display:flex;gap:10px;margin:20px 0}.summary div{border:1px solid #e2e2dc;border-radius:10px;padding:12px 18px}.summary strong{font-size:22px;color:#8b6c00;display:block}table{width:100%;border-collapse:collapse;margin-top:22px}th,td{border:1px solid #e2e2dc;padding:8px;text-align:right;font-size:11px}th{background:#171717;color:white}.chart{margin:24px 0}.bar-row{display:grid;grid-template-columns:160px 1fr 35px;gap:10px;align-items:center;margin:9px 0;font-size:11px}.bar{height:16px;background:#f1f1ed;border-radius:8px;overflow:hidden}.bar i{display:block;height:100%;background:#ffd200}.footer{margin-top:30px;color:#858585;font-size:9px}@media print{body{padding:0}}</style></head><body><img class="logo" src="/hindaza-logo.png" alt="HINDAZA"><h1>HINDAZA Project Management</h1><div class="meta">${reportPeriod === "week" ? "التقرير الأسبوعي" : "التقرير الشهري"} · ${formatDate(range.start)} — ${formatDate(range.end)}</div><div class="summary"><div>إجمالي المهام<strong>${reportSummary.total}</strong></div><div>مكتملة<strong>${reportSummary.done}</strong></div><div>تحتاج متابعة<strong>${reportSummary.attention}</strong></div><div>الساعات الفعلية<strong>${reportSummary.actual.toFixed(1)}</strong></div></div><div class="chart">${bars}</div><table><thead><tr><th>المجموعة</th><th>الإجمالي</th><th>مكتملة</th><th>مفتوحة</th><th>متابعة</th><th>مخطط</th><th>فعلي</th></tr></thead><tbody>${rows}</tbody></table><div class="footer">Generated from HINDAZA Project Management</div><script>window.onload=()=>{window.print();}</script></body></html>`);
+    popup.document.write(`<!doctype html><html dir="ltr"><head><meta charset="utf-8"><title>HINDAZA Project Management Report</title><style>body{font-family:Arial,Tahoma,sans-serif;color:#1d1d1d;padding:30px;text-align:left}.logo{display:block;width:250px;height:auto;margin:0 auto 20px 0;background:#171717;border-radius:10px;padding:12px}h1{color:#171717;margin:0;border-left:5px solid #ffd200;padding-left:12px}.meta{color:#737373;margin:8px 0 24px}.summary{display:flex;gap:10px;margin:20px 0}.summary div{border:1px solid #e2e2dc;border-radius:10px;padding:12px 18px}.summary strong{font-size:22px;color:#8b6c00;display:block}table{width:100%;border-collapse:collapse;margin-top:22px}th,td{border:1px solid #e2e2dc;padding:8px;text-align:left;font-size:11px}th{background:#171717;color:white}.chart{margin:24px 0}.bar-row{display:grid;grid-template-columns:160px 1fr 35px;gap:10px;align-items:center;margin:9px 0;font-size:11px}.bar{height:16px;background:#f1f1ed;border-radius:8px;overflow:hidden}.bar i{display:block;height:100%;background:#ffd200}.footer{margin-top:30px;color:#858585;font-size:9px}@media print{body{padding:0}}</style></head><body><img class="logo" src="/hindaza-logo.png" alt="HINDAZA"><h1>HINDAZA Project Management</h1><div class="meta">${reportPeriod === "week" ? "التقرير الأسبوعي" : "التقرير الشهري"} · ${formatDate(range.start)} — ${formatDate(range.end)}</div><div class="summary"><div>إجمالي المهام<strong>${reportSummary.total}</strong></div><div>مكتملة<strong>${reportSummary.done}</strong></div><div>تحتاج متابعة<strong>${reportSummary.attention}</strong></div><div>الساعات الفعلية<strong>${reportSummary.actual.toFixed(1)}</strong></div></div><div class="chart">${bars}</div><table><thead><tr><th>المجموعة</th><th>الإجمالي</th><th>مكتملة</th><th>مفتوحة</th><th>متابعة</th><th>مخطط</th><th>فعلي</th></tr></thead><tbody>${rows}</tbody></table><div class="footer">Generated from HINDAZA Project Management</div><script>window.onload=()=>{window.print();}</script></body></html>`);
     popup.document.close();
   }
 
@@ -945,6 +1067,7 @@ export default function TaskDashboard() {
     projects: { en: "Project Management", ar: "إدارة المشاريع" },
     team: { en: "Team Performance", ar: "متابعة أداء الفريق" },
     reports: { en: "Reports & Analytics", ar: "التقارير والتحليلات" },
+    activity: { en: "Activity Log", ar: "سجل التعديلات والعمليات" },
   };
 
   return (
@@ -952,20 +1075,21 @@ export default function TaskDashboard() {
       <aside className="sidebar" aria-label="التنقل الرئيسي">
         <div className="brand-block"><img src="/hindaza-logo.png" alt="HINDAZA Engineering BIM" /><span>PROJECT MANAGEMENT</span></div>
         <nav className="nav-list">
-          {navItems.map((item) => <button key={item.key} className={tab === item.key ? "active" : ""} onClick={() => setTab(item.key)}><span className="nav-icon">{item.icon}</span><span>{item.ar}<small>{item.en}</small></span></button>)}
+          {navItems.map((item) => <button key={item.key} className={tab === item.key ? "active" : ""} onClick={() => setTab(item.key)}><span className="nav-icon">{item.icon}</span><span><strong>{item.en}</strong><small dir="rtl">{item.ar}</small></span></button>)}
         </nav>
         <div className="sidebar-account" ref={accountMenuRef}>
           {accountMenuOpen && <div className="account-menu">
             <div className="account-menu-title"><strong>{currentUser?.displayName}</strong><span>{currentUser ? roleLabel(currentUser.role) : ""}</span></div>
-            <label className={profileImageBusy ? "disabled" : ""}>Change image<input type="file" accept="image/jpeg,image/png,image/webp" onChange={changeProfileImage} disabled={profileImageBusy} /></label>
-            {currentUser?.profileImageKey && <button onClick={removeProfileImage} disabled={profileImageBusy}>Remove image</button>}
-            <button onClick={() => { setPasswordDrawerOpen(true); setAccountMenuOpen(false); }}>Change password</button>
+            <label className={profileImageBusy ? "disabled" : ""}><ButtonLabel en="Change image" ar="تغيير الصورة" /><input type="file" accept="image/jpeg,image/png,image/webp" onChange={changeProfileImage} disabled={profileImageBusy} /></label>
+            {currentUser?.profileImageKey && <button onClick={removeProfileImage} disabled={profileImageBusy}><ButtonLabel en="Remove image" ar="حذف الصورة" /></button>}
+            <button onClick={() => { setPasswordDrawerOpen(true); setAccountMenuOpen(false); }}><ButtonLabel en="Change password" ar="تغيير كلمة المرور" /></button>
             {currentUser?.role === "owner" && <>
-              <button onClick={downloadBackup} disabled={Boolean(backupBusy)}>{backupBusy === "download" ? "Preparing backup…" : "Download Backup"}</button>
-              <label className={backupBusy ? "disabled" : ""}>{backupBusy === "restore" ? "Restoring…" : "Restore Backup"}<input type="file" accept="application/json,.json" onChange={restoreBackup} disabled={Boolean(backupBusy)} /></label>
+              <button onClick={() => void openActivityLog()}><ButtonLabel en="Activity log" ar="سجل التعديلات" /></button>
+              <button onClick={downloadBackup} disabled={Boolean(backupBusy)}><ButtonLabel en={backupBusy === "download" ? "Preparing backup…" : "Download Backup"} ar={backupBusy === "download" ? "جاري تجهيز النسخة…" : "تنزيل نسخة احتياطية"} /></button>
+              <label className={backupBusy ? "disabled" : ""}><ButtonLabel en={backupBusy === "restore" ? "Restoring…" : "Restore Backup"} ar={backupBusy === "restore" ? "جاري الاستعادة…" : "استعادة نسخة احتياطية"} /><input type="file" accept="application/json,.json" onChange={restoreBackup} disabled={Boolean(backupBusy)} /></label>
               <small>Owner only · Profile photos are not included</small>
             </>}
-            <button className="account-logout" onClick={logout}>Logout</button>
+            <button className="account-logout" onClick={logout}><ButtonLabel en="Logout" ar="تسجيل الخروج" /></button>
           </div>}
           <div className="sidebar-user">
             <div className={`avatar${currentUser?.profileImageKey ? " has-image" : ""}`}>{currentUser?.profileImageKey ? <img src={`/api/profile-image?v=${encodeURIComponent(currentUser.profileImageKey)}`} alt={currentUser.displayName} /> : initials(currentUser?.displayName || "H")}</div>
@@ -982,18 +1106,19 @@ export default function TaskDashboard() {
             <div className="notification-center" ref={notificationMenuRef}>
               <button className={`notification-bell${unreadNotifications ? " unread" : ""}`} onClick={() => { setAccountMenuOpen(false); setNotificationMenuOpen((open) => !open); }} aria-label="Notifications"><span className="bell-icon" aria-hidden="true" />{unreadNotifications > 0 && <em>{unreadNotifications > 99 ? "99+" : unreadNotifications}</em>}</button>
               {notificationMenuOpen && <div className="notification-popover">
-                <div className="notification-popover-head"><div><strong>الإشعارات</strong><span>Notifications</span></div>{unreadNotifications > 0 && <button onClick={() => markNotification()}>تحديد الكل كمقروء</button>}</div>
-                {notifications.length === 0 ? <div className="notification-popover-empty">لا توجد إشعارات جديدة</div> : <div className="notification-popover-list">{notifications.map((notification) => <button key={notification.id} className={notification.read ? "" : "unread"} onClick={() => markNotification(notification)}><i>{notification.type === "task_assigned" ? "+" : "✓"}</i><span><strong>{notification.title}</strong><small>{notification.message}</small><time dir="ltr">{formatDateTime(notification.createdAt)}</time></span></button>)}</div>}
+                <div className="notification-popover-head"><div><strong>Notifications</strong><span>الإشعارات</span></div>{notifications.length > 0 && <button onClick={() => markNotification()}><ButtonLabel en="Read all" ar="قراءة الكل" /></button>}</div>
+                {notifications.length === 0 ? <div className="notification-popover-empty">لا توجد إشعارات جديدة</div> : <div className="notification-popover-list">{notifications.map((notification) => <button key={notification.id} className={notification.read ? "" : "unread"} onClick={() => markNotification(notification)}><i>{notification.issueId ? "!" : notification.type === "task_assigned" ? "+" : "✓"}</i><span><strong>{notification.title}</strong><small>{notification.message}</small><time dir="ltr">{formatDateTime(notification.createdAt)}</time></span></button>)}</div>}
               </div>}
             </div>
-            {(tab === "overview" || tab === "tasks") && isManagement(currentUser) && <button className="primary-button" onClick={openNewTask}><span>＋</span> مهمة جديدة <small>New Task</small></button>}
-            {(tab === "overview" || tab === "tasks") && currentUser?.role === "member" && <button className="primary-button private-task-button" onClick={openNewPrivateTask}><span>＋</span> مهمة خاصة <small>Private Task</small></button>}
-            {tab === "projects" && currentUser?.role === "owner" && <button className="primary-button" onClick={openNewProject}><span>＋</span> مشروع جديد <small>New Project</small></button>}
-            {tab === "team" && isManagement(currentUser) && <button className="primary-button" onClick={openNewUser}><span>＋</span> إضافة موظف <small>Add Employee</small></button>}
+            {(tab === "overview" || tab === "tasks") && isManagement(currentUser) && <button className="primary-button" onClick={openNewTask}><span className="button-icon">＋</span><ButtonLabel en="New Task" ar="مهمة جديدة" /></button>}
+            {(tab === "overview" || tab === "tasks") && currentUser?.role === "member" && <button className="primary-button private-task-button" onClick={openNewPrivateTask}><span className="button-icon">＋</span><ButtonLabel en="Private Task" ar="مهمة خاصة" /></button>}
+            {tab === "issues" && <button className="primary-button" onClick={() => issuesModuleRef.current?.openNew()}><span className="button-icon">＋</span><ButtonLabel en="New Issue" ar="مشكلة جديدة" /></button>}
+            {tab === "projects" && currentUser?.role === "owner" && <button className="primary-button" onClick={openNewProject}><span className="button-icon">＋</span><ButtonLabel en="New Project" ar="مشروع جديد" /></button>}
+            {tab === "team" && isManagement(currentUser) && <button className="primary-button" onClick={openNewUser}><span className="button-icon">＋</span><ButtonLabel en="Add Employee" ar="إضافة موظف" /></button>}
           </div>
         </header>
 
-        {error && <div className="error-banner"><span>{error}</span><div className="error-actions"><button className="retry-load-button" onClick={() => void loadWorkspace(!currentUser, true)}>إعادة المحاولة · Retry</button><button className="dismiss-error-button" onClick={() => setError("")} aria-label="إغلاق">×</button></div></div>}
+        {error && <div className="error-banner"><span>{error}</span><div className="error-actions"><button className="retry-load-button" onClick={() => void loadWorkspace(!currentUser, true)}><ButtonLabel en="Retry" ar="إعادة المحاولة" /></button><button className="dismiss-error-button" onClick={() => setError("")} aria-label="Close">×</button></div></div>}
 
         {(tab === "overview" || tab === "tasks") && <>
           <section className="stats-grid" aria-label="ملخص المهام">
@@ -1003,10 +1128,10 @@ export default function TaskDashboard() {
             <article className="stat-card green"><span>معتمدة · Approved</span><strong>{stats.approved}</strong><small>تم اعتمادها من المسؤول</small></article>
             <article className="stat-card amber"><span>مُعادة · Returned</span><strong>{stats.returned}</strong><small>تحتاج إجراء من الموظف</small></article>
           </section>
-          <TaskTable loading={loading} tasks={visibleRows} filteredCount={filteredTasks.length} tab={tab} employees={employees} projects={projectCodes} search={search} employeeFilter={employeeFilter} projectFilter={projectFilter} statusFilter={statusFilter} reviewFilter={reviewFilter} showEmployeeFilter={currentUser?.role !== "member"} setSearch={setSearch} setEmployeeFilter={setEmployeeFilter} setProjectFilter={setProjectFilter} setStatusFilter={setStatusFilter} setReviewFilter={setReviewFilter} openTask={openTask} showAll={() => setTab("tasks")} timeEntries={timeEntries} clock={clock} />
+          <TaskTable loading={loading} tasks={visibleRows} filteredCount={filteredTasks.length} tab={tab} employees={employees} projects={projectCodes} search={search} employeeFilter={employeeFilter} projectFilter={projectFilter} statusFilter={statusFilter} reviewFilter={reviewFilter} showEmployeeFilter={currentUser?.role !== "member"} setSearch={setSearch} setEmployeeFilter={setEmployeeFilter} setProjectFilter={setProjectFilter} setStatusFilter={setStatusFilter} setReviewFilter={setReviewFilter} openTask={openTask} showAll={() => setTab("tasks")} timeEntries={timeEntries} clock={clock} commentCounts={taskCommentCounts} />
         </>}
 
-        {(tab === "rfi" || tab === "issues") && <section className="panel module-placeholder">
+        {tab === "rfi" && <section className="panel module-placeholder">
           <div className="module-icon">{tab === "rfi" ? "RFI" : "!"}</div>
           <p>{tab === "rfi" ? "REQUEST FOR INFORMATION" : "PROJECT ISSUES"}</p>
           <h2>{tab === "rfi" ? "بوابة طلبات المعلومات" : "سجل مشاكل المشاريع"}</h2>
@@ -1014,9 +1139,12 @@ export default function TaskDashboard() {
           <div className="module-status">جاهزة لإضافة التفاصيل · Ready for configuration</div>
         </section>}
 
+        {tab === "issues" && currentUser && <IssuesModule ref={issuesModuleRef} currentUser={currentUser} users={users} projects={projects} onTaskCreated={(task) => setTasks((current) => [task as Task, ...current])} onOpenTask={(id) => void openLinkedTask(id)} onToast={setToast} />}
+
         {tab === "projects" && <section className="panel projects-panel">
-          <div className="panel-heading"><div><h2>سجل المشاريع</h2><p>المشاريع النشطة والمواعيد ونسبة إنجاز المهام</p></div><span className="count-badge">{projectRows.length} مشروع</span></div>
-          {projectRows.length === 0 ? <div className="empty-state"><strong>لا توجد مشاريع بعد</strong><p>أضف أول مشروع لبدء تنظيم مهام الفريق.</p></div> : <div className="project-grid">{projectRows.map((project) => <button className="project-card" key={project.id} onClick={() => openProject(project)} disabled={currentUser?.role !== "owner"}>
+          <div className="panel-heading"><div><h2>سجل المشاريع</h2><p>المشاريع النشطة والمواعيد ونسبة إنجاز المهام</p></div><span className="count-badge">{filteredProjectRows.length} مشروع</span></div>
+          <div className="directory-filters"><select value={projectStatusFilter} onChange={(event) => setProjectStatusFilter(event.target.value)} aria-label="فلترة المشاريع حسب الحالة"><option value="all">كل حالات المشاريع · All statuses</option>{Object.entries(projectStatusLabel).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></div>
+          {filteredProjectRows.length === 0 ? <div className="empty-state"><strong>{projectRows.length ? "لا توجد مشاريع مطابقة" : "لا توجد مشاريع بعد"}</strong><p>{projectRows.length ? "غيّر حالة المشروع المختارة لعرض نتائج أخرى." : "أضف أول مشروع لبدء تنظيم مهام الفريق."}</p></div> : <div className="project-grid">{filteredProjectRows.map((project) => <button className="project-card" key={project.id} onClick={() => openProject(project)} disabled={currentUser?.role !== "owner"}>
             <div className="project-card-top"><span className="project-code large">{project.code}</span><span className={`project-status ${project.status}`}>{projectStatusLabel[project.status]}</span></div>
             <h3>{project.name}</h3><p>{project.client || "بدون اسم عميل"}</p>
             <div className="project-progress-head"><span>إنجاز المهام</span><strong>{project.progress}%</strong></div><div className="progress project-progress"><i style={{ width: `${project.progress}%` }} /></div>
@@ -1027,24 +1155,31 @@ export default function TaskDashboard() {
         </section>}
 
         {tab === "team" && <section className="panel team-panel">
-          <div className="panel-heading"><div><h2>ملخص الفريق</h2><p>إدارة حسابات الموظفين وتخصصاتهم وصلاحياتهم داخل النظام</p></div><span className="count-badge">{teamRows.length} موظف</span></div>
-          <div className="team-grid">{teamRows.map((row) => <button className="team-card" key={row.email} onClick={() => openUser(row)}>
+          <div className="panel-heading"><div><h2>ملخص الفريق</h2><p>إدارة حسابات الموظفين وتخصصاتهم وصلاحياتهم داخل النظام</p></div><span className="count-badge">{filteredTeamRows.length} موظف</span></div>
+          <div className="directory-filters two-columns"><select value={teamDisciplineFilter} onChange={(event) => setTeamDisciplineFilter(event.target.value)} aria-label="فلترة الفريق حسب التخصص"><option value="all">كل التخصصات · All disciplines</option>{disciplines.map((discipline) => <option key={discipline} value={discipline}>{discipline}</option>)}</select><select value={teamRoleFilter} onChange={(event) => setTeamRoleFilter(event.target.value)} aria-label="فلترة الفريق حسب المسؤولية"><option value="all">كل المسؤوليات · All roles</option><option value="member">Member · موظف</option><option value="manager">Manager · مسؤول</option><option value="owner">Owner · مالك</option></select></div>
+          {filteredTeamRows.length === 0 ? <div className="empty-state"><strong>لا يوجد موظفون مطابقون</strong><p>غيّر التخصص أو المسؤولية لعرض نتائج أخرى.</p></div> : <div className="team-grid">{filteredTeamRows.map((row) => <button className="team-card" key={row.email} onClick={() => openUser(row)}>
             <div className="team-card-head"><div className="avatar soft">{initials(row.displayName)}</div><div><strong>{row.displayName}</strong><span>{roleLabel(row.role)}</span></div>{row.temporary && <em className="temporary-badge">مؤقت</em>}</div>
             <div className={`discipline-badge${row.discipline ? "" : " unset"}`}>{row.discipline || "غير محدد · Not specified"}</div>
             <div className="team-metrics"><div><span>المهام</span><strong>{row.total}</strong></div><div><span>مكتمل</span><strong>{row.done}</strong></div><div><span>متابعة</span><strong className={row.attention ? "warn-text" : ""}>{row.attention}</strong></div><div><span>فعلي</span><strong>{row.actual.toFixed(1)}h</strong></div></div>
             <div className="employee-email">{row.temporary ? "سيتم ربط البريد عند النقل" : row.email}</div>
-          </button>)}</div>
+          </button>)}</div>}
         </section>}
 
-        {tab === "reports" && <section className="report-layout">
+        {tab === "activity" && currentUser?.role === "owner" && <section className="panel activity-panel">
+          <div className="panel-heading"><div><h2>Activity Log</h2><p>سجل إنشاء وتعديل وحذف المهام ومشاكل المشاريع</p></div><button className="secondary-button activity-refresh" onClick={() => void openActivityLog()} disabled={activityLoading}><ButtonLabel en={activityLoading ? "Loading..." : "Refresh"} ar={activityLoading ? "جاري التحميل" : "تحديث"} /></button></div>
+          {activityLoading ? <div className="loading-state"><div className="spinner" /><p>Loading activity...</p></div> : activity.length === 0 ? <div className="empty-state"><strong>No recorded activity</strong><p>لا توجد عمليات مسجلة حتى الآن.</p></div> : <div className="task-table-wrap"><table className="task-table activity-table"><thead><tr><th>Date & Time</th><th>User</th><th>Action</th><th>Type</th><th>Item</th><th>Project</th><th>Details</th></tr></thead><tbody>{activity.map((entry) => <tr key={entry.id}><td dir="ltr">{formatDateTime(entry.createdAt)}</td><td><strong>{entry.actorName}</strong><small>{entry.actorEmail}</small></td><td><span className={`activity-action action-${entry.action}`}>{entry.action.replaceAll("_", " ")}</span></td><td>{entry.entityType === "task" ? "Task · مهمة" : "Issue · مشكلة"}</td><td>{entry.entityId && entry.action !== "deleted" ? <button className="activity-link" onClick={() => { if (entry.entityType === "task") void openLinkedTask(entry.entityId!); else { setTab("issues"); window.setTimeout(() => issuesModuleRef.current?.openIssue(entry.entityId!), 150); } }}>{entry.entityLabel}</button> : <strong>{entry.entityLabel}</strong>}</td><td><span className="project-code">{entry.projectCode || "—"}</span></td><td>{entry.details || "—"}</td></tr>)}</tbody></table></div>}
+        </section>}
+
+        {tab === "reports" && <div className="reports-workspace"><div className="report-type-selector" role="tablist" aria-label="Report type"><button className={reportType === "tasks" ? "active" : ""} onClick={() => setReportType("tasks")}>Task Report <small>تقرير المهام</small></button><button className={reportType === "issues" ? "active" : ""} onClick={() => setReportType("issues")}>Project Issues <small>مشاكل المشاريع</small></button><button className={reportType === "rfi" ? "active" : ""} onClick={() => setReportType("rfi")}>RFI <small>طلبات المعلومات</small></button></div>
+        {reportType === "tasks" && <section className="report-layout">
           <div className="panel report-controls"><div className="panel-heading"><div><h2>إعداد التقرير</h2><p>أسبوعي أو شهري، حسب المشروع أو الموظف</p></div></div>
             <div className="report-filter-grid">
               <label><span>الفترة</span><select value={reportPeriod} onChange={(event) => { setReportPeriod(event.target.value as "week" | "month"); setReportScope("all"); }}><option value="week">أسبوعي · Weekly</option><option value="month">شهري · Monthly</option></select></label>
               <label><span>التجميع</span><select value={reportGroup} onChange={(event) => { setReportGroup(event.target.value as "project" | "employee"); setReportScope("all"); }}><option value="project">حسب المشروع</option><option value="employee">حسب الموظف</option></select></label>
               <label><span>{reportGroup === "project" ? "المشروع" : "الموظف"}</span><select value={reportScope} onChange={(event) => setReportScope(event.target.value)}><option value="all">الكل</option>{(reportGroup === "project" ? projectCodes : employees).map((item) => <option key={item} value={item}>{item}</option>)}</select></label>
             </div>
-            <div className="period-nav"><button onClick={() => moveReport(-1)}>→ السابق</button><div><strong>{formatDate(range.start)} — {formatDate(range.end)}</strong><small>{reportPeriod === "week" ? "تقرير أسبوعي" : "تقرير شهري"}</small></div><button onClick={() => moveReport(1)}>التالي ←</button></div>
-            <div className="export-actions"><button className="excel-button" onClick={exportExcel} disabled={!reportRows.length}>↓ تنزيل Excel</button><button className="pdf-button" onClick={exportPdf} disabled={!reportRows.length}>↓ تنزيل PDF</button></div>
+            <div className="period-nav"><button onClick={() => moveReport(-1)}><ButtonLabel en="← Previous" ar="السابق" /></button><div><strong>{formatDate(range.start)} — {formatDate(range.end)}</strong><small>{reportPeriod === "week" ? "تقرير أسبوعي" : "تقرير شهري"}</small></div><button onClick={() => moveReport(1)}><ButtonLabel en="Next →" ar="التالي" /></button></div>
+            <div className="export-actions"><button className="excel-button" onClick={exportExcel} disabled={!reportRows.length}><ButtonLabel en="↓ Download Excel" ar="تنزيل إكسل" /></button><button className="pdf-button" onClick={exportPdf} disabled={!reportRows.length}><ButtonLabel en="↓ Download PDF" ar="تنزيل PDF" /></button></div>
           </div>
           <div className="report-content">
             <section className="report-stats"><article><span>إجمالي المهام</span><strong>{reportSummary.total}</strong></article><article><span>مكتملة</span><strong>{reportSummary.done}</strong></article><article><span>تحتاج متابعة</span><strong>{reportSummary.attention}</strong></article><article><span>الساعات الفعلية</span><strong>{reportSummary.actual.toFixed(1)}</strong></article></section>
@@ -1054,10 +1189,14 @@ export default function TaskDashboard() {
             {reportRows.length > 0 && <section className="panel report-table-panel"><div className="task-table-wrap"><table className="task-table report-table"><thead><tr><th>{reportGroup === "project" ? "المشروع" : "الموظف"}</th><th>الإجمالي</th><th>مكتملة</th><th>مفتوحة</th><th>متوقفة/تعديل</th><th>ساعات مخططة</th><th>ساعات فعلية</th><th>الكفاءة</th></tr></thead><tbody>{reportRows.map((row) => <tr key={row.key}><td><strong>{row.key}</strong></td><td>{row.total}</td><td>{row.done}</td><td>{row.open}</td><td>{row.blocked}</td><td>{row.planned.toFixed(1)}</td><td>{row.actual.toFixed(1)}</td><td>{row.planned ? `${Math.round((row.actual / row.planned) * 100)}%` : "—"}</td></tr>)}</tbody></table></div></section>}
           </div>
         </section>}
+        {reportType === "issues" && <IssueReportPanel projects={projects} />}
+        {reportType === "rfi" && <section className="panel module-placeholder report-rfi-placeholder"><div className="module-icon">RFI</div><p>REQUEST FOR INFORMATION</p><h2>RFI Report</h2><span>سيتم تفعيل تقرير طلبات المعلومات عند تطوير وحدة RFI لاحقًا.</span></section>}
+        </div>}
       </main>
 
+      {userRemovalWarning && <div className="drawer-layer dependency-warning-layer" role="dialog" aria-modal="true" aria-label="Employee assigned tasks warning"><button className="drawer-backdrop" onClick={() => setUserRemovalWarning(null)} aria-label="Close warning" /><section className="dependency-warning-dialog"><div className="dependency-warning-icon">!</div><h2>Employee has assigned tasks</h2><h3>لدى الموظف مهام موكلة إليه</h3><p><strong>{userRemovalWarning.employeeName}</strong> has {userRemovalWarning.taskCount} assigned task(s). Reassign these tasks before deleting the employee.</p><p dir="rtl">يجب تغيير الموظف المسؤول عن هذه المهام قبل حذف الموظف من النظام.</p><div className="dependency-project-links">{userRemovalWarning.projects.map((item) => <button key={item.project} onClick={() => reviewEmployeeTasks(userRemovalWarning.employeeName, item.project)}><span>↗</span><strong>Open {item.project} tasks</strong><small>{item.taskCount} tasks · فتح المهام المفلترة</small></button>)}</div><button className="secondary-button dependency-close" onClick={() => setUserRemovalWarning(null)}><ButtonLabel en="Cancel" ar="إلغاء" /></button></section></div>}
       {taskDrawerOpen && <TaskDrawer selectedId={selectedTaskId} form={taskForm} setOpen={setTaskDrawerOpen} saveTask={saveTask} deleteTask={deleteTask} saving={saving} currentUser={currentUser} users={users} projects={projects} updateForm={updateTaskForm} comments={comments.filter((comment) => comment.taskId === selectedTaskId)} commentDraft={commentDraft} setCommentDraft={setCommentDraft} addComment={addComment} savingComment={savingComment} task={tasks.find((task) => task.id === selectedTaskId) || null} timeEntries={timeEntries.filter((entry) => entry.taskId === selectedTaskId)} clock={clock} updateTimer={updateTimer} savingTimer={savingTimer} submitPrivateTask={submitPrivateTask} />}
-      {projectDrawerOpen && <ProjectDrawer selectedId={selectedProjectId} form={projectForm} setForm={setProjectForm} setOpen={setProjectDrawerOpen} saveProject={saveProject} saving={saving} users={users.filter((user) => user.role === "member")} />}
+      {projectDrawerOpen && <ProjectDrawer selectedId={selectedProjectId} form={projectForm} setForm={setProjectForm} setOpen={setProjectDrawerOpen} saveProject={saveProject} saving={saving} users={users.filter((user) => user.role === "member")} tasks={tasks} projectCode={projects.find((project) => project.id === selectedProjectId)?.code || projectForm.code} onResolveMemberTasks={reviewMemberProjectTasks} />}
       {userDrawerOpen && <UserDrawer selectedEmail={selectedUserEmail} form={userForm} setForm={setUserForm} setOpen={setUserDrawerOpen} saveUser={saveUser} deleteUser={deleteUser} saving={saving} currentUser={currentUser} />}
       {passwordDrawerOpen && <PasswordDrawer form={passwordForm} setForm={setPasswordForm} setOpen={setPasswordDrawerOpen} changePassword={changePassword} saving={saving} />}
       {toast && <div className="toast">✓ {toast}</div>}
@@ -1071,6 +1210,7 @@ type TaskTableProps = {
   setSearch: (value: string) => void; setEmployeeFilter: (value: string) => void; setProjectFilter: (value: string) => void; setStatusFilter: (value: string) => void; setReviewFilter: (value: string) => void;
   openTask: (task: Task) => void; showAll: () => void;
   timeEntries: TaskTimeEntry[]; clock: number;
+  commentCounts: Map<number, number>;
 };
 
 function TaskTable(props: TaskTableProps) {
@@ -1082,11 +1222,11 @@ function TaskTable(props: TaskTableProps) {
     props.setStatusFilter("all");
     props.setReviewFilter("all");
   };
-  return <section className="panel"><div className="panel-heading"><div><h2>{props.tab === "overview" ? "مهام اليوم والمتابعة" : "جميع المهام"}</h2><p>اضغط على أي مهمة لعرض التفاصيل أو تحديثها</p></div><span className="count-badge" dir="ltr">{props.filteredCount} {props.filteredCount === 1 ? "Task" : "Tasks"}</span></div>
-    <div className="filters"><label className="search-box"><span>⌕</span><input value={props.search} onChange={(event) => props.setSearch(event.target.value)} placeholder="ابحث عن مهمة أو مشروع..." /></label>{props.showEmployeeFilter && <select value={props.employeeFilter} onChange={(event) => props.setEmployeeFilter(event.target.value)} aria-label="فلترة حسب الموظف"><option value="all">كل الموظفين</option>{props.employees.map((employee) => <option key={employee}>{employee}</option>)}</select>}<select value={props.projectFilter} onChange={(event) => props.setProjectFilter(event.target.value)} aria-label="فلترة حسب المشروع"><option value="all">كل المشاريع</option>{props.projects.map((project) => <option key={project}>{project}</option>)}</select><select value={props.statusFilter} onChange={(event) => props.setStatusFilter(event.target.value)} aria-label="فلترة حسب الحالة"><option value="all">كل حالات الموظف</option>{Object.entries(statusLabel).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select><select value={props.reviewFilter} onChange={(event) => props.setReviewFilter(event.target.value)} aria-label="فلترة حسب مراجعة المسؤول"><option value="all">كل مراجعات المسؤول</option>{Object.entries(checkLabel).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select><button type="button" className="clear-filters-button" onClick={clearFilters} disabled={!filtersActive} aria-label="Clear all task filters"><span>×</span> Clear filters</button></div>
-    {props.loading ? <div className="loading-state"><div className="spinner" /><p>جاري تحميل المهام...</p></div> : props.tasks.length === 0 ? <div className="empty-state"><strong>لا توجد مهام مطابقة</strong><p>غيّر خيارات البحث أو أضف مهمة جديدة.</p></div> : <><div className="task-table-wrap"><table className={`task-table task-data-table${props.showEmployeeFilter ? "" : " member-task-table"}`}><thead><tr><th>المهمة والمشروع</th>{props.showEmployeeFilter && <th>الموظف</th>}<th>تاريخ الإنشاء<br /><small>Created Date</small></th><th>تاريخ الإنجاز المتوقع<br /><small>Due Date</small></th><th>الأولوية</th><th>الساعات</th><th>الحالة</th><th>تدقيق المسؤول</th><th>المؤشر</th></tr></thead><tbody>{props.tasks.map((task) => { const flag = taskFlag(task); const entries = props.timeEntries.filter((entry) => entry.taskId === task.id); const logged = taskLoggedHours(task, entries, props.clock); const active = entries.some((entry) => !entry.endedAt); return <tr key={task.id} onClick={() => props.openTask(task)} tabIndex={0} onKeyDown={(event) => event.key === "Enter" && props.openTask(task)}><td><div className="task-cell"><strong>{task.title}</strong><div className="task-tags"><span className="project-code">{task.project}</span>{task.visibility === "private" && <span className="private-badge">خاص · Private</span>}</div><small>{task.expectedOutput}</small></div></td>{props.showEmployeeFilter && <td><div className="employee-cell"><span className="avatar small">{initials(task.employeeName)}</span><strong>{task.employeeName}</strong></div></td>}<td><span className="due-date" dir="ltr">{formatCreatedDate(task.createdAt)}</span></td><td><span className="due-date" dir="ltr">{formatDueDate(task.taskDate)}</span></td><td><span className={`pill priority-${task.priority}`}>{priorityLabel[task.priority]}</span></td><td><strong className={active ? "live-hours" : ""}>{logged ? logged.toFixed(2) : "—"}{active && <i />}</strong><small className="hours-note"> / {task.plannedHours || "—"}h</small></td><td><span className={`pill status-${task.status}`}>{statusLabel[task.status]}</span></td><td><span className={`pill check-${task.managerCheck}`}>{checkLabel[task.managerCheck]}</span></td><td><span className={`flag flag-${flag.key}`}>{flag.label}</span></td></tr>; })}</tbody></table></div>
+  return <section className="panel"><div className="panel-heading"><div><h2>{props.tab === "overview" ? "Current Tasks" : "All Tasks"}</h2><p>{props.tab === "overview" ? "المهام الحالية والمتابعة" : "جميع المهام"} · Click any task to view or update it</p></div><span className="count-badge" dir="ltr">{props.filteredCount} {props.filteredCount === 1 ? "Task" : "Tasks"}</span></div>
+    <div className="filters"><label className="search-box"><span>⌕</span><input value={props.search} onChange={(event) => props.setSearch(event.target.value)} placeholder="Search for a task or project..." /></label>{props.showEmployeeFilter && <select value={props.employeeFilter} onChange={(event) => props.setEmployeeFilter(event.target.value)} aria-label="Filter by employee"><option value="all">All employees · كل الموظفين</option>{props.employees.map((employee) => <option key={employee}>{employee}</option>)}</select>}<select value={props.projectFilter} onChange={(event) => props.setProjectFilter(event.target.value)} aria-label="Filter by project"><option value="all">All projects · كل المشاريع</option>{props.projects.map((project) => <option key={project}>{project}</option>)}</select><select value={props.statusFilter} onChange={(event) => props.setStatusFilter(event.target.value)} aria-label="Filter by status"><option value="all">All employee statuses · كل حالات الموظف</option>{Object.entries(statusLabel).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select><select value={props.reviewFilter} onChange={(event) => props.setReviewFilter(event.target.value)} aria-label="Filter by manager review"><option value="all">All manager reviews · كل مراجعات المسؤول</option>{Object.entries(checkLabel).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select><button type="button" className="clear-filters-button" onClick={clearFilters} disabled={!filtersActive} aria-label="Clear all task filters" title="Clear filters · مسح الفلاتر"><span className="filter-clear-icon" aria-hidden="true" /></button></div>
+    {props.loading ? <div className="loading-state"><div className="spinner" /><p>جاري تحميل المهام...</p></div> : props.tasks.length === 0 ? <div className="empty-state"><strong>لا توجد مهام مطابقة</strong><p>غيّر خيارات البحث أو أضف مهمة جديدة.</p></div> : <><div className="task-table-wrap"><table className={`task-table task-data-table task-table-ltr${props.showEmployeeFilter ? "" : " member-task-table"}`}><thead><tr><th>Task / Project</th>{props.showEmployeeFilter && <th>Employee</th>}<th>Created Date</th><th>Due Date</th><th>Priority</th><th>Hours</th><th>Status</th><th>Manager Review</th><th>Indicator</th></tr></thead><tbody>{props.tasks.map((task) => { const flag = taskFlag(task); const entries = props.timeEntries.filter((entry) => entry.taskId === task.id); const logged = taskLoggedHours(task, entries, props.clock); const active = entries.some((entry) => !entry.endedAt); const noteCount = props.commentCounts.get(task.id) || 0; return <tr key={task.id} onClick={() => props.openTask(task)} tabIndex={0} onKeyDown={(event) => event.key === "Enter" && props.openTask(task)}><td><div className="task-cell"><strong>{task.title}</strong><div className="task-tags"><span className="project-code">{task.project}</span>{task.visibility === "private" && <span className="private-badge">Private</span>}{noteCount > 0 && <span className="note-indicator" title={`${noteCount} notes · ${noteCount} ملاحظات`} aria-label={`${noteCount} notes`}>▰ <small>{noteCount}</small></span>}</div><small>{task.expectedOutput}</small></div></td>{props.showEmployeeFilter && <td><div className="employee-cell"><span className="avatar small">{initials(task.employeeName)}</span><strong>{task.employeeName}</strong></div></td>}<td><span className="due-date" dir="ltr">{formatCreatedDate(task.createdAt)}</span></td><td><span className="due-date" dir="ltr">{formatDueDate(task.taskDate)}</span></td><td><span className={`pill priority-${task.priority}`}>{priorityLabel[task.priority]}</span></td><td><strong className={active ? "live-hours" : ""}>{logged ? logged.toFixed(2) : "—"}{active && <i />}</strong><small className="hours-note"> / {task.plannedHours || "—"}h</small></td><td><span className={`pill status-${task.status}`}>{statusLabel[task.status]}</span></td><td><span className={`pill check-${task.managerCheck}`}>{checkLabel[task.managerCheck]}</span></td><td><span className={`flag flag-${flag.key}`}>{flag.label}</span></td></tr>; })}</tbody></table></div>
       <div className="mobile-task-list">{props.tasks.map((task) => { const flag = taskFlag(task); const entries = props.timeEntries.filter((entry) => entry.taskId === task.id); const logged = taskLoggedHours(task, entries, props.clock); return <button className="mobile-task" key={task.id} onClick={() => props.openTask(task)}><div className="mobile-task-top"><div className="task-tags"><span className="project-code">{task.project}</span>{task.visibility === "private" && <span className="private-badge">خاص · Private</span>}</div><span className={`flag flag-${flag.key}`}>{flag.label}</span></div><strong>{task.title}</strong><small>{props.showEmployeeFilter ? `${task.employeeName} · ` : ""}<span className="mobile-date-label">Created</span> <span className="due-date" dir="ltr">{formatCreatedDate(task.createdAt)}</span> · <span className="mobile-date-label">Due</span> <span className="due-date" dir="ltr">{formatDueDate(task.taskDate)}</span></small><div className="mobile-task-bottom"><span className={`pill status-${task.status}`}>{statusLabel[task.status]}</span><span>{logged.toFixed(2)}/{task.plannedHours}h</span></div></button>; })}</div>
-      {props.tab === "overview" && props.filteredCount > 7 && <button className="text-button" onClick={props.showAll}>عرض جميع المهام ←</button>}</>}
+      {props.tab === "overview" && props.filteredCount > 7 && <button className="text-button" onClick={props.showAll}><ButtonLabel en="View all tasks →" ar="عرض جميع المهام" /></button>}</>}
   </section>;
 }
 
@@ -1133,13 +1273,13 @@ function TaskDrawer({ selectedId, form, setOpen, saveTask, deleteTask, saving, c
   return <div className="drawer-layer" role="dialog" aria-modal="true" aria-label="تفاصيل المهمة">
     <button className="drawer-backdrop" onClick={() => setOpen(false)} aria-label="إغلاق" />
     <aside className="task-drawer">
-      <div className="drawer-head"><div><p>{selectedId ? `TASK #${selectedId}` : form.visibility === "private" ? "NEW PRIVATE TASK" : "NEW TASK"}</p><h2>{selectedId ? "تفاصيل وتحديث المهمة" : form.visibility === "private" ? "إضافة مهمة خاصة" : "إضافة مهمة جديدة"}</h2>{form.visibility === "private" && <span className="drawer-private-label">خاص · Private</span>}</div><button className="close-button" onClick={() => setOpen(false)} aria-label="إغلاق">×</button></div>
+      <div className="drawer-head"><div><p>{selectedId ? `TASK #${selectedId}` : form.visibility === "private" ? "NEW PRIVATE TASK" : "NEW TASK"}</p><h2>{selectedId ? "Task Details & Update" : form.visibility === "private" ? "New Private Task" : "New Task"}</h2>{form.visibility === "private" && <span className="drawer-private-label">Private · خاص</span>}</div><button className="close-button" onClick={() => setOpen(false)} aria-label="Close">×</button></div>
       <form onSubmit={saveTask} className="task-form">
         <div className="form-section"><h3>معلومات المهمة <span>Task Information</span></h3><label className="wide"><span>اسم المهمة · Task</span><input required disabled={!canEditDetails} value={form.title} onChange={(event) => updateForm("title", event.target.value)} placeholder="مثال: تدقيق موديل المنطقة 02" /></label><label className="wide"><span>المخرج المتوقع · Expected Output</span><textarea disabled={!canEditDetails} value={form.expectedOutput} onChange={(event) => updateForm("expectedOutput", event.target.value)} rows={3} placeholder="ما المطلوب تسليمه عند اكتمال المهمة؟" /></label><div className="form-grid"><label><span>المشروع · Project</span><select required disabled={!canEditDetails} value={form.project} onChange={(event) => { const code = event.target.value; updateForm("project", code); const project = projects.find((item) => item.code === code); if (management && !project?.memberEmails.includes(form.employeeEmail)) { updateForm("employeeEmail", ""); updateForm("employeeName", ""); } }}><option value="">اختر المشروع</option>{projectOptions.map((project) => <option key={project}>{project}</option>)}</select></label><label><span>تاريخ الإنشاء · Created Date</span><input className="due-date" dir="ltr" disabled value={selectedId ? formatCreatedDate(task?.createdAt || "") : "Automatic on save"} /></label><label><span>تاريخ الإنجاز المتوقع · Due Date</span><input type="date" lang="en-GB" disabled={!canEditDetails} value={form.taskDate} onChange={(event) => updateForm("taskDate", event.target.value)} /></label><label><span>الأولوية · Priority</span><select disabled={!canEditDetails} value={form.priority} onChange={(event) => updateForm("priority", event.target.value as Task["priority"])}>{Object.entries(priorityLabel).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></label><label><span>الحالة · Status</span><select disabled value={form.status}>{Object.entries(statusLabel).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></label></div></div>
         <div className="form-section"><h3>الموظف والوقت <span>Assignment & Time</span></h3><div className="form-grid"><label><span>الموظف · Employee</span><select disabled={!management} required value={form.employeeEmail} onChange={(event) => { const user = users.find((item) => item.email === event.target.value); updateForm("employeeEmail", event.target.value); if (user) updateForm("employeeName", user.displayName); }}><option value="">{form.project ? "اختر موظفًا من فريق المشروع" : "اختر المشروع أولاً"}</option>{assignmentOptions.map((user) => <option key={user.email} value={user.email}>{user.displayName}{user.discipline ? ` · ${user.discipline}` : ""}</option>)}</select></label><label><span>البريد · Email</span><input disabled value={form.employeeEmail} placeholder="يُعبأ تلقائيًا" /></label><label><span>ساعات مخططة · Planned</span><input type="number" disabled={!canEditDetails} min="0" step="0.25" value={form.plannedHours} onChange={(event) => updateForm("plannedHours", Number(event.target.value))} /></label><label><span>الساعات المسجلة · Logged</span><input disabled value={formatDuration(loggedSeconds)} /></label></div></div>
-        {selectedId && currentUser?.role === "member" && task?.employeeEmail === currentUser.email && <div className="form-section timer-section"><div className="timer-head"><div><h3>تسجيل وقت العمل <span>Work Timer</span></h3><p>يمكنك إيقاف المهمة للبريك أو عند الانتقال لمهمة أخرى، ثم استئنافها في أي يوم لاحق.</p></div><strong className={activeEntry ? "running" : ""} dir="ltr">{formatDuration(loggedSeconds)}</strong></div><div className="timer-actions">{activeEntry ? <button type="button" className="pause-task-button" onClick={() => updateTimer("pause")} disabled={savingTimer}>Ⅱ إيقاف مؤقت · Pause</button> : <button type="button" className="start-task-button" onClick={() => updateTimer("start")} disabled={savingTimer || task.managerCheck === "approved"}>▶ ابدأ/استأنف · Start</button>}{task.status !== "done" && <button type="button" className="finish-task-button" onClick={() => updateTimer("finish")} disabled={savingTimer}>✓ إنهاء وإرسال للمراجعة</button>}</div>{task.managerCheck === "approved" && <div className="timer-lock-note">المهمة معتمدة. يجب على المسؤول إعادة فتح المراجعة قبل استئناف العمل.</div>}</div>}
+        {selectedId && currentUser?.role === "member" && task?.employeeEmail === currentUser.email && <div className="form-section timer-section"><div className="timer-head"><div><h3>تسجيل وقت العمل <span>Work Timer</span></h3><p>يمكنك إيقاف المهمة للبريك أو عند الانتقال لمهمة أخرى، ثم استئنافها في أي يوم لاحق.</p></div><strong className={activeEntry ? "running" : ""} dir="ltr">{formatDuration(loggedSeconds)}</strong></div><div className="timer-actions">{activeEntry ? <button type="button" className="pause-task-button" onClick={() => updateTimer("pause")} disabled={savingTimer}><ButtonLabel en="Ⅱ Pause" ar="إيقاف مؤقت" /></button> : <button type="button" className="start-task-button" onClick={() => updateTimer("start")} disabled={savingTimer || task.managerCheck === "approved"}><ButtonLabel en="▶ Start / Resume" ar="ابدأ / استأنف" /></button>}{task.status !== "done" && <button type="button" className="finish-task-button" onClick={() => updateTimer("finish")} disabled={savingTimer}><ButtonLabel en="✓ Finish & Submit" ar="إنهاء وإرسال للمراجعة" /></button>}</div>{task.managerCheck === "approved" && <div className="timer-lock-note">المهمة معتمدة. يجب على المسؤول إعادة فتح المراجعة قبل استئناف العمل.</div>}</div>}
         {selectedId && timeEntries.length > 0 && <div className="form-section time-history"><div className="comments-heading"><h3>سجل جلسات العمل <span>Work Sessions</span></h3><span>{timeEntries.length}</span></div><div className="time-entry-list">{[...timeEntries].reverse().map((entry) => <article key={entry.id} className={entry.endedAt ? "" : "active"}><div><strong>{formatDateTime(entry.startedAt)}</strong><span>Start</span></div><b>→</b><div><strong>{entry.endedAt ? formatDateTime(entry.endedAt) : "Running now"}</strong><span>{formatDuration(entrySeconds(entry, clock))}</span></div></article>)}</div></div>}
-        {selectedId && currentUser?.role === "member" && task?.visibility === "private" && task.createdBy === currentUser.email && <div className="form-section private-share-section"><h3>مشاركة المهمة <span>Private Task Sharing</span></h3>{task.submittedToManager ? <div className="private-shared-note">تم إرسال المهمة إلى المسؤول، ويمكنه الآن مراجعتها أو تفويضها لموظف آخر.</div> : <><p>تبقى هذه المهمة ظاهرة لك فقط حتى تختار إرسالها للمسؤول.</p><button type="button" className="share-task-button" onClick={submitPrivateTask} disabled={saving}>إرسال وإشعار المسؤول · Send to Manager</button></>}</div>}
+        {selectedId && currentUser?.role === "member" && task?.visibility === "private" && task.createdBy === currentUser.email && <div className="form-section private-share-section"><h3>مشاركة المهمة <span>Private Task Sharing</span></h3>{task.submittedToManager ? <div className="private-shared-note">تم إرسال المهمة إلى المسؤول، ويمكنه الآن مراجعتها أو تفويضها لموظف آخر.</div> : <><p>تبقى هذه المهمة ظاهرة لك فقط حتى تختار إرسالها للمسؤول.</p><button type="button" className="share-task-button" onClick={submitPrivateTask} disabled={saving}><ButtonLabel en="Send to Manager" ar="إرسال وإشعار المسؤول" /></button></>}</div>}
         {management && <div className="form-section manager-section"><h3>مراجعة المسؤول <span>Manager Review</span></h3><div className="review-choice">{(["new", "pending", "approved", "returned"] as const).map((value) => <button type="button" key={value} className={form.managerCheck === value ? `selected ${value}` : value} onClick={() => updateForm("managerCheck", value)}>{checkLabel[value]}</button>)}</div></div>}
         {selectedId && <div className="form-section comments-section">
           <div className="comments-heading"><h3>سجل الملاحظات <span>Activity Notes</span></h3><span>{comments.length}</span></div>
@@ -1150,24 +1290,68 @@ function TaskDrawer({ selectedId, form, setOpen, saveTask, deleteTask, saving, c
               <div className="comment-content"><div className="comment-meta"><strong>{comment.authorName}</strong><span className="comment-role">{author?.role === "owner" ? "Owner" : author?.role === "manager" ? "Manager" : author?.discipline || "Team member"}</span><time dir="ltr">{formatDateTime(comment.createdAt)}</time></div><p>{comment.body}</p></div>
             </article>;
           })}</div>}
-          <div className="comment-composer"><label className="wide"><span>أضف ملاحظة · Add a note</span><textarea maxLength={2000} rows={3} value={commentDraft} onChange={(event) => setCommentDraft(event.target.value)} placeholder="اكتب تحديثًا أو ملاحظة مرتبطة بهذه المهمة..." /></label><div><small>{commentDraft.length}/2000</small><button type="button" className="comment-button" onClick={addComment} disabled={savingComment || !commentDraft.trim()}>{savingComment ? "جاري الإضافة..." : "إضافة الملاحظة · Post note"}</button></div></div>
+          <div className="comment-composer"><label className="wide"><span>Add a note · أضف ملاحظة</span><textarea maxLength={2000} rows={3} value={commentDraft} onChange={(event) => setCommentDraft(event.target.value)} placeholder="اكتب تحديثًا أو ملاحظة مرتبطة بهذه المهمة..." /></label><div><small>{commentDraft.length}/2000</small><button type="button" className="comment-button" onClick={addComment} disabled={savingComment || !commentDraft.trim()}><ButtonLabel en={savingComment ? "Posting..." : "Post note"} ar={savingComment ? "جاري الإضافة..." : "إضافة الملاحظة"} /></button></div></div>
         </div>}
-        <div className="drawer-actions">{selectedId && management && <button type="button" className="delete-button" onClick={deleteTask} disabled={saving}>حذف</button>}<button type="button" className="secondary-button" onClick={() => setOpen(false)}>إغلاق</button>{canEditDetails && <button type="submit" className="primary-button" disabled={saving}>{saving ? "جاري الحفظ..." : selectedId ? "حفظ التعديلات" : "إضافة المهمة"}</button>}</div>
+        <div className="drawer-actions">{selectedId && management && <button type="button" className="delete-button" onClick={deleteTask} disabled={saving}><ButtonLabel en="Delete Task" ar="حذف المهمة" /></button>}<button type="button" className="secondary-button" onClick={() => setOpen(false)}><ButtonLabel en="Close" ar="إغلاق" /></button>{canEditDetails && <button type="submit" className="primary-button" disabled={saving}><ButtonLabel en={saving ? "Saving..." : selectedId ? "Save Changes" : "Create Task"} ar={saving ? "جاري الحفظ..." : selectedId ? "حفظ التعديلات" : "إنشاء مهمة"} /></button>}</div>
       </form>
     </aside>
   </div>;
 }
 
-function ProjectDrawer({ selectedId, form, setForm, setOpen, saveProject, saving, users }: { selectedId: number | null; form: ProjectForm; setForm: (value: ProjectForm) => void; setOpen: (value: boolean) => void; saveProject: (event: FormEvent) => void; saving: boolean; users: User[]; }) {
-  const toggleMember = (email: string) => setForm({ ...form, memberEmails: form.memberEmails.includes(email) ? form.memberEmails.filter((item) => item !== email) : [...form.memberEmails, email] });
+type ProjectDrawerProps = {
+  selectedId: number | null;
+  form: ProjectForm;
+  setForm: (value: ProjectForm) => void;
+  setOpen: (value: boolean) => void;
+  saveProject: (event: FormEvent) => void;
+  saving: boolean;
+  users: User[];
+  tasks: Task[];
+  projectCode: string;
+  onResolveMemberTasks: (user: User, projectCode: string) => void;
+};
+
+function ProjectDrawer({ selectedId, form, setForm, setOpen, saveProject, saving, users, tasks, projectCode, onResolveMemberTasks }: ProjectDrawerProps) {
+  const [removalWarning, setRemovalWarning] = useState<{ user: User; taskCount: number } | null>(null);
   const teamMembers = users.filter((user) => user.role === "member");
-  return <div className="drawer-layer" role="dialog" aria-modal="true" aria-label="بيانات المشروع"><button className="drawer-backdrop" onClick={() => setOpen(false)} aria-label="إغلاق" /><aside className="task-drawer compact-drawer"><div className="drawer-head"><div><p>PROJECT</p><h2>{selectedId ? "تحديث بيانات المشروع" : "إضافة مشروع جديد"}</h2></div><button className="close-button" onClick={() => setOpen(false)}>×</button></div><form onSubmit={saveProject} className="task-form"><div className="form-section"><h3>معلومات المشروع <span>Project Information</span></h3><div className="form-grid"><label><span>كود المشروع · Code</span><input required value={form.code} onChange={(event) => setForm({ ...form, code: event.target.value.toUpperCase() })} placeholder="مثال: DH2" /></label><label><span>الحالة · Status</span><select value={form.status} onChange={(event) => setForm({ ...form, status: event.target.value as Project["status"] })}>{Object.entries(projectStatusLabel).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label></div><label className="wide"><span>اسم المشروع · Project Name</span><input required value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} placeholder="اسم المشروع الكامل" /></label><label className="wide"><span>العميل · Client</span><input value={form.client} onChange={(event) => setForm({ ...form, client: event.target.value })} placeholder="اسم العميل" /></label><div className="form-grid"><label><span>تاريخ البداية · Start</span><input type="date" value={form.startDate} onChange={(event) => setForm({ ...form, startDate: event.target.value })} /></label><label><span>التسليم المستهدف · Target</span><input type="date" value={form.targetDate} onChange={(event) => setForm({ ...form, targetDate: event.target.value })} /></label></div></div><div className="form-section"><div className="comments-heading"><h3>فريق المشروع <span>Project Team</span></h3><span>{form.memberEmails.length}</span></div>{teamMembers.length === 0 ? <div className="comments-empty">أضف الموظفين أولاً من بوابة الفريق.</div> : <div className="member-picker">{teamMembers.map((user) => <label key={user.email} className={form.memberEmails.includes(user.email) ? "selected" : ""}><input type="checkbox" checked={form.memberEmails.includes(user.email)} onChange={() => toggleMember(user.email)} /><span className="avatar small">{initials(user.displayName)}</span><span><strong>{user.displayName}</strong><small>{user.discipline || "Team member"}</small></span></label>)}</div>}</div><div className="drawer-actions"><button type="button" className="secondary-button" onClick={() => setOpen(false)}>إلغاء</button><button type="submit" className="primary-button" disabled={saving}>{saving ? "جاري الحفظ..." : selectedId ? "حفظ التعديلات" : "إضافة المشروع"}</button></div></form></aside></div>;
+
+  const toggleMember = (user: User) => {
+    const isRemoving = form.memberEmails.includes(user.email);
+    if (isRemoving && selectedId) {
+      const taskCount = tasks.filter((task) => task.project === projectCode && task.employeeEmail === user.email).length;
+      if (taskCount > 0) {
+        setRemovalWarning({ user, taskCount });
+        return;
+      }
+    }
+    setRemovalWarning(null);
+    setForm({
+      ...form,
+      memberEmails: isRemoving
+        ? form.memberEmails.filter((item) => item !== user.email)
+        : [...form.memberEmails, user.email],
+    });
+  };
+
+  return <div className="drawer-layer" role="dialog" aria-modal="true" aria-label="بيانات المشروع">
+    <button className="drawer-backdrop" onClick={() => setOpen(false)} aria-label="إغلاق" />
+    <aside className="task-drawer compact-drawer">
+      <div className="drawer-head"><div><p>PROJECT</p><h2>{selectedId ? "تحديث بيانات المشروع" : "إضافة مشروع جديد"}</h2></div><button className="close-button" onClick={() => setOpen(false)}>×</button></div>
+      <form onSubmit={saveProject} className="task-form">
+        <div className="form-section"><h3>معلومات المشروع <span>Project Information</span></h3><div className="form-grid"><label><span>كود المشروع · Code</span><input required value={form.code} onChange={(event) => setForm({ ...form, code: event.target.value.toUpperCase() })} placeholder="مثال: DH2" /></label><label><span>الحالة · Status</span><select value={form.status} onChange={(event) => setForm({ ...form, status: event.target.value as Project["status"] })}>{Object.entries(projectStatusLabel).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label></div><label className="wide"><span>اسم المشروع · Project Name</span><input required value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} placeholder="اسم المشروع الكامل" /></label><label className="wide"><span>العميل · Client</span><input value={form.client} onChange={(event) => setForm({ ...form, client: event.target.value })} placeholder="اسم العميل" /></label><div className="form-grid"><label><span>تاريخ البداية · Start</span><input type="date" value={form.startDate} onChange={(event) => setForm({ ...form, startDate: event.target.value })} /></label><label><span>التسليم المستهدف · Target</span><input type="date" value={form.targetDate} onChange={(event) => setForm({ ...form, targetDate: event.target.value })} /></label></div></div>
+        <div className="form-section"><div className="comments-heading"><h3>فريق المشروع <span>Project Team</span></h3><span>{form.memberEmails.length}</span></div>{teamMembers.length === 0 ? <div className="comments-empty">أضف الموظفين أولاً من بوابة الفريق.</div> : <div className="member-picker">{teamMembers.map((user) => <label key={user.email} className={form.memberEmails.includes(user.email) ? "selected" : ""}><input type="checkbox" checked={form.memberEmails.includes(user.email)} onChange={() => toggleMember(user)} /><span className="avatar small">{initials(user.displayName)}</span><span><strong>{user.displayName}</strong><small>{user.discipline || "Team member"}</small></span></label>)}</div>}
+          {removalWarning && <div className="member-removal-warning" role="alert"><strong>Employee cannot be removed yet · لا يمكن إزالة هذا الموظف الآن</strong><p>لدى {removalWarning.user.displayName} عدد {removalWarning.taskCount} من المهام على مشروع {projectCode}. يجب تغيير الموظف المسؤول إلى موظف آخر لديه صلاحية على المشروع قبل الإزالة.</p><small>{removalWarning.user.displayName} has {removalWarning.taskCount} assigned task(s) on this project. Reassign them to another authorized project member first.</small><button type="button" onClick={() => onResolveMemberTasks(removalWarning.user, projectCode)}><ButtonLabel en="Open filtered tasks" ar="الذهاب إلى المهام وتغيير الموظف" /></button><em>إذا لم يوجد بديل، أضف موظفًا آخر إلى المشروع واحفظه أولًا. · If no replacement is available, add another member and save the project first.</em></div>}
+        </div>
+        <div className="drawer-actions"><button type="button" className="secondary-button" onClick={() => setOpen(false)}><ButtonLabel en="Cancel" ar="إلغاء" /></button><button type="submit" className="primary-button" disabled={saving}><ButtonLabel en={saving ? "Saving..." : selectedId ? "Save Changes" : "Add Project"} ar={saving ? "جاري الحفظ..." : selectedId ? "حفظ التعديلات" : "إضافة المشروع"} /></button></div>
+      </form>
+    </aside>
+  </div>;
 }
 
 function UserDrawer({ selectedEmail, form, setForm, setOpen, saveUser, deleteUser, saving, currentUser }: { selectedEmail: string | null; form: UserForm; setForm: (value: UserForm) => void; setOpen: (value: boolean) => void; saveUser: (event: FormEvent) => void; deleteUser: () => void; saving: boolean; currentUser: User | null; }) {
   const managerLimited = currentUser?.role === "manager";
   const disciplineOptions = managerLimited && currentUser?.discipline ? [currentUser.discipline] : disciplines;
-  return <div className="drawer-layer" role="dialog" aria-modal="true" aria-label="بيانات الموظف"><button className="drawer-backdrop" onClick={() => setOpen(false)} aria-label="إغلاق" /><aside className="task-drawer compact-drawer"><div className="drawer-head"><div><p>TEAM MEMBER</p><h2>{selectedEmail ? "تحديث بيانات الموظف" : "إضافة حساب موظف"}</h2></div><button className="close-button" onClick={() => setOpen(false)}>×</button></div><form onSubmit={saveUser} className="task-form"><div className="form-section"><h3>بيانات الموظف <span>Employee Information</span></h3><label className="wide"><span>الاسم · Name</span><input required value={form.displayName} onChange={(event) => setForm({ ...form, displayName: event.target.value })} placeholder="اسم الموظف" /></label><label className="wide"><span>التخصص · Discipline</span><select required disabled={managerLimited} value={form.discipline} onChange={(event) => setForm({ ...form, discipline: event.target.value as Discipline })}><option value="" disabled>اختر التخصص</option>{disciplineOptions.map((item) => <option value={item} key={item}>{item}</option>)}</select></label><label className="wide"><span>البريد · Email</span><input required type="email" disabled={Boolean(selectedEmail)} value={form.email} onChange={(event) => setForm({ ...form, email: event.target.value })} placeholder="name@eng-bim.com" /></label><label className="wide"><span>{selectedEmail ? "كلمة مرور جديدة · New Password" : "كلمة مرور مؤقتة · Temporary Password"}</span><input required={!selectedEmail} minLength={10} type="password" value={form.temporaryPassword} onChange={(event) => setForm({ ...form, temporaryPassword: event.target.value })} placeholder={selectedEmail ? "اتركها فارغة دون تغيير" : "10 أحرف على الأقل"} autoComplete="new-password" /></label><label className="wide"><span>الصلاحية داخل النظام · Role</span><select disabled={managerLimited} value={form.role} onChange={(event) => setForm({ ...form, role: event.target.value as User["role"] })}><option value="member">Member · موظف</option>{!managerLimited && <option value="manager">Manager · مسؤول</option>}{currentUser?.role === "owner" && <option value="owner">Owner · المالك</option>}</select></label>{managerLimited && <div className="temporary-note">يمكنك إضافة وإدارة موظفين من تخصصك فقط: {currentUser?.discipline || "غير محدد"}.</div>}{form.role === "owner" && <div className="owner-warning">المالك لديه أعلى صلاحيات النظام، بما فيها إضافة ملاك آخرين واستعادة النسخ الاحتياطية.</div>}<div className="temporary-note">أرسل للمستخدم كلمة المرور المؤقتة بطريقة آمنة. يستطيع تغييرها من حسابه بعد تسجيل الدخول.</div></div><div className="drawer-actions">{selectedEmail && selectedEmail !== currentUser?.email && <button type="button" className="delete-button" onClick={deleteUser} disabled={saving}>حذف</button>}<button type="button" className="secondary-button" onClick={() => setOpen(false)}>إلغاء</button><button type="submit" className="primary-button" disabled={saving}>{saving ? "جاري الحفظ..." : selectedEmail ? "حفظ التعديلات" : "إضافة المستخدم"}</button></div></form></aside></div>;
+  return <div className="drawer-layer" role="dialog" aria-modal="true" aria-label="بيانات الموظف"><button className="drawer-backdrop" onClick={() => setOpen(false)} aria-label="إغلاق" /><aside className="task-drawer compact-drawer"><div className="drawer-head"><div><p>TEAM MEMBER</p><h2>{selectedEmail ? "تحديث بيانات الموظف" : "إضافة حساب موظف"}</h2></div><button className="close-button" onClick={() => setOpen(false)}>×</button></div><form onSubmit={saveUser} className="task-form"><div className="form-section"><h3>بيانات الموظف <span>Employee Information</span></h3><label className="wide"><span>الاسم · Name</span><input required value={form.displayName} onChange={(event) => setForm({ ...form, displayName: event.target.value })} placeholder="اسم الموظف" /></label><label className="wide"><span>التخصص · Discipline</span><select required disabled={managerLimited} value={form.discipline} onChange={(event) => setForm({ ...form, discipline: event.target.value as Discipline })}><option value="" disabled>اختر التخصص</option>{disciplineOptions.map((item) => <option value={item} key={item}>{item}</option>)}</select></label><label className="wide"><span>البريد · Email</span><input required type="email" disabled={Boolean(selectedEmail)} value={form.email} onChange={(event) => setForm({ ...form, email: event.target.value })} placeholder="name@eng-bim.com" /></label><label className="wide"><span>{selectedEmail ? "كلمة مرور جديدة · New Password" : "كلمة مرور مؤقتة · Temporary Password"}</span><input required={!selectedEmail} minLength={10} type="password" value={form.temporaryPassword} onChange={(event) => setForm({ ...form, temporaryPassword: event.target.value })} placeholder={selectedEmail ? "اتركها فارغة دون تغيير" : "10 أحرف على الأقل"} autoComplete="new-password" /></label><label className="wide"><span>الصلاحية داخل النظام · Role</span><select disabled={managerLimited} value={form.role} onChange={(event) => setForm({ ...form, role: event.target.value as User["role"] })}><option value="member">Member · موظف</option>{!managerLimited && <option value="manager">Manager · مسؤول</option>}{currentUser?.role === "owner" && <option value="owner">Owner · المالك</option>}</select></label>{managerLimited && <div className="temporary-note">يمكنك إضافة وإدارة موظفين من تخصصك فقط: {currentUser?.discipline || "غير محدد"}.</div>}{form.role === "owner" && <div className="owner-warning">المالك لديه أعلى صلاحيات النظام، بما فيها إضافة ملاك آخرين واستعادة النسخ الاحتياطية.</div>}<div className="temporary-note">أرسل للمستخدم كلمة المرور المؤقتة بطريقة آمنة. يستطيع تغييرها من حسابه بعد تسجيل الدخول.</div></div><div className="drawer-actions">{selectedEmail && selectedEmail !== currentUser?.email && <button type="button" className="delete-button" onClick={deleteUser} disabled={saving}><ButtonLabel en="Delete Employee" ar="حذف الموظف" /></button>}<button type="button" className="secondary-button" onClick={() => setOpen(false)}><ButtonLabel en="Cancel" ar="إلغاء" /></button><button type="submit" className="primary-button" disabled={saving}><ButtonLabel en={saving ? "Saving..." : selectedEmail ? "Save Changes" : "Add Employee"} ar={saving ? "جاري الحفظ..." : selectedEmail ? "حفظ التعديلات" : "إضافة المستخدم"} /></button></div></form></aside></div>;
 }
 
 function PasswordDrawer({ form, setForm, setOpen, changePassword, saving }: { form: PasswordForm; setForm: (value: PasswordForm) => void; setOpen: (value: boolean) => void; changePassword: (event: FormEvent) => void; saving: boolean; }) {
@@ -1182,7 +1366,7 @@ function PasswordDrawer({ form, setForm, setOpen, changePassword, saving }: { fo
           <label className="wide"><span>New password</span><input required minLength={10} type="password" value={form.newPassword} onChange={(event) => setForm({ ...form, newPassword: event.target.value })} autoComplete="new-password" /></label>
           <label className="wide"><span>Confirm new password</span><input required minLength={10} type="password" value={form.confirmPassword} onChange={(event) => setForm({ ...form, confirmPassword: event.target.value })} autoComplete="new-password" /></label>
         </div>
-        <div className="drawer-actions"><button type="button" className="secondary-button" onClick={() => setOpen(false)}>Cancel</button><button type="submit" className="primary-button" disabled={saving}>{saving ? "Updating…" : "Update password"}</button></div>
+        <div className="drawer-actions"><button type="button" className="secondary-button" onClick={() => setOpen(false)}><ButtonLabel en="Cancel" ar="إلغاء" /></button><button type="submit" className="primary-button" disabled={saving}><ButtonLabel en={saving ? "Updating…" : "Update password"} ar={saving ? "جاري التحديث…" : "تحديث كلمة المرور"} /></button></div>
       </form>
     </aside>
   </div>;

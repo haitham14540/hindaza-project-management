@@ -52,9 +52,7 @@ export async function POST(request: Request) {
     const db = await getDb();
     const requestedMembers = memberEmails(payload.memberEmails);
     const assignedMembers = await validMemberEmails(db, requestedMembers);
-    if (assignedMembers.length !== requestedMembers.length) {
-      return Response.json({ error: "One or more project members are invalid." }, { status: 400 });
-    }
+    if (assignedMembers.length !== requestedMembers.length) return Response.json({ error: "One or more project members are invalid." }, { status: 400 });
     const inserted = await db
       .insert(projects)
       .values({
@@ -99,6 +97,34 @@ export async function PATCH(request: Request) {
     const requestedMembers = memberEmails(payload.memberEmails);
     const assignedMembers = await validMemberEmails(db, requestedMembers);
     const removedInvalidMembers = requestedMembers.length - assignedMembers.length;
+    const currentMembershipRows = await db
+      .select({ employeeEmail: projectMembers.employeeEmail })
+      .from(projectMembers)
+      .where(eq(projectMembers.projectId, id));
+    const currentMembershipEmails = currentMembershipRows.map((row) => row.employeeEmail);
+    const currentValidMembers = await validMemberEmails(db, currentMembershipEmails);
+    const removedMembers = currentValidMembers.filter((email) => !assignedMembers.includes(email));
+    if (removedMembers.length) {
+      const assignedTaskRows = await db
+        .select({ employeeEmail: tasks.employeeEmail })
+        .from(tasks)
+        .where(and(eq(tasks.project, existing[0].code), inArray(tasks.employeeEmail, removedMembers)));
+      const taskCounts = assignedTaskRows.reduce<Record<string, number>>((counts, task) => {
+        counts[task.employeeEmail] = (counts[task.employeeEmail] || 0) + 1;
+        return counts;
+      }, {});
+      const blockedMembers = removedMembers
+        .filter((email) => taskCounts[email] > 0)
+        .map((email) => ({ email, taskCount: taskCounts[email] }));
+      if (blockedMembers.length) {
+        return Response.json({
+          code: "MEMBER_HAS_PROJECT_TASKS",
+          error: "لا يمكن إزالة موظف لديه مهام على هذا المشروع. غيّر الموظف المسؤول عن المهام أولًا. · Cannot remove a project member with assigned tasks. Reassign the tasks first.",
+          projectCode: existing[0].code,
+          blockedMembers,
+        }, { status: 409 });
+      }
+    }
     const updated = await db
       .update(projects)
       .set({

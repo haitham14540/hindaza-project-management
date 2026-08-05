@@ -2,6 +2,7 @@ import { and, eq, inArray, sql } from "drizzle-orm";
 import { getDb } from "@/db";
 import { notifications, projectMembers, projects, taskComments, taskTimeEntries, tasks, users } from "@/db/schema";
 import { getCurrentUser, isManagement, unauthorizedResponse } from "@/lib/auth";
+import { recordActivity } from "@/lib/activity";
 
 export const dynamic = "force-dynamic";
 
@@ -141,6 +142,8 @@ export async function POST(request: Request) {
       });
     }
 
+    await recordActivity(db, currentUser, { action: "created", entityType: "task", entityId: inserted[0].id, entityLabel: inserted[0].title, projectCode: inserted[0].project, details: `Assigned to ${inserted[0].employeeName}` });
+
     return Response.json({ task: inserted[0] }, { status: 201 });
   } catch (error) {
     const unauthorized = unauthorizedResponse(error);
@@ -189,6 +192,7 @@ export async function PATCH(request: Request) {
           message: `${existing[0].title} · ${currentUser.displayName}`,
         })));
       }
+      await recordActivity(db, currentUser, { action: "updated", entityType: "task", entityId: id, entityLabel: submitted[0].title, projectCode: submitted[0].project, details: "Private task submitted to management" });
       return Response.json({ task: submitted[0] });
     }
     const scopedManagement = isManagement(currentUser) && await managedEmployee(db, currentUser, existing[0].employeeEmail);
@@ -276,6 +280,9 @@ export async function PATCH(request: Request) {
       }
     }
 
+
+    await recordActivity(db, currentUser, { action: "updated", entityType: "task", entityId: id, entityLabel: updated[0].title, projectCode: updated[0].project, details: management ? `Manager review: ${updated[0].managerCheck}` : "Task details updated" });
+
     return Response.json({ task: updated[0] });
   } catch (error) {
     const unauthorized = unauthorizedResponse(error);
@@ -309,6 +316,7 @@ export async function DELETE(request: Request) {
     await db.delete(taskTimeEntries).where(eq(taskTimeEntries.taskId, id));
     await db.delete(notifications).where(eq(notifications.taskId, id));
     await db.delete(tasks).where(eq(tasks.id, id));
+    await recordActivity(db, currentUser, { action: "deleted", entityType: "task", entityId: id, entityLabel: existing[0].title, projectCode: existing[0].project, details: `Assigned to ${existing[0].employeeName}` });
     return Response.json({ ok: true });
   } catch (error) {
     const unauthorized = unauthorizedResponse(error);

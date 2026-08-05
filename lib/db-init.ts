@@ -3,6 +3,11 @@ import { getD1 } from "@/db";
 let initialization: Promise<unknown> | null = null;
 
 export async function ensureDatabase() {
+  // Hosted databases are provisioned and migrated during deployment. Running
+  // the full DDL batch from normal production requests creates write locks and
+  // can stall authenticated reads such as /api/bootstrap. Keep the fallback
+  // initializer for local development only.
+  if (process.env.NODE_ENV === "production") return true;
   const d1 = await getD1();
   if (!initialization) {
     initialization = (async () => {

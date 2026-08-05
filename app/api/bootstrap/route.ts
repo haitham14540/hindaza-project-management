@@ -101,19 +101,10 @@ export async function GET(request: Request) {
       await db.insert(tasks).values(sampleTasks(currentUser.email));
     }
 
-    const taskProjects = await db
-      .selectDistinct({ code: tasks.project })
-      .from(tasks)
-      .where(eq(tasks.visibility, "team"));
-    for (const item of taskProjects) {
-      if (!item.code) continue;
-      await db
-        .insert(projects)
-        .values({ code: item.code, name: item.code })
-        .onConflictDoNothing({ target: projects.code });
-    }
-
-    const [allTaskRows, userRows, allProjectRows, membershipRows, allCommentRows, allTimeRows, notificationRows] = await Promise.all([
+    // Keep bootstrap read-only and stay below the Worker's concurrent
+    // subrequest limit. Writing projects during every refresh caused D1
+    // requests to queue until the browser aborted them.
+    const [allTaskRows, userRows, allProjectRows, membershipRows] = await Promise.all([
       db
         .select()
         .from(tasks)
@@ -127,6 +118,8 @@ export async function GET(request: Request) {
       }).from(users).where(eq(users.active, true)).orderBy(asc(users.displayName)),
       db.select().from(projects).orderBy(asc(projects.code)),
       db.select().from(projectMembers),
+    ]);
+    const [allCommentRows, allTimeRows, notificationRows] = await Promise.all([
       db.select().from(taskComments).orderBy(asc(taskComments.createdAt), asc(taskComments.id)),
       db.select().from(taskTimeEntries).orderBy(asc(taskTimeEntries.startedAt), asc(taskTimeEntries.id)),
       db.select().from(notifications).where(eq(notifications.recipientEmail, currentUser.email)).orderBy(desc(notifications.createdAt), desc(notifications.id)),

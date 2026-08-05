@@ -64,6 +64,34 @@
       "when": 1785766979324,
       "tag": "0008_strange_harry_osborn",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "6",
+      "when": 1785921982313,
+      "tag": "0009_dear_silver_surfer",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "6",
+      "when": 1785930631059,
+      "tag": "0010_legal_iceman",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "6",
+      "when": 1785956724647,
+      "tag": "0011_brave_radioactive_man",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "6",
+      "when": 1785965083074,
+      "tag": "0012_oval_jubilee",
+      "breakpoints": true
     }
   ]
 }

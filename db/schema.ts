@@ -116,8 +116,9 @@ export const notifications = sqliteTable(
   {
     id: integer("id").primaryKey({ autoIncrement: true }),
     recipientEmail: text("recipient_email").notNull(),
-    type: text("type", { enum: ["task_assigned", "review_updated", "private_task_submitted", "task_ready_for_review"] }).notNull(),
+    type: text("type", { enum: ["task_assigned", "review_updated", "private_task_submitted", "task_ready_for_review", "issue_created", "issue_updated"] }).notNull(),
     taskId: integer("task_id"),
+    issueId: integer("issue_id"),
     title: text("title").notNull(),
     message: text("message").notNull(),
     read: integer("read", { mode: "boolean" }).notNull().default(false),
@@ -127,6 +128,27 @@ export const notifications = sqliteTable(
     index("notifications_recipient_idx").on(table.recipientEmail),
     index("notifications_recipient_read_idx").on(table.recipientEmail, table.read),
     index("notifications_created_idx").on(table.createdAt),
+  ],
+);
+
+export const activityLogs = sqliteTable(
+  "activity_logs",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    actorEmail: text("actor_email").notNull(),
+    actorName: text("actor_name").notNull(),
+    action: text("action", { enum: ["created", "updated", "deleted", "note_added", "timer_updated", "attachment_added", "attachment_deleted", "converted"] }).notNull(),
+    entityType: text("entity_type", { enum: ["task", "issue"] }).notNull(),
+    entityId: integer("entity_id"),
+    entityLabel: text("entity_label").notNull(),
+    projectCode: text("project_code").notNull().default(""),
+    details: text("details").notNull().default(""),
+    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  },
+  (table) => [
+    index("activity_logs_created_idx").on(table.createdAt),
+    index("activity_logs_entity_idx").on(table.entityType, table.entityId),
+    index("activity_logs_project_idx").on(table.projectCode),
   ],
 );
 
@@ -143,5 +165,69 @@ export const taskComments = sqliteTable(
   (table) => [
     index("task_comments_task_idx").on(table.taskId),
     index("task_comments_created_idx").on(table.createdAt),
+  ],
+);
+
+export const projectIssues = sqliteTable(
+  "project_issues",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    issueNumber: text("issue_number").notNull().unique(),
+    sequence: integer("sequence").notNull(),
+    projectCode: text("project_code").notNull(),
+    status: text("status", { enum: ["open", "re_open", "closed"] }).notNull().default("open"),
+    discipline: text("discipline", {
+      enum: ["Manager", "Architecture", "ID", "Structure", "Mechanical", "Electrical", "Infrastructure"],
+    }).notNull(),
+    description: text("description").notNull(),
+    category: text("category").notNull().default(""),
+    priority: text("priority", { enum: ["low", "medium", "high", "critical"] }).notNull().default("medium"),
+    assigneeEmail: text("assignee_email").notNull().default(""),
+    raisedByEmail: text("raised_by_email").notNull(),
+    raisedByName: text("raised_by_name").notNull(),
+    issueDate: text("issue_date").notNull(),
+    resolvedDate: text("resolved_date").notNull().default(""),
+    comments: text("comments").notNull().default(""),
+    clientReply: text("client_reply").notNull().default(""),
+    convertedTaskId: integer("converted_task_id"),
+    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+    updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  },
+  (table) => [
+    uniqueIndex("project_issues_group_sequence_idx").on(table.projectCode, table.discipline, table.sequence),
+    index("project_issues_project_idx").on(table.projectCode),
+    index("project_issues_status_idx").on(table.status),
+    index("project_issues_assignee_idx").on(table.assigneeEmail),
+    index("project_issues_created_idx").on(table.createdAt),
+  ],
+);
+
+export const issueCategories = sqliteTable(
+  "issue_categories",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    name: text("name").notNull().unique(),
+    createdBy: text("created_by").notNull(),
+    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  },
+  (table) => [index("issue_categories_name_idx").on(table.name)],
+);
+
+export const issueAttachments = sqliteTable(
+  "issue_attachments",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    issueId: integer("issue_id").notNull(),
+    objectKey: text("object_key").notNull().unique(),
+    fileName: text("file_name").notNull(),
+    contentType: text("content_type").notNull(),
+    sizeBytes: integer("size_bytes").notNull(),
+    uploadedBy: text("uploaded_by").notNull(),
+    source: text("source", { enum: ["internal", "client"] }).notNull().default("internal"),
+    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  },
+  (table) => [
+    index("issue_attachments_issue_idx").on(table.issueId),
+    index("issue_attachments_created_idx").on(table.createdAt),
   ],
 );

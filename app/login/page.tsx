@@ -4,6 +4,7 @@
 import { FormEvent, useEffect, useState } from "react";
 
 const disciplines = ["Manager", "Architecture", "ID", "Structure", "Mechanical", "Electrical", "Infrastructure"];
+function ButtonLabel({ en, ar }: { en: string; ar: string }) { return <span className="button-label"><strong>{en}</strong><small dir="rtl">{ar}</small></span>; }
 
 export default function LoginPage() {
   const [checking, setChecking] = useState(true);
@@ -66,9 +67,9 @@ export default function LoginPage() {
             {setup && <label><span>Discipline</span><select required value={form.discipline} onChange={(event) => setForm({ ...form, discipline: event.target.value })}><option value="" disabled>Select discipline</option>{disciplines.map((item) => <option key={item}>{item}</option>)}</select></label>}
             <label><span>{recovery ? "New password" : "Password"}</span><input required minLength={setup || recovery ? 10 : undefined} type="password" value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} autoComplete={setup || recovery ? "new-password" : "current-password"} placeholder={setup || recovery ? "At least 10 characters" : "Enter your password"} /></label>
             {error && <div className="login-error" role="alert">{error}</div>}
-            <button className="login-submit" disabled={saving}>{saving ? "Please wait…" : setup ? "Create owner account" : recovery ? "Set new password" : "Sign in"}<span>→</span></button>
+            <button className="login-submit" disabled={saving}><ButtonLabel en={saving ? "Please wait…" : setup ? "Create owner account" : recovery ? "Set new password" : "Sign in"} ar={saving ? "يرجى الانتظار…" : setup ? "إنشاء حساب المالك" : recovery ? "تعيين كلمة مرور جديدة" : "تسجيل الدخول"} /><span className="login-arrow">→</span></button>
             {!setup && <button type="button" className="login-mode-link" onClick={() => { setRecovery(!recovery); setError(""); setForm({ ...form, setupKey: "", password: "" }); }}>
-              {recovery ? "← Back to sign in" : "Recover owner access"}
+              <ButtonLabel en={recovery ? "← Back to sign in" : "Recover owner access"} ar={recovery ? "العودة لتسجيل الدخول" : "استعادة وصول المالك"} />
             </button>}
           </>}
         </form>
