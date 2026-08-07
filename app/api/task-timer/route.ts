@@ -1,6 +1,6 @@
 import { and, asc, eq, inArray, isNull } from "drizzle-orm";
 import { getDb } from "@/db";
-import { notifications, taskTimeEntries, tasks, users } from "@/db/schema";
+import { notifications, projectMembers, projects, taskTimeEntries, tasks, users } from "@/db/schema";
 import { getCurrentUser, unauthorizedResponse } from "@/lib/auth";
 import { recordActivity } from "@/lib/activity";
 
@@ -8,6 +8,25 @@ export const dynamic = "force-dynamic";
 
 type Database = Awaited<ReturnType<typeof getDb>>;
 type TimerAction = "start" | "pause" | "finish";
+
+async function canAuditTask(db: Database, currentUser: Awaited<ReturnType<typeof getCurrentUser>>, task: typeof tasks.$inferSelect) {
+  if (currentUser.role === "owner") return true;
+  if (currentUser.role !== "manager" || !currentUser.discipline) return false;
+  const [employee] = await db.select({ discipline: users.discipline }).from(users).where(eq(users.email, task.employeeEmail)).limit(1);
+  if (employee?.discipline !== currentUser.discipline) return false;
+  const [membership] = await db.select({ id: projectMembers.id })
+    .from(projectMembers)
+    .innerJoin(projects, eq(projectMembers.projectId, projects.id))
+    .where(and(eq(projects.code, task.project), eq(projectMembers.employeeEmail, currentUser.email)))
+    .limit(1);
+  return Boolean(membership);
+}
+
+function validDate(value: unknown) {
+  if (typeof value !== "string" || !value.trim()) return "";
+  const date = new Date(value);
+  return Number.isFinite(date.getTime()) ? date.toISOString() : "";
+}
 
 function durationSeconds(startedAt: string, endedAt: string) {
   const seconds = Math.floor((new Date(endedAt).getTime() - new Date(startedAt).getTime()) / 1000);
@@ -171,5 +190,65 @@ export async function POST(request: Request) {
       { error: error instanceof Error ? error.message : "Unable to update task timer." },
       { status: 500 },
     );
+  }
+}
+
+export async function PATCH(request: Request) {
+  try {
+    const currentUser = await getCurrentUser(request);
+    const payload = (await request.json()) as Record<string, unknown>;
+    const entryId = Number(payload.entryId);
+    const startedAt = validDate(payload.startedAt);
+    const endedAt = validDate(payload.endedAt);
+    if (!Number.isInteger(entryId) || !startedAt || !endedAt || new Date(endedAt) <= new Date(startedAt)) {
+      return Response.json({ error: "Enter a valid session start and end time." }, { status: 400 });
+    }
+    const db = await getDb();
+    const [entry] = await db.select().from(taskTimeEntries).where(eq(taskTimeEntries.id, entryId)).limit(1);
+    if (!entry) return Response.json({ error: "Work session not found." }, { status: 404 });
+    if (!entry.endedAt) return Response.json({ error: "Pause the active session before editing it." }, { status: 409 });
+    const [task] = await db.select().from(tasks).where(eq(tasks.id, entry.taskId)).limit(1);
+    if (!task) return Response.json({ error: "Task not found." }, { status: 404 });
+    if (task.managerCheck === "new" && !task.submittedToManager) {
+      return Response.json({ error: "Work sessions can be audited after the task is submitted for review." }, { status: 409 });
+    }
+    if (!(await canAuditTask(db, currentUser, task))) return Response.json({ error: "Management access required for this work session." }, { status: 403 });
+    await db.update(taskTimeEntries).set({ startedAt, endedAt, durationSeconds: durationSeconds(startedAt, endedAt) }).where(eq(taskTimeEntries.id, entryId));
+    const updatedTask = await refreshTaskTime(db, task.id);
+    const entries = await db.select().from(taskTimeEntries).where(eq(taskTimeEntries.taskId, task.id)).orderBy(asc(taskTimeEntries.startedAt), asc(taskTimeEntries.id));
+    await recordActivity(db, currentUser, { action: "timer_updated", entityType: "task", entityId: task.id, entityLabel: task.title, projectCode: task.project, details: `Work session ${entryId} corrected during review` });
+    return Response.json({ tasks: [updatedTask], timeEntries: entries });
+  } catch (error) {
+    const unauthorized = unauthorizedResponse(error);
+    if (unauthorized) return unauthorized;
+    return Response.json({ error: error instanceof Error ? error.message : "Unable to edit work session." }, { status: 500 });
+  }
+}
+
+export async function DELETE(request: Request) {
+  try {
+    const currentUser = await getCurrentUser(request);
+    const url = new URL(request.url);
+    const entryId = Number(url.searchParams.get("entryId"));
+    if (!Number.isInteger(entryId)) return Response.json({ error: "Invalid work session id." }, { status: 400 });
+    const db = await getDb();
+    const [entry] = await db.select().from(taskTimeEntries).where(eq(taskTimeEntries.id, entryId)).limit(1);
+    if (!entry) return Response.json({ error: "Work session not found." }, { status: 404 });
+    if (!entry.endedAt) return Response.json({ error: "Pause the active session before deleting it." }, { status: 409 });
+    const [task] = await db.select().from(tasks).where(eq(tasks.id, entry.taskId)).limit(1);
+    if (!task) return Response.json({ error: "Task not found." }, { status: 404 });
+    if (task.managerCheck === "new" && !task.submittedToManager) {
+      return Response.json({ error: "Work sessions can be audited after the task is submitted for review." }, { status: 409 });
+    }
+    if (!(await canAuditTask(db, currentUser, task))) return Response.json({ error: "Management access required for this work session." }, { status: 403 });
+    await db.delete(taskTimeEntries).where(eq(taskTimeEntries.id, entryId));
+    const updatedTask = await refreshTaskTime(db, task.id);
+    const entries = await db.select().from(taskTimeEntries).where(eq(taskTimeEntries.taskId, task.id)).orderBy(asc(taskTimeEntries.startedAt), asc(taskTimeEntries.id));
+    await recordActivity(db, currentUser, { action: "timer_updated", entityType: "task", entityId: task.id, entityLabel: task.title, projectCode: task.project, details: `Work session ${entryId} deleted during review` });
+    return Response.json({ tasks: [updatedTask], timeEntries: entries });
+  } catch (error) {
+    const unauthorized = unauthorizedResponse(error);
+    if (unauthorized) return unauthorized;
+    return Response.json({ error: error instanceof Error ? error.message : "Unable to delete work session." }, { status: 500 });
   }
 }

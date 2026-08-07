@@ -2,6 +2,7 @@
 "use client";
 
 import { ChangeEvent, FormEvent, forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
+import { useAppConfirm } from "./confirm-dialog";
 
 export type IssueDiscipline = "Architecture" | "ID" | "Structure" | "Mechanical" | "Electrical" | "Infrastructure";
 export type IssueUser = { email: string; displayName: string; role: "owner" | "manager" | "member"; discipline: IssueDiscipline | "Manager" | "" };
@@ -37,6 +38,8 @@ const disciplineCode: Record<IssueDiscipline, string> = { Architecture: "ARC", I
 const disciplineLabel: Record<IssueDiscipline, string> = { Architecture: "Architecture (ARC)", ID: "Interior Design (ID)", Structure: "Structure (STR)", Mechanical: "Mechanical (MECH)", Electrical: "Electrical (ELEC)", Infrastructure: "Infrastructure (INF)" };
 const statusLabel = { open: "Open · مفتوحة", re_open: "Re-Open · أعيد فتحها", closed: "Closed · مغلقة" } as const;
 const priorityLabel = { low: "Low · منخفضة", medium: "Medium · متوسطة", high: "High · عالية", critical: "Critical · حرجة" } as const;
+const MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024;
+const MAX_ATTACHMENTS_PER_SECTION = 10;
 
 function today() {
   const value = new Date();
@@ -55,16 +58,93 @@ function dateLabel(value: string) {
 }
 function bytesLabel(value: number) { return value >= 1024 * 1024 ? `${(value / 1024 / 1024).toFixed(1)} MB` : `${Math.max(1, Math.round(value / 1024))} KB`; }
 function initials(name: string) { return name.split(" ").filter(Boolean).slice(0, 2).map((part) => part[0]?.toUpperCase()).join(""); }
-function ButtonLabel({ en, ar }: { en: string; ar: string }) { return <span className="button-label"><strong>{en}</strong><small dir="rtl">{ar}</small></span>; }
+function ButtonLabel({ en }: { en: string; ar: string }) { return <span className="button-label"><strong>{en}</strong></span>; }
+
+function attachmentDate(value: string) {
+  if (!value) return "—";
+  const normalized = value.includes("T") ? value : `${value.replace(" ", "T")}Z`;
+  return new Intl.DateTimeFormat("en-GB", { day: "2-digit", month: "short", year: "numeric" }).format(new Date(normalized));
+}
+
+type OfficeKind = "word" | "excel" | "powerpoint";
+
+function officeKind(attachment: Attachment): OfficeKind | null {
+  const extension = attachment.fileName.split(".").pop()?.toLowerCase();
+  if (extension === "docx" || attachment.contentType.includes("wordprocessingml")) return "word";
+  if (["xlsx", "xls"].includes(extension || "") || attachment.contentType.includes("spreadsheet") || attachment.contentType.includes("ms-excel")) return "excel";
+  if (extension === "pptx" || attachment.contentType.includes("presentationml")) return "powerpoint";
+  return null;
+}
+
+function escapeHtml(value: string) {
+  return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/\"/g, "&quot;");
+}
+
+function officeDocument(title: string, body: string, wide = false) {
+  return `<!doctype html><html><head><meta charset="utf-8"><style>body{margin:0;padding:24px;background:#f4f4f1;color:#222;font:14px/1.55 Arial,sans-serif}main{${wide ? "max-width:1200px" : "max-width:860px"};margin:auto;background:#fff;border:1px solid #ddd;border-radius:12px;padding:26px;box-shadow:0 10px 30px rgba(0,0,0,.06)}h1{font-size:18px;margin:0 0 22px}table{border-collapse:collapse;width:100%;font-size:12px}td,th{border:1px solid #d9d9d4;padding:7px;text-align:left;vertical-align:top}tr:first-child{background:#fff8d6;font-weight:700}.slide{min-height:180px;margin:0 0 22px;padding:24px;border:1px solid #d9d9d4;border-left:5px solid #ffd200;border-radius:9px;background:#fff}.slide h2{font-size:12px;color:#786100;margin:0 0 16px}.slide p{white-space:pre-wrap;font-size:17px;line-height:1.7}img{max-width:100%}</style></head><body><main><h1>${escapeHtml(title)}</h1>${body}</main></body></html>`;
+}
+
+function OfficePreview({ attachment }: { attachment: Attachment }) {
+  const [html, setHtml] = useState("");
+  const [error, setError] = useState("");
+  useEffect(() => {
+    let active = true;
+    void (async () => {
+      try {
+        const response = await fetch(`/api/issue-attachments?id=${attachment.id}`, { cache: "no-store" });
+        if (!response.ok) throw new Error("Unable to load this attachment.");
+        const buffer = await response.arrayBuffer();
+        const kind = officeKind(attachment);
+        if (kind === "word") {
+          const mammoth = await import("mammoth/mammoth.browser");
+          const result = await mammoth.convertToHtml({ arrayBuffer: buffer });
+          if (active) setHtml(officeDocument(attachment.fileName, result.value || "<p>This document is empty.</p>"));
+        } else if (kind === "excel") {
+          const XLSX = await import("xlsx");
+          const workbook = XLSX.read(buffer, { type: "array" });
+          const sheets = workbook.SheetNames.slice(0, 5).map((name) => `<section><h2>${escapeHtml(name)}</h2>${XLSX.utils.sheet_to_html(workbook.Sheets[name])}</section>`).join("");
+          if (active) setHtml(officeDocument(attachment.fileName, sheets || "<p>This workbook is empty.</p>", true));
+        } else if (kind === "powerpoint") {
+          const JSZip = (await import("jszip")).default;
+          const zip = await JSZip.loadAsync(buffer);
+          const names = Object.keys(zip.files).filter((name) => /^ppt\/slides\/slide\d+\.xml$/.test(name)).sort((a, b) => Number(a.match(/\d+/)?.[0]) - Number(b.match(/\d+/)?.[0]));
+          const slides = await Promise.all(names.map(async (name, index) => {
+            const xml = await zip.files[name].async("string");
+            const text = Array.from(xml.matchAll(/<a:t[^>]*>([\s\S]*?)<\/a:t>/g)).map((match) => new DOMParser().parseFromString(`<!doctype html><body>${match[1]}`, "text/html").body.textContent || "").join("\n");
+            return `<article class="slide"><h2>SLIDE ${index + 1}</h2><p>${escapeHtml(text || "No extractable text on this slide.")}</p></article>`;
+          }));
+          if (active) setHtml(officeDocument(attachment.fileName, slides.join("") || "<p>This presentation is empty.</p>", true));
+        }
+      } catch {
+        if (active) setError("This Office file could not be previewed. You can still download it.");
+      }
+    })();
+    return () => { active = false; };
+  }, [attachment]);
+  if (error) return <div className="attachment-no-preview"><strong>{error}</strong><span>تعذر إنشاء معاينة لهذا الملف، ويمكنك تنزيله كالمعتاد.</span><a href={`/api/issue-attachments?id=${attachment.id}&download=1`} download>Download file · تنزيل الملف</a></div>;
+  if (!html) return <div className="office-preview-loading"><div className="spinner" /><strong>Preparing Office preview...</strong><span>جاري تجهيز معاينة الملف داخل التطبيق</span></div>;
+  return <iframe className="office-preview-frame" sandbox="" srcDoc={html} title={`Office preview: ${attachment.fileName}`} />;
+}
 
 function AttachmentCards({ attachments, onRemove }: { attachments: Attachment[]; onRemove: (attachment: Attachment) => void }) {
+  const [preview, setPreview] = useState<Attachment | null>(null);
   if (!attachments.length) return null;
-  return <div className="attachment-grid">{attachments.map((attachment) => <article key={attachment.id}>{attachment.contentType.startsWith("image/") ? <img src={`/api/issue-attachments?id=${attachment.id}`} alt={attachment.fileName} /> : attachment.contentType === "application/pdf" ? <div className="pdf-preview">PDF</div> : <div className="file-preview">{attachment.fileName.split(".").pop()?.slice(0, 5).toUpperCase() || "FILE"}</div>}<div><strong title={attachment.fileName}>{attachment.fileName}</strong><small>{bytesLabel(attachment.sizeBytes)}</small></div><div className="attachment-actions"><a href={`/api/issue-attachments?id=${attachment.id}`} target="_blank" rel="noreferrer">View</a><a href={`/api/issue-attachments?id=${attachment.id}&download=1`}>Download</a><button type="button" onClick={() => onRemove(attachment)}>×</button></div></article>)}</div>;
+  return <><div className="attachment-table-wrap"><table className="attachment-table"><thead><tr><th>File · الملف</th><th>Type · النوع</th><th>Size · الحجم</th><th>Uploaded · الرفع</th><th>Delete · حذف</th></tr></thead><tbody>{attachments.map((attachment) => { const kind = officeKind(attachment); const extension = attachment.fileName.split(".").pop()?.slice(0, 5).toUpperCase() || "FILE"; const type = attachment.contentType.startsWith("image/") ? "IMAGE" : attachment.contentType === "application/pdf" ? "PDF" : kind === "word" ? "DOCX" : kind === "excel" ? "XLSX" : kind === "powerpoint" ? "PPTX" : extension; return <tr key={attachment.id} tabIndex={0} role="button" aria-label={`Preview ${attachment.fileName}`} onClick={() => setPreview(attachment)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); setPreview(attachment); } }}><td><div className="attachment-file-cell"><span className={`attachment-file-icon${kind ? ` office-${kind}` : attachment.contentType === "application/pdf" ? " pdf" : ""}`}>{type.slice(0, 4)}</span><div><strong title={attachment.fileName}>{attachment.fileName}</strong><small>{attachment.uploadedBy}</small></div></div></td><td><span className="attachment-type-badge">{type}</span></td><td>{bytesLabel(attachment.sizeBytes)}</td><td>{attachmentDate(attachment.createdAt)}</td><td><div className="attachment-row-actions" onClick={(event) => event.stopPropagation()}><button type="button" className="attachment-delete" onClick={() => onRemove(attachment)} aria-label={`Delete ${attachment.fileName}`}>×</button></div></td></tr>; })}</tbody></table></div>{preview && <div className="attachment-preview-layer" role="dialog" aria-modal="true" aria-label={`Preview ${preview.fileName}`}><button type="button" className="attachment-preview-backdrop" onClick={() => setPreview(null)} aria-label="Close preview" /><section className="attachment-preview-dialog"><header><div><strong>{preview.fileName}</strong><span>{bytesLabel(preview.sizeBytes)}</span></div><div><a href={`/api/issue-attachments?id=${preview.id}&download=1`} download>Download · تنزيل</a><button type="button" onClick={() => setPreview(null)} aria-label="Close preview">×</button></div></header><div className="attachment-preview-content">{preview.contentType.startsWith("image/") ? <img src={`/api/issue-attachments?id=${preview.id}`} alt={preview.fileName} /> : preview.contentType === "application/pdf" ? <iframe src={`/api/issue-attachments?id=${preview.id}`} title={preview.fileName} /> : officeKind(preview) ? <OfficePreview key={preview.id} attachment={preview} /> : <div className="attachment-no-preview"><strong>Preview is not available for this file type.</strong><span>المعاينة غير متاحة لهذا النوع من الملفات.</span><a href={`/api/issue-attachments?id=${preview.id}&download=1`} download>Download file · تنزيل الملف</a></div>}</div></section></div>}</>;
 }
 
 async function jsonResponse(response: Response) {
-  const data = await response.json();
-  if (!response.ok) throw new Error(data.error || "The request could not be completed.");
+  const responseText = await response.text();
+  let data;
+  try { data = responseText ? JSON.parse(responseText) : {}; }
+  catch { data = {}; }
+  if (!response.ok) {
+    if (response.status === 413 || /payload too large/i.test(responseText)) {
+      throw new Error("Attachment is too large. Select files up to 25 MB each. · حجم المرفق كبير، الحد الأقصى 25 MB لكل ملف.");
+    }
+    const raw = typeof data.error === "string" ? data.error : "";
+    const safe = /failed query|select\s+.+from|update\s+.+set/i.test(raw) ? "The request could not be completed. Please try again." : raw;
+    throw new Error(safe || "The request could not be completed.");
+  }
   return data;
 }
 
@@ -78,6 +158,7 @@ export const IssuesModule = forwardRef<IssuesModuleHandle, {
   onOpenTask: (id: number) => void;
   onToast: (message: string) => void;
 }>(function IssuesModule({ currentUser, users, projects, onTaskCreated, onOpenTask, onToast }, ref) {
+  const { confirm, confirmDialog } = useAppConfirm();
   const [issues, setIssues] = useState<Issue[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -99,8 +180,11 @@ export const IssuesModule = forwardRef<IssuesModuleHandle, {
   const [categories, setCategories] = useState<string[]>([]);
   const [addingCategory, setAddingCategory] = useState(false);
   const [newCategory, setNewCategory] = useState("");
+  const loadInFlightRef = useRef(false);
 
   const load = useCallback(async (silent = false) => {
+    if (loadInFlightRef.current) return;
+    loadInFlightRef.current = true;
     if (!silent) setLoading(true);
     try {
       const data = await jsonResponse(await fetch("/api/issues", { cache: "no-store" }));
@@ -109,7 +193,7 @@ export const IssuesModule = forwardRef<IssuesModuleHandle, {
       setError("");
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : "تعذر تحميل مشاكل المشاريع");
-    } finally { if (!silent) setLoading(false); }
+    } finally { loadInFlightRef.current = false; if (!silent) setLoading(false); }
   }, []);
 
   useEffect(() => {
@@ -117,9 +201,11 @@ export const IssuesModule = forwardRef<IssuesModuleHandle, {
     return () => window.clearTimeout(timeout);
   }, [load]);
   useEffect(() => {
-    const interval = window.setInterval(() => { if (document.visibilityState === "visible") void load(true); }, 5_000);
+    const interval = window.setInterval(() => {
+      if (document.visibilityState === "visible" && !drawerOpen && !saving) void load(true);
+    }, 30_000);
     return () => window.clearInterval(interval);
-  }, [load]);
+  }, [load, drawerOpen, saving]);
 
   const selected = issues.find((issue) => issue.id === selectedId) || null;
   const filtered = useMemo(() => issues.filter((issue) => {
@@ -171,11 +257,63 @@ export const IssuesModule = forwardRef<IssuesModuleHandle, {
     }).catch((openError) => setError(openError instanceof Error ? openError.message : "Unable to open the issue."));
   }, [issues, openIssue]);
   useImperativeHandle(ref, () => ({ openNew, openIssue: openIssueById }), [openNew, openIssueById]);
+  function chooseFiles(event: ChangeEvent<HTMLInputElement>, currentCount: number, update: (files: File[]) => void) {
+    const input = event.currentTarget;
+    const selectedFiles = Array.from(input.files || []);
+    input.value = "";
+    if (currentCount + selectedFiles.length > MAX_ATTACHMENTS_PER_SECTION) {
+      setError(`A section can contain up to ${MAX_ATTACHMENTS_PER_SECTION} attachments. · الحد الأقصى ${MAX_ATTACHMENTS_PER_SECTION} مرفقات.`);
+      return;
+    }
+    const oversized = selectedFiles.find((file) => file.size > MAX_ATTACHMENT_BYTES);
+    if (oversized) {
+      setError(`${oversized.name} is larger than 25 MB. Choose a smaller file. · حجم الملف أكبر من الحد المسموح.`);
+      return;
+    }
+    setError("");
+    update(selectedFiles);
+  }
   async function uploadFiles(issueId: number, source: "internal" | "client", selectedFiles: File[]) {
     if (!selectedFiles.length) return [];
-    const body = new FormData(); body.append("issueId", String(issueId)); body.append("source", source); selectedFiles.forEach((file) => body.append("files", file));
-    const data = await jsonResponse(await fetch("/api/issue-attachments", { method: "POST", body }));
-    return data.attachments as Attachment[];
+    const uploaded: Attachment[] = [];
+    for (const file of selectedFiles) {
+      let uploadId = "";
+      try {
+        const started = await jsonResponse(await fetch("/api/issue-attachments?action=start", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ issueId, source, fileName: file.name, contentType: file.type || "application/octet-stream", sizeBytes: file.size }),
+        }));
+        uploadId = started.uploadId as string;
+        const chunkBytes = Number(started.chunkBytes);
+        const chunkCount = Number(started.chunkCount);
+        for (let index = 0; index < chunkCount; index += 3) {
+          const indexes = Array.from({ length: Math.min(3, chunkCount - index) }, (_, offset) => index + offset);
+          await Promise.all(indexes.map(async (chunkIndex) => {
+            const chunk = file.slice(chunkIndex * chunkBytes, Math.min(file.size, (chunkIndex + 1) * chunkBytes));
+            await jsonResponse(await fetch(`/api/issue-attachments?action=chunk&uploadId=${encodeURIComponent(uploadId)}&index=${chunkIndex}`, {
+              method: "POST",
+              headers: { "Content-Type": "application/octet-stream" },
+              body: chunk,
+            }));
+          }));
+        }
+        const completed = await jsonResponse(await fetch("/api/issue-attachments?action=complete", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ uploadId }),
+        }));
+        uploaded.push(...completed.attachments as Attachment[]);
+      } catch (uploadError) {
+        if (uploadId) void fetch("/api/issue-attachments?action=abort", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ uploadId }),
+        });
+        throw uploadError;
+      }
+    }
+    return uploaded;
   }
   async function save(event: FormEvent) {
     event.preventDefault();
@@ -186,13 +324,16 @@ export const IssuesModule = forwardRef<IssuesModuleHandle, {
       const [uploaded, uploadedClient] = await Promise.all([uploadFiles(data.issue.id, "internal", files), uploadFiles(data.issue.id, "client", clientFiles)]);
       const issue = { ...data.issue, attachments: [...(data.issue.attachments || []), ...uploaded, ...uploadedClient] } as Issue;
       setIssues((current) => selectedId ? current.map((item) => item.id === selectedId ? issue : item) : [issue, ...current.filter((item) => item.id !== issue.id)]);
-      setFiles([]); setClientFiles([]); setDrawerOpen(false);
+      setFiles([]); setClientFiles([]);
+      if (!selectedId) setDrawerOpen(false);
       onToast(selectedId ? "Project issue updated · تم تحديث المشكلة" : "Project issue created · تمت إضافة المشكلة");
     } catch (saveError) { setError(saveError instanceof Error ? saveError.message : "تعذر حفظ المشكلة"); }
     finally { saveInFlightRef.current = false; setSaving(false); }
   }
   async function removeIssue() {
-    if (!selected || !window.confirm(`Delete ${selected.issueNumber}?\nهل تريد حذف هذه المشكلة وإعادة ترقيم المجموعة؟`)) return;
+    if (!selected) return;
+    const approved = await confirm({ title: `Delete ${selected.issueNumber}?`, titleAr: "حذف المشكلة؟", message: "The issue and its attachments will be permanently removed, and the issue sequence will be updated.", messageAr: "سيتم حذف المشكلة ومرفقاتها نهائيًا وإعادة ترتيب تسلسل المشاكل." });
+    if (!approved) return;
     setSaving(true);
     try {
       const data = await jsonResponse(await fetch(`/api/issues?id=${selected.id}`, { method: "DELETE" }));
@@ -201,7 +342,8 @@ export const IssuesModule = forwardRef<IssuesModuleHandle, {
     finally { setSaving(false); }
   }
   async function removeAttachment(attachment: Attachment) {
-    if (!window.confirm(`Delete ${attachment.fileName}?`)) return;
+    const approved = await confirm({ title: "Delete attachment?", titleAr: "حذف المرفق؟", message: attachment.fileName, messageAr: "سيتم حذف هذا الملف نهائيًا من المشكلة.", confirmLabel: "Delete attachment", confirmLabelAr: "حذف المرفق" });
+    if (!approved) return;
     try {
       await jsonResponse(await fetch(`/api/issue-attachments?id=${attachment.id}`, { method: "DELETE" }));
       setIssues((current) => current.map((issue) => issue.id === attachment.issueId ? { ...issue, attachments: issue.attachments.filter((item) => item.id !== attachment.id) } : issue));
@@ -230,12 +372,13 @@ export const IssuesModule = forwardRef<IssuesModuleHandle, {
     </section>
     {drawerOpen && <div className="drawer-layer" role="dialog" aria-modal="true"><button className="drawer-backdrop" onClick={() => setDrawerOpen(false)} aria-label="Close" /><aside className="task-drawer issue-drawer"><div className="drawer-head"><div><p>PROJECT ISSUE</p><h2>{selected ? selected.issueNumber : `New ${form.projectCode || "Project"}-${disciplineCode[form.discipline]}-###`}</h2>{selected?.convertedTaskId && <span className="drawer-private-label">Modified to task · تحولت إلى مهمة #{selected.convertedTaskId}</span>}</div><button className="close-button" onClick={() => setDrawerOpen(false)}>×</button></div><form className="task-form" onSubmit={save}>
       <div className="form-section"><h3>Issue Identification <span>بيانات المشكلة</span></h3>{issueClosed && <div className="closed-issue-note">Closed issue fields are locked. Select Re-Open to edit them again.<small>حقول المشكلة المغلقة مقفلة. اختر إعادة الفتح لتعديلها.</small></div>}<div className="form-grid"><label><span>Project · المشروع</span><select required disabled={issueClosed} value={form.projectCode} onChange={(event) => { const projectCode = event.target.value; const project = projects.find((item) => item.code === projectCode); setConvertEmployee(""); setForm((current) => ({ ...current, projectCode, raisedByEmail: project?.memberEmails.includes(current.raisedByEmail) ? current.raisedByEmail : "" })); }}><option value="" disabled>Select project</option>{projects.map((project) => <option key={project.id} value={project.code}>{project.code} · {project.name}</option>)}</select></label><label><span>Discipline · التخصص</span><select required disabled={currentUser.role === "member" || issueClosed} value={form.discipline} onChange={(event) => { const discipline = event.target.value as IssueDiscipline; const currentRaisedBy = users.find((user) => user.email === form.raisedByEmail); setConvertEmployee(""); setForm({ ...form, discipline, raisedByEmail: currentRaisedBy?.discipline === discipline && selectedProject?.memberEmails.includes(currentRaisedBy.email) ? form.raisedByEmail : "" }); }}>{disciplineOptions.map((discipline) => <option key={discipline} value={discipline}>{disciplineLabel[discipline]}</option>)}</select></label></div><label className="wide"><span>Description · الوصف</span><textarea required disabled={issueClosed} rows={4} maxLength={2000} value={form.description} onChange={(event) => setForm({ ...form, description: event.target.value })} placeholder="Describe the project issue clearly..." /></label><div className="form-grid issue-category-priority-grid"><div className="issue-category-field"><label><span>Category · التصنيف</span><select required disabled={issueClosed} value={form.category} onChange={(event) => setForm({ ...form, category: event.target.value })}><option value="" disabled>Select category</option>{categories.map((category) => <option key={category} value={category}>{category}</option>)}</select></label><button type="button" className="add-category-button" disabled={issueClosed} onClick={() => { setAddingCategory((value) => !value); setNewCategory(""); }}><ButtonLabel en="＋ Add Category" ar="إضافة تصنيف" /></button>{addingCategory && <div className="new-category-row"><input maxLength={120} value={newCategory} onChange={(event) => setNewCategory(event.target.value)} placeholder="New category name" /><button type="button" disabled={!newCategory.trim()} onClick={() => { const value = newCategory.trim(); if (!value) return; setCategories((current) => Array.from(new Set([...current, value])).sort((a, b) => a.localeCompare(b))); setForm({ ...form, category: value }); setAddingCategory(false); setNewCategory(""); }}><ButtonLabel en="Use Category" ar="استخدام التصنيف" /></button></div>}</div><label><span>Priority · الأولوية</span><select disabled={issueClosed} value={form.priority} onChange={(event) => setForm({ ...form, priority: event.target.value as Issue["priority"] })}>{Object.entries(priorityLabel).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label></div></div>
-      <div className="form-section issue-details-section"><h3>Responsibility & Dates <span>المسؤولية والتواريخ</span></h3><div className="form-grid"><label><span>Status · الحالة</span><select value={form.status} onChange={(event) => changeStatus(event.target.value as Issue["status"])}>{statusOptions.map((value) => <option key={value} value={value}>{statusLabel[value]}</option>)}</select></label><label><span>Raised by · بواسطة</span>{currentUser.role === "member" ? <input value={currentUser.displayName} disabled /> : <select required disabled={issueClosed} value={form.raisedByEmail} onChange={(event) => setForm({ ...form, raisedByEmail: event.target.value })}><option value="" disabled>Select project team member</option>{raisedByOptions.map((user) => <option key={user.email} value={user.email}>{user.displayName} · {disciplineLabel[form.discipline]}</option>)}</select>}</label></div><div className="form-grid"><label><span>Issue Date · تاريخ المشكلة</span><input type="date" required disabled={issueClosed} value={form.issueDate} onChange={(event) => setForm({ ...form, issueDate: event.target.value })} /></label><label><span>Resolved Date · تاريخ الإغلاق</span><input type="date" disabled={!issueClosed} value={form.resolvedDate} onChange={(event) => setForm({ ...form, resolvedDate: event.target.value })} /><small className="automatic-date-note">Set automatically on closing; adjust it when recording a past closure · يُحدد تلقائيًا ويمكن تصحيحه</small></label></div><label className="wide"><span>Notes · الملاحظات</span><textarea rows={4} maxLength={4000} value={form.comments} onChange={(event) => setForm({ ...form, comments: event.target.value })} placeholder="Add notes, decisions, or follow-up details..." /></label></div>
-      <div className="form-section issue-attachments-section"><div className="comments-heading"><h3>Issue Attachments <span>مرفقات المشكلة</span></h3><span>{internalAttachments.length + files.length}/10</span></div><label className="issue-upload"><strong>＋ Add issue attachments</strong><span>Any file type · multiple files · maximum 10 MB each</span><input type="file" multiple onChange={(event: ChangeEvent<HTMLInputElement>) => setFiles(Array.from(event.target.files || []))} /></label>{files.length > 0 && <div className="pending-files">{files.map((file) => <span key={`${file.name}-${file.size}`}>{file.name} <small>{bytesLabel(file.size)}</small></span>)}</div>}<AttachmentCards attachments={internalAttachments} onRemove={(attachment) => void removeAttachment(attachment)} /></div>
-      {selected && <div className="form-section client-response-section"><div className="comments-heading"><h3>Client Response <span>رد العميل</span></h3><span>{clientAttachments.length + clientFiles.length}</span></div><label className="wide"><span>Client Reply · رد العميل</span><textarea rows={4} maxLength={4000} value={form.clientReply} onChange={(event) => setForm({ ...form, clientReply: event.target.value })} placeholder="Record the reply, decision, or direction received from the client..." /></label><label className="issue-upload client-upload"><strong>＋ Add client attachments</strong><span>Any file type · multiple files · maximum 10 MB each</span><input type="file" multiple onChange={(event: ChangeEvent<HTMLInputElement>) => setClientFiles(Array.from(event.target.files || []))} /></label>{clientFiles.length > 0 && <div className="pending-files">{clientFiles.map((file) => <span key={`${file.name}-${file.size}`}>{file.name} <small>{bytesLabel(file.size)}</small></span>)}</div>}<AttachmentCards attachments={clientAttachments} onRemove={(attachment) => void removeAttachment(attachment)} /></div>}
-      {selected && (currentUser.role === "owner" || currentUser.role === "manager") && <div className="form-section issue-convert"><h3>Convert to Task <span>تحويل المشكلة إلى مهمة</span></h3>{selected.convertedTaskId ? <button type="button" className="linked-task-panel" onClick={() => onOpenTask(selected.convertedTaskId!)}><ButtonLabel en={`Open linked task #${selected.convertedTaskId}`} ar="فتح المهمة المرتبطة" /></button> : <><p>The task will be linked to {selected.issueNumber} and will appear immediately in Task Management.</p><div className="form-grid"><label><span>Project team member · موظف المشروع</span><select value={convertEmployee} onChange={(event) => setConvertEmployee(event.target.value)}><option value="">Select employee</option>{projectMembers.map((user) => <option key={user.email} value={user.email}>{user.displayName} · {user.discipline}</option>)}</select></label><label><span>Due Date · تاريخ الإنجاز المتوقع</span><input type="date" value={convertDueDate} onChange={(event) => setConvertDueDate(event.target.value)} /></label></div><label className="wide"><span>Planned Hours · الساعات المخططة</span><input type="number" min="0" step="0.25" value={convertHours} onChange={(event) => setConvertHours(Number(event.target.value))} /></label><button type="button" className="convert-task-button" disabled={!convertEmployee || saving} onClick={() => void convertToTask()}><ButtonLabel en="Convert and open Task Management" ar="تحويل وفتح المهام" /></button></>}</div>}
+      <div className="form-section issue-details-section"><h3>Responsibility & Dates <span>المسؤولية والتواريخ</span></h3><div className="form-grid"><label><span>Status · الحالة</span><select value={form.status} onChange={(event) => changeStatus(event.target.value as Issue["status"])}>{statusOptions.map((value) => <option key={value} value={value}>{statusLabel[value]}</option>)}</select></label><label><span>Raised by · بواسطة</span>{currentUser.role === "member" ? <input value={currentUser.displayName} disabled /> : <select required disabled={issueClosed} value={form.raisedByEmail} onChange={(event) => setForm({ ...form, raisedByEmail: event.target.value })}><option value="" disabled>Select project team member</option>{raisedByOptions.map((user) => <option key={user.email} value={user.email}>{user.displayName} · {disciplineLabel[form.discipline]}</option>)}</select>}</label></div><div className="form-grid issue-date-grid"><label><span>Issue Date · تاريخ المشكلة</span><input type="date" required disabled={issueClosed} value={form.issueDate} onChange={(event) => setForm({ ...form, issueDate: event.target.value })} /></label><label><span>Resolved Date · تاريخ الإغلاق</span><input type="date" disabled={!issueClosed} value={form.resolvedDate} onChange={(event) => setForm({ ...form, resolvedDate: event.target.value })} /><small className="automatic-date-note">Set automatically on closing; adjust it when recording a past closure · يُحدد تلقائيًا ويمكن تصحيحه</small></label></div><label className="wide"><span>Notes · الملاحظات</span><textarea rows={4} maxLength={4000} value={form.comments} onChange={(event) => setForm({ ...form, comments: event.target.value })} placeholder="Add notes, decisions, or follow-up details..." /></label></div>
+      <div className="form-section issue-attachments-section"><div className="comments-heading"><h3>Issue Attachments <span>مرفقات المشكلة</span></h3><span>{internalAttachments.length + files.length}/10</span></div><label className="issue-upload"><strong>＋ Add issue attachments</strong><span>Any file type · multiple files · maximum 25 MB each</span><input type="file" multiple onChange={(event) => chooseFiles(event, internalAttachments.length, setFiles)} /></label>{files.length > 0 && <div className="pending-files">{files.map((file) => <span key={`${file.name}-${file.size}`}>{file.name} <small>{bytesLabel(file.size)}</small></span>)}</div>}<AttachmentCards attachments={internalAttachments} onRemove={(attachment) => void removeAttachment(attachment)} /></div>
+      {selected && <div className="form-section client-response-section"><div className="comments-heading"><h3>Client Response <span>رد العميل</span></h3><span>{clientAttachments.length + clientFiles.length}</span></div><label className="wide"><span>Client Reply · رد العميل</span><textarea rows={4} maxLength={4000} value={form.clientReply} onChange={(event) => setForm({ ...form, clientReply: event.target.value })} placeholder="Record the reply, decision, or direction received from the client..." /></label><label className="issue-upload client-upload"><strong>＋ Add client attachments</strong><span>Any file type · multiple files · maximum 25 MB each</span><input type="file" multiple onChange={(event) => chooseFiles(event, clientAttachments.length, setClientFiles)} /></label>{clientFiles.length > 0 && <div className="pending-files">{clientFiles.map((file) => <span key={`${file.name}-${file.size}`}>{file.name} <small>{bytesLabel(file.size)}</small></span>)}</div>}<AttachmentCards attachments={clientAttachments} onRemove={(attachment) => void removeAttachment(attachment)} /></div>}
+      {selected && (currentUser.role === "owner" || currentUser.role === "manager") && <div className="form-section issue-convert"><h3>Convert to Task <span>تحويل المشكلة إلى مهمة</span></h3>{selected.convertedTaskId ? <button type="button" className="linked-task-panel" onClick={() => onOpenTask(selected.convertedTaskId!)}><ButtonLabel en={`Open linked task #${selected.convertedTaskId}`} ar="فتح المهمة المرتبطة" /></button> : <><p>The task will be linked to {selected.issueNumber} and will appear immediately in Task Management.</p><div className="form-grid"><label><span>Project team member · موظف المشروع</span><select required value={convertEmployee} onChange={(event) => setConvertEmployee(event.target.value)}><option value="">Select employee</option>{projectMembers.map((user) => <option key={user.email} value={user.email}>{user.displayName} · {user.discipline}</option>)}</select></label><label><span>Due Date · تاريخ الإنجاز المتوقع</span><input type="date" value={convertDueDate} onChange={(event) => setConvertDueDate(event.target.value)} /></label></div><label className="wide"><span>Planned Hours · الساعات المخططة</span><input type="number" min="0" step="0.25" value={convertHours} onChange={(event) => setConvertHours(Number(event.target.value))} /></label><button type="button" className="convert-task-button" disabled={!convertEmployee || saving} onClick={() => void convertToTask()}><ButtonLabel en="Convert and open Task Management" ar="تحويل وفتح المهام" /></button></>}</div>}
       <div className="drawer-actions">{selected && (currentUser.role === "owner" || (currentUser.role === "manager" && currentUser.discipline === selected.discipline)) && <button type="button" className="delete-button" disabled={saving} onClick={() => void removeIssue()}><ButtonLabel en="Delete Issue" ar="حذف المشكلة" /></button>}<button type="button" className="secondary-button" onClick={() => setDrawerOpen(false)}><ButtonLabel en="Cancel" ar="إلغاء" /></button><button className="primary-button" disabled={saving}><ButtonLabel en={saving ? "Saving..." : selected ? "Save Changes" : "Create Issue"} ar={saving ? "جاري الحفظ..." : selected ? "حفظ التعديلات" : "إنشاء مشكلة"} /></button></div>
     </form></aside></div>}
+    {confirmDialog}
   </>;
 });
 

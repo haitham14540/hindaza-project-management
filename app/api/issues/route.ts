@@ -126,7 +126,8 @@ export async function GET(request: Request) {
   } catch (error) {
     const unauthorized = unauthorizedResponse(error);
     if (unauthorized) return unauthorized;
-    return Response.json({ error: error instanceof Error ? error.message : "Unable to load project issues." }, { status: 500 });
+    console.error("Unable to load project issues", error);
+    return Response.json({ error: "Unable to load project issues right now. Please try again." }, { status: 500 });
   }
 }
 
@@ -185,7 +186,8 @@ export async function POST(request: Request) {
   } catch (error) {
     const unauthorized = unauthorizedResponse(error);
     if (unauthorized) return unauthorized;
-    return Response.json({ error: error instanceof Error ? error.message : "Unable to create project issue." }, { status: 500 });
+    console.error("Unable to create project issue", error);
+    return Response.json({ error: "Unable to create the project issue right now. Please try again." }, { status: 500 });
   }
 }
 
@@ -221,7 +223,10 @@ export async function PATCH(request: Request) {
     if (!project) return Response.json({ error: "Select an existing project." }, { status: 400 });
     if (currentUser.role === "manager" && !(await isAssignedToProject(db, currentUser.email, projectCode))) return Response.json({ error: "Managers can edit issues only within assigned projects." }, { status: 403 });
     const raisedByEmail = management && !coreLocked ? cleanText(payload.raisedByEmail, 180).toLowerCase() || existing.raisedByEmail : existing.raisedByEmail;
-    const raisedBy = management && !coreLocked ? await validRaisedBy(db, raisedByEmail, discipline, projectCode) : { email: existing.raisedByEmail, displayName: existing.raisedByName };
+    const raisedByChanged = raisedByEmail !== existing.raisedByEmail || projectCode !== existing.projectCode || discipline !== existing.discipline;
+    const raisedBy = management && !coreLocked && raisedByChanged
+      ? await validRaisedBy(db, raisedByEmail, discipline, projectCode)
+      : { email: existing.raisedByEmail, displayName: existing.raisedByName };
     if (!raisedBy) return Response.json({ error: "Select an active project team member from the same discipline for Raised by." }, { status: 400 });
     const category = coreLocked ? existing.category : cleanText(payload.category, 120);
     const description = coreLocked ? existing.description : cleanText(payload.description, 2_000) || existing.description;
@@ -246,7 +251,7 @@ export async function PATCH(request: Request) {
       description,
       category,
       priority: coreLocked ? existing.priority : enumValue(payload.priority, priorities, existing.priority),
-      assigneeEmail: "",
+      assigneeEmail: existing.assigneeEmail,
       raisedByEmail: raisedBy.email,
       raisedByName: raisedBy.displayName,
       issueDate: coreLocked ? existing.issueDate : cleanText(payload.issueDate, 10) || existing.issueDate,
@@ -263,7 +268,8 @@ export async function PATCH(request: Request) {
   } catch (error) {
     const unauthorized = unauthorizedResponse(error);
     if (unauthorized) return unauthorized;
-    return Response.json({ error: error instanceof Error ? error.message : "Unable to update project issue." }, { status: 500 });
+    console.error("Unable to update project issue", error);
+    return Response.json({ error: "Unable to update the project issue right now. Please try again." }, { status: 500 });
   }
 }
 
@@ -293,6 +299,7 @@ export async function DELETE(request: Request) {
   } catch (error) {
     const unauthorized = unauthorizedResponse(error);
     if (unauthorized) return unauthorized;
-    return Response.json({ error: error instanceof Error ? error.message : "Unable to delete project issue." }, { status: 500 });
+    console.error("Unable to delete project issue", error);
+    return Response.json({ error: "Unable to delete the project issue right now. Please try again." }, { status: 500 });
   }
 }

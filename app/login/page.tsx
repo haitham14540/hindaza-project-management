@@ -4,7 +4,7 @@
 import { FormEvent, useEffect, useState } from "react";
 
 const disciplines = ["Manager", "Architecture", "ID", "Structure", "Mechanical", "Electrical", "Infrastructure"];
-function ButtonLabel({ en, ar }: { en: string; ar: string }) { return <span className="button-label"><strong>{en}</strong><small dir="rtl">{ar}</small></span>; }
+function ButtonLabel({ en }: { en: string; ar: string }) { return <span className="button-label"><strong>{en}</strong></span>; }
 
 export default function LoginPage() {
   const [checking, setChecking] = useState(true);

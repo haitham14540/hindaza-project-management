@@ -83,11 +83,13 @@ test("workspace data syncs automatically, notifications open fresh tasks, and ta
     source("app/api/notifications/route.ts"),
     source("app/api/profile-image/route.ts"),
   ]);
-  assert.match(dashboard, /setInterval\(refresh, 3_000\)/);
+  assert.match(dashboard, /setInterval\(refresh, 30_000\)/);
   assert.match(dashboard, /fetchWorkspaceData/);
   assert.match(dashboard, /applyWorkspaceData\(data, initialize\)/);
   assert.match(dashboard, /freshData\?\.tasks\.find/);
-  assert.match(dashboard, /setTab\(savedTab\(\)\)/);
+  assert.match(dashboard, /const initialTab = tabFromLocation\(\)/);
+  assert.match(dashboard, /window\.history\.pushState/);
+  assert.match(dashboard, /window\.addEventListener\("popstate", onPopState\)/);
   assert.match(dashboard, /localStorage\.setItem\(activeTabStorageKey, tab\)/);
   assert.match(notificationsApi, /export async function GET/);
   assert.match(profileApi, /getCurrentUser/);
@@ -161,7 +163,8 @@ test("project issue client responses, closure dates, and single-save behavior ar
   assert.match(issuesModule, /client-attachment-indicator/);
   assert.match(issuesModule, /saveInFlightRef\.current/);
   assert.match(issuesModule, /current\.filter\(\(item\) => item\.id !== issue\.id\)/);
-  assert.match(issuesModule, /setFiles\(\[\]\); setClientFiles\(\[\]\); setDrawerOpen\(false\)/);
+  assert.match(issuesModule, /setFiles\(\[\]\); setClientFiles\(\[\]\);/);
+  assert.match(issuesModule, /if \(!selectedId\) setDrawerOpen\(false\)/);
   assert.match(dashboard, /Task Details & Update/);
   assert.match(backupApi, /const SCHEMA_VERSION = 6/);
   assert.match(backupApi, /item\.source === undefined \? "internal"/);
@@ -311,25 +314,69 @@ test("the application shell and filters use a left-to-right layout", async () =>
   assert.match(issuesModule, /setPriorityFilter\("all"\)/);
 });
 
-test("navigation and action buttons prioritize English with smaller Arabic labels", async () => {
-  const [dashboard, issuesModule, login, styles] = await Promise.all([
+test("buttons use English-only labels, global tooltips, and unified report and navigation icons", async () => {
+  const [dashboard, issuesModule, login, confirmDialog, layout, tooltips, styles] = await Promise.all([
     source("app/task-dashboard.tsx"),
     source("app/issues-module.tsx"),
     source("app/login/page.tsx"),
+    source("app/confirm-dialog.tsx"),
+    source("app/layout.tsx"),
+    source("app/button-tooltips.tsx"),
     source("app/globals.css"),
   ]);
-  assert.match(dashboard, /<strong>\{item\.en\}<\/strong><small dir="rtl">\{item\.ar\}<\/small>/);
-  assert.match(dashboard, /<ButtonLabel en="New Task" ar="مهمة جديدة"/);
-  assert.match(dashboard, /<ButtonLabel en="New Project" ar="مشروع جديد"/);
-  assert.match(dashboard, /<ButtonLabel en="Add Employee" ar="إضافة موظف"/);
-  assert.match(dashboard, /<ButtonLabel en="Logout" ar="تسجيل الخروج"/);
-  assert.match(dashboard, /<ButtonLabel en="Read all" ar="قراءة الكل"/);
+  assert.match(dashboard, /<strong>\{item\.en\}<\/strong><small dir="rtl">\{item\.ar\}<\/small><\/span><\/button>/);
+  assert.match(dashboard, /ar: "نظرة عامة"/);
+  assert.match(dashboard, /ar: "التقارير"/);
+  assert.match(dashboard, /tab === "tasks"[\s\S]*?className="button-icon"[^>]*>✓<\/span><span>New Task<\/span>/);
+  assert.match(dashboard, /tab === "issues"[\s\S]*?className="button-icon"[^>]*>!<\/span><span>New Issue<\/span>/);
+  assert.match(dashboard, /tab === "projects"[\s\S]*?src="\/icons\/projects-v2\.png"[\s\S]*?<span>New Project<\/span>/);
+  assert.match(dashboard, /tab === "team"[\s\S]*?src="\/icons\/team-v2\.png"[\s\S]*?<span>Add Employee<\/span>/);
+  assert.doesNotMatch(dashboard, /<ButtonLabel en="(?:New Task|New Issue|New Project|Add Employee)"/);
+  assert.match(dashboard, /className="topbar-icon-action task-action-icon"[\s\S]*?aria-label="New Task"/);
+  assert.match(dashboard, /className="topbar-icon-action task-action-icon private-task-action-icon"[\s\S]*?aria-label="Private Task"/);
+  assert.match(dashboard, /className="topbar-icon-action issue-action-icon"[\s\S]*?aria-label="New Issue"/);
+  assert.match(dashboard, /function openNewTaskFromOverview\(\)[\s\S]*?setTab\("tasks"\)[\s\S]*?currentUser\?\.role === "member"[\s\S]*?openNewPrivateTask\(\)[\s\S]*?openNewTask\(\)/);
+  assert.match(dashboard, /function openNewIssue\(\)[\s\S]*?setTab\("issues"\)[\s\S]*?issuesModuleRef\.current\?\.openNew\(\)/);
+  assert.match(dashboard, /function ButtonLabel\(\{ en \}:[\s\S]*?<strong>\{en\}<\/strong><\/span>/);
+  assert.match(issuesModule, /function ButtonLabel\(\{ en \}:[\s\S]*?<strong>\{en\}<\/strong><\/span>/);
+  assert.match(login, /function ButtonLabel\(\{ en \}:[\s\S]*?<strong>\{en\}<\/strong><\/span>/);
+  assert.doesNotMatch(confirmDialog, /<small>إلغاء<\/small>|confirmLabelAr \|\| "حذف"/);
   assert.match(issuesModule, /<ButtonLabel en="Create Issue"|"Create Issue"/);
   assert.match(login, /setup \? "Create owner account"/);
-  assert.match(login, /setup \? "إنشاء حساب المالك"/);
   assert.match(styles, /\.button-label \{[^}]*display: grid/);
-  assert.match(styles, /\.button-label small \{[^}]*font-size: \.78em/);
   assert.match(styles, /\.topbar \.primary-button \{[^}]*height: 43px;[^}]*border-radius: 12px/);
+  assert.match(styles, /\.topbar-icon-action \{[^}]*width: 43px; height: 43px;/);
+  assert.match(styles, /\.task-action-icon:not\(\.private-task-action-icon\) \{ border-color: transparent; \}/);
+  assert.match(styles, /\.issue-action-icon \{[^}]*background: var\(--yellow\);[^}]*color: #171717/);
+  assert.match(styles, /\.private-task-action-icon \{[^}]*background: #f3edff;[^}]*color: #5f4788/);
+  assert.match(styles, /\.topbar \.topbar-add-button \{[^}]*font-size: 11px;[^}]*font-weight: 400/);
+  assert.doesNotMatch(styles, /\.topbar-icon-action::after/);
+  assert.match(dashboard, /\{ key: "projects", icon: "\/icons\/projects-v2\.png"/);
+  assert.match(dashboard, /\{ key: "team", icon: "\/icons\/team-v2\.png"/);
+  assert.match(dashboard, /\{ key: "reports", icon: "\/icons\/reports-v2\.png"/);
+  assert.match(dashboard, /<img src=\{item\.icon\} alt="" aria-hidden="true"/);
+  assert.match(styles, /\.nav-icon \{[^}]*width: 29px; height: 29px;[^}]*background: rgba\(255,255,255,\.08\)/);
+  assert.match(styles, /\.nav-icon\.has-image \{[^}]*background: rgba\(255,255,255,\.08\)/);
+  assert.match(styles, /\.nav-icon\.has-image img \{[^}]*filter: invert\(80%\);[^}]*transform: scale\(1\.18\)/);
+  assert.match(styles, /\.nav-list button\.active \.nav-icon\.has-image img \{ filter: none; \}/);
+  assert.match(styles, /\.topbar \.topbar-add-button \.icon-image \{[^}]*width: 29px; height: 29px; min-width: 29px;[^}]*background: transparent;/);
+  assert.match(dashboard, /className="report-type-icon"[^>]*>✓<\/span><span>Task Report<\/span>/);
+  assert.match(dashboard, /className="report-type-icon"[^>]*>!<\/span><span>Project Issues<\/span>/);
+  assert.match(dashboard, /className="report-type-icon"[^>]*>\?<\/span><span>RFI<\/span>/);
+  assert.doesNotMatch(dashboard, /Task Report <small>|Project Issues <small>|>RFI <small>/);
+  assert.match(styles, /\.report-type-icon \{[^}]*border: 1\.5px solid #171717;[^}]*background: transparent;[^}]*color: #171717/);
+  assert.match(dashboard, /fetch\("\/report-logo\.png"\)/);
+  assert.match(dashboard, /xl\/media\/report-logo\.png/);
+  assert.match(dashboard, /application\/vnd\.openxmlformats-officedocument\.spreadsheetml\.sheet/);
+  assert.match(dashboard, /src="\/report-logo\.png" alt="HINDAZA"/);
+  assert.match(layout, /<ButtonTooltips \/>/);
+  assert.match(tooltips, /document\.querySelectorAll<HTMLButtonElement>\("button"\)/);
+  assert.match(tooltips, /button\.title = tooltipFor\(button\)/);
+  assert.match(tooltips, /new MutationObserver\(applyTooltips\)/);
+  assert.match(styles, /label:has\(input:required, select:required, textarea:required\)[^}]*content: " \*";[^}]*color: #d71920/);
+  assert.match(dashboard, /<input required type="datetime-local" value=\{startedAt\}/);
+  assert.match(dashboard, /<input required type="datetime-local" value=\{endedAt\}/);
+  assert.match(issuesModule, /<select required value=\{convertEmployee\}/);
   assert.match(styles, /\.notification-bell \{[^}]*width: 43px; height: 43px/);
   assert.match(styles, /\.notification-popover \{[^}]*right: 6px;[^}]*left: auto;[^}]*width: min\(320px/);
   assert.match(styles, /\.issue-filters input, \.issue-filters select \{[^}]*height: 38px/);
@@ -469,4 +516,138 @@ test("project team picker filters by discipline and shows each member role", asy
   assert.match(dashboard, /\(\{roleLabel\(user\.role\)\}\)/);
   assert.match(styles, /\.project-team-controls select/);
   assert.match(styles, /\.member-picker \.member-role/);
+});
+
+test("management can audit submitted work sessions and directory records support table views", async () => {
+  const [dashboard, timerApi, issuesModule, styles] = await Promise.all([
+    source("app/task-dashboard.tsx"),
+    source("app/api/task-timer/route.ts"),
+    source("app/issues-module.tsx"),
+    source("app/globals.css"),
+  ]);
+  assert.match(timerApi, /export async function PATCH/);
+  assert.match(timerApi, /export async function DELETE/);
+  assert.match(timerApi, /Work sessions can be audited after the task is submitted for review/);
+  assert.match(timerApi, /canAuditTask/);
+  assert.match(dashboard, /updateWorkSession/);
+  assert.match(dashboard, /deleteWorkSession/);
+  assert.match(dashboard, /canAuditSessions/);
+  assert.match(dashboard, /projectView === "table"/);
+  assert.match(dashboard, /teamView === "table"/);
+  assert.match(dashboard, /projectView, setProjectView\] = useState<DirectoryView>\("table"\)/);
+  assert.match(dashboard, /teamView, setTeamView\] = useState<DirectoryView>\("table"\)/);
+  assert.match(dashboard, /view-switcher/);
+  assert.match(issuesModule, /attachment-preview-dialog/);
+  assert.match(issuesModule, /download>Download/);
+  assert.match(styles, /\.attachment-preview-layer/);
+  assert.match(styles, /\.session-editor/);
+});
+
+test("project overview is a detailed drill-down dashboard and Office attachments preview in-app", async () => {
+  const [dashboard, issuesModule, issuesApi, bootstrapApi, styles, packageJson] = await Promise.all([
+    source("app/task-dashboard.tsx"),
+    source("app/issues-module.tsx"),
+    source("app/api/issues/route.ts"),
+    source("app/api/bootstrap/route.ts"),
+    source("app/globals.css"),
+    source("package.json"),
+  ]);
+  assert.match(dashboard, /overview: "Project Overview"/);
+  assert.doesNotMatch(dashboard, /Team Daily Overview/);
+  assert.match(dashboard, /ProjectOverviewDashboard/);
+  assert.match(dashboard, /PORTFOLIO HEALTH/);
+  assert.match(dashboard, /Tasks needing attention/);
+  assert.match(dashboard, /Issues needing attention/);
+  assert.match(dashboard, /openIssueFromOverview/);
+  assert.match(dashboard, /fetchWorkspaceData\(timeoutMs = 25_000\)/);
+  assert.match(issuesModule, /function OfficePreview/);
+  assert.match(issuesModule, /mammoth\/mammoth\.browser/);
+  assert.match(issuesModule, /sheet_to_html/);
+  assert.match(issuesModule, /ppt\\\/slides\\\/slide/);
+  assert.match(issuesModule, /sandbox="" srcDoc=\{html\}/);
+  assert.match(issuesModule, /30_000/);
+  assert.match(issuesModule, /!drawerOpen && !saving/);
+  assert.match(issuesApi, /Unable to update the project issue right now/);
+  assert.doesNotMatch(bootstrapApi, /error instanceof Error \? error\.message/);
+  assert.match(styles, /\.overview-kpis/);
+  assert.match(styles, /\.office-preview-loading/);
+  assert.match(packageJson, /"mammoth"/);
+  assert.match(packageJson, /"xlsx"/);
+  assert.match(packageJson, /"jszip"/);
+});
+
+test("issue attachments use a compact clickable table, chunked 25 MB uploads, and aligned date fields", async () => {
+  const [issuesModule, attachmentsApi, styles] = await Promise.all([
+    source("app/issues-module.tsx"),
+    source("app/api/issue-attachments/route.ts"),
+    source("app/globals.css"),
+  ]);
+  assert.match(issuesModule, /className="attachment-table"/);
+  assert.match(issuesModule, /aria-label=\{`Preview \$\{attachment\.fileName\}`\}/);
+  assert.match(issuesModule, /Download · تنزيل/);
+  assert.match(issuesModule, /Delete · حذف/);
+  assert.doesNotMatch(issuesModule, /<button type="button" onClick=\{\(\) => setPreview\(attachment\)\}>View/);
+  assert.match(issuesModule, /attachment-row-actions" onClick=\{\(event\) => event\.stopPropagation\(\)\}><button type="button" className="attachment-delete"/);
+  assert.match(issuesModule, /response\.status === 413/);
+  assert.match(issuesModule, /payload too large/i);
+  assert.match(issuesModule, /for \(const file of selectedFiles\)/);
+  assert.match(issuesModule, /action=start/);
+  assert.match(issuesModule, /action=chunk/);
+  assert.match(issuesModule, /action=complete/);
+  assert.match(issuesModule, /file\.slice/);
+  assert.match(issuesModule, /MAX_ATTACHMENT_BYTES = 25 \* 1024 \* 1024/);
+  assert.match(attachmentsApi, /MAX_FILE_BYTES = 25 \* 1024 \* 1024/);
+  assert.match(attachmentsApi, /CHUNK_BYTES = 768 \* 1024/);
+  assert.match(issuesModule, /form-grid issue-date-grid/);
+  assert.match(styles, /\.issue-date-grid input\[type="date"\] \{ height: 44px; min-height: 44px;/);
+  assert.match(styles, /\.attachment-table-wrap/);
+  assert.doesNotMatch(issuesModule, /className="attachment-grid"/);
+});
+
+test("deletions use centered in-app confirmation and dashboard summaries follow role and LTR rules", async () => {
+  const [dashboard, issuesModule, confirmDialog, styles] = await Promise.all([
+    source("app/task-dashboard.tsx"),
+    source("app/issues-module.tsx"),
+    source("app/confirm-dialog.tsx"),
+    source("app/globals.css"),
+  ]);
+  assert.doesNotMatch(dashboard, /window\.confirm|window\.alert/);
+  assert.doesNotMatch(issuesModule, /window\.confirm|window\.alert/);
+  assert.match(dashboard, /Delete work session\?/);
+  assert.match(dashboard, /Delete task\?/);
+  assert.match(dashboard, /Delete project\?/);
+  assert.match(dashboard, /Delete employee\?/);
+  assert.match(dashboard, /Delete profile image\?/);
+  assert.match(issuesModule, /Delete attachment\?/);
+  assert.match(issuesModule, /Delete \$\{selected\.issueNumber\}\?/);
+  assert.match(confirmDialog, /className="app-confirm-layer"/);
+  assert.match(confirmDialog, /role="dialog" aria-modal="true"/);
+  assert.match(styles, /\.app-confirm-layer \{ position: fixed; z-index: 320;/);
+  assert.match(dashboard, /isEmployee=\{currentUser\?\.role === "member"\}/);
+  assert.match(dashboard, /employee-project-kpi/);
+  assert.match(dashboard, /completedProjects.*onHoldProjects.*total/s);
+  assert.match(dashboard, /stats-grid task-stats-ltr/);
+  assert.match(dashboard, /Total Tasks · إجمالي المهام/);
+  assert.match(dashboard, /Pending Review · بانتظار المراجعة/);
+  assert.match(dashboard, /Approved · معتمدة/);
+  assert.match(dashboard, /Returned · مُعادة/);
+});
+
+test("page headings and overview titles are English-only while typography matches task tables", async () => {
+  const [dashboard, styles] = await Promise.all([
+    source("app/task-dashboard.tsx"),
+    source("app/globals.css"),
+  ]);
+  assert.match(dashboard, /const pageTitle: Record<Tab, string>/);
+  assert.match(dashboard, /<h1 dir="ltr">\{pageTitle\[tab\]\}<\/h1><p className="subhead"/);
+  assert.doesNotMatch(dashboard, /pageTitle\[tab\]\.ar|page-title-ar/);
+  assert.match(dashboard, /<span>Active Projects<\/span>/);
+  const overview = dashboard.slice(dashboard.indexOf("function ProjectOverviewDashboard"), dashboard.indexOf("function TaskTable"));
+  assert.doesNotMatch(overview, /[\u0600-\u06ff]/);
+  assert.match(styles, /--font-ui: Arial, "Segoe UI", Tahoma, sans-serif/);
+  assert.match(styles, /button, input, select, textarea, table, th, td \{ font-family: var\(--font-ui\); \}/);
+  assert.match(styles, /\.issue-table th \{ padding-block: 13px; color: #5e6c75; font-size: 11px;/);
+  assert.match(styles, /\.issue-table td \{ font-size: 10px; \}/);
+  assert.match(styles, /\.issue-description strong .*font-size: 14px;/);
+  assert.match(styles, /\.attachment-table td .*font-size: 10px;/);
 });

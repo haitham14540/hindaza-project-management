@@ -176,8 +176,9 @@ export async function GET(request: Request) {
   } catch (error) {
     const unauthorized = unauthorizedResponse(error);
     if (unauthorized) return unauthorized;
+    console.error("Unable to load workspace", error);
     return Response.json(
-      { error: error instanceof Error ? error.message : "Unable to load tasks" },
+      { error: "Unable to load the workspace right now. Please try again." },
       { status: 500 },
     );
   }
