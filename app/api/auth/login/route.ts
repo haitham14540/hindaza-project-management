@@ -3,6 +3,7 @@ import { getDb } from "@/db";
 import { users } from "@/db/schema";
 import { createSession, verifyPassword } from "@/lib/auth";
 import { ensureDatabase } from "@/lib/db-init";
+import { recordActivity } from "@/lib/activity";
 
 export const dynamic = "force-dynamic";
 
@@ -21,6 +22,7 @@ export async function POST(request: Request) {
     if (!valid) return Response.json({ error: "Incorrect email or password." }, { status: 401 });
 
     const cookie = await createSession(user.email, request);
+    await recordActivity(db, { email: user.email, displayName: user.displayName, role: user.role, discipline: user.discipline, profileImageKey: user.profileImageKey }, { action: "login", entityType: "account", entityLabel: user.displayName, details: "Signed in" });
     return Response.json(
       { user: { email: user.email, displayName: user.displayName, role: user.role, discipline: user.discipline, profileImageKey: user.profileImageKey } },
       { headers: { "Set-Cookie": cookie } },

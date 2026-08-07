@@ -52,16 +52,18 @@ async function assignableEmployee(db: Database, currentUser: CurrentUser, employ
     .from(users)
     .where(and(eq(users.email, employeeEmail), eq(users.active, true)))
     .limit(1);
-  if (!row[0] || row[0].role !== "member") return false;
+  if (!row[0] || (row[0].role !== "member" && row[0].role !== "manager")) return false;
   return currentUser.role === "owner" || (currentUser.role === "manager" && Boolean(currentUser.discipline) && row[0].discipline === currentUser.discipline);
 }
 
-async function relevantReviewers(db: Database, employeeEmail: string) {
+async function relevantReviewers(db: Database, employeeEmail: string, projectCode: string) {
   const [employee] = await db.select({ discipline: users.discipline }).from(users).where(eq(users.email, employeeEmail)).limit(1);
   const reviewers = await db.select({ email: users.email, role: users.role, discipline: users.discipline })
     .from(users)
     .where(and(inArray(users.role, ["owner", "manager"]), eq(users.active, true)));
-  return reviewers.filter((reviewer) => reviewer.role === "owner" || (Boolean(employee?.discipline) && reviewer.discipline === employee.discipline));
+  const [project] = await db.select({ id: projects.id }).from(projects).where(eq(projects.code, projectCode)).limit(1);
+  const memberEmails = project ? new Set((await db.select({ email: projectMembers.employeeEmail }).from(projectMembers).where(eq(projectMembers.projectId, project.id))).map((row) => row.email)) : new Set<string>();
+  return reviewers.filter((reviewer) => reviewer.role === "owner" || (Boolean(employee?.discipline) && reviewer.discipline === employee.discipline && memberEmails.has(reviewer.email)));
 }
 
 async function isProjectMember(db: Database, projectCode: string, employeeEmail: string) {
@@ -72,6 +74,12 @@ async function isProjectMember(db: Database, projectCode: string, employeeEmail:
     .where(and(eq(projects.code, projectCode), eq(projectMembers.employeeEmail, employeeEmail)))
     .limit(1);
   return Boolean(row[0]);
+}
+
+async function canManageProject(db: Database, currentUser: CurrentUser, projectCode: string) {
+  if (currentUser.role === "owner") return true;
+  if (currentUser.role !== "manager") return false;
+  return isProjectMember(db, projectCode, currentUser.email);
 }
 
 export async function POST(request: Request) {
@@ -94,6 +102,9 @@ export async function POST(request: Request) {
       return Response.json({ error: "Select an employee for this task." }, { status: 400 });
     }
     const db = await getDb();
+    if (management && !(await canManageProject(db, currentUser, project))) {
+      return Response.json({ error: "Managers can create tasks only in projects they are assigned to." }, { status: 403 });
+    }
     if (management && !(await assignableEmployee(db, currentUser, employeeEmail))) {
       return Response.json({ error: currentUser.role === "manager" ? "You can assign tasks only to employees in your discipline." : "Select an active employee account." }, { status: 403 });
     }
@@ -182,7 +193,7 @@ export async function PATCH(request: Request) {
         .set({ submittedToManager: true, managerCheck: "new", updatedAt: sql`CURRENT_TIMESTAMP` })
         .where(eq(tasks.id, id))
         .returning();
-      const managers = await relevantReviewers(db, existing[0].employeeEmail);
+      const managers = await relevantReviewers(db, existing[0].employeeEmail, existing[0].project);
       if (managers.length) {
         await db.insert(notifications).values(managers.map((manager) => ({
           recipientEmail: manager.email,
@@ -195,7 +206,7 @@ export async function PATCH(request: Request) {
       await recordActivity(db, currentUser, { action: "updated", entityType: "task", entityId: id, entityLabel: submitted[0].title, projectCode: submitted[0].project, details: "Private task submitted to management" });
       return Response.json({ task: submitted[0] });
     }
-    const scopedManagement = isManagement(currentUser) && await managedEmployee(db, currentUser, existing[0].employeeEmail);
+    const scopedManagement = isManagement(currentUser) && await managedEmployee(db, currentUser, existing[0].employeeEmail) && await canManageProject(db, currentUser, existing[0].project);
     const canEdit =
       (scopedManagement && (existing[0].visibility === "team" || existing[0].submittedToManager)) ||
       existing[0].employeeEmail === currentUser.email;
@@ -205,6 +216,9 @@ export async function PATCH(request: Request) {
 
     const title = text(payload.title, 180) || existing[0].title;
     const project = text(payload.project, 80) || existing[0].project;
+    if (scopedManagement && !(await canManageProject(db, currentUser, project))) {
+      return Response.json({ error: "Managers can move tasks only within their assigned projects." }, { status: 403 });
+    }
     const requestedCheck = enumValue(
       payload.managerCheck,
       checks,
@@ -309,7 +323,7 @@ export async function DELETE(request: Request) {
     if (!existing[0] || (existing[0].visibility === "private" && !existing[0].submittedToManager)) {
       return Response.json({ error: "Task not found." }, { status: 404 });
     }
-    if (!(await managedEmployee(db, currentUser, existing[0].employeeEmail))) {
+    if (!(await managedEmployee(db, currentUser, existing[0].employeeEmail)) || !(await canManageProject(db, currentUser, existing[0].project))) {
       return Response.json({ error: "You can manage tasks only within your discipline." }, { status: 403 });
     }
     await db.delete(taskComments).where(eq(taskComments.taskId, id));

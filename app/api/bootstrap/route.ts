@@ -130,21 +130,23 @@ export async function GET(request: Request) {
         .filter((user) => user.discipline === currentUser.discipline)
         .map((user) => user.email),
     );
-    const taskRows = currentUser.role === "owner"
-      ? allTaskRows.filter((task) => task.visibility === "team" || task.submittedToManager)
-      : currentUser.role === "manager"
-        ? allTaskRows.filter((task) =>
-          (task.visibility === "team" || task.submittedToManager) && managerDisciplineEmails.has(task.employeeEmail),
-        )
-        : allTaskRows.filter((task) => task.employeeEmail === currentUser.email || (task.visibility === "private" && task.createdBy === currentUser.email));
-    const visibleTaskIds = new Set(taskRows.map((task) => task.id));
     const assignedProjectIds = new Set(
       membershipRows
         .filter((membership) => membership.employeeEmail === currentUser.email)
         .map((membership) => membership.projectId),
     );
+    const assignedProjectCodes = new Set(allProjectRows.filter((project) => assignedProjectIds.has(project.id)).map((project) => project.code));
+    const taskRows = currentUser.role === "owner"
+      ? allTaskRows.filter((task) => task.visibility === "team" || task.submittedToManager)
+      : currentUser.role === "manager"
+        ? allTaskRows.filter((task) =>
+          (task.employeeEmail === currentUser.email || ((task.visibility === "team" || task.submittedToManager) && managerDisciplineEmails.has(task.employeeEmail))) &&
+          (task.project === "PERSONAL" || assignedProjectCodes.has(task.project)),
+        )
+        : allTaskRows.filter((task) => task.employeeEmail === currentUser.email || (task.visibility === "private" && task.createdBy === currentUser.email));
+    const visibleTaskIds = new Set(taskRows.map((task) => task.id));
     const taskProjectCodes = new Set(taskRows.map((task) => task.project));
-    const visibleProjects = isManagement(currentUser)
+    const visibleProjects = currentUser.role === "owner"
       ? allProjectRows
       : allProjectRows.filter((project) => assignedProjectIds.has(project.id) || taskProjectCodes.has(project.code));
     const projectRows = visibleProjects.map((project) => ({
@@ -159,7 +161,7 @@ export async function GET(request: Request) {
     const visibleUsers = currentUser.role === "owner"
       ? userRows
       : currentUser.role === "manager"
-        ? userRows.filter((user) => user.discipline === currentUser.discipline && user.role === "member")
+        ? userRows.filter((user) => user.discipline === currentUser.discipline && (user.role === "member" || user.role === "manager"))
         : userRows;
 
     return Response.json({

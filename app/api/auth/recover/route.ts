@@ -3,6 +3,7 @@ import { getDb } from "@/db";
 import { sessions, users } from "@/db/schema";
 import { createSession, passwordRecord, setupKeyIsValid } from "@/lib/auth";
 import { ensureDatabase } from "@/lib/db-init";
+import { recordActivity } from "@/lib/activity";
 
 export const dynamic = "force-dynamic";
 
@@ -34,6 +35,7 @@ export async function POST(request: Request) {
     const credentials = await passwordRecord(password);
     await db.delete(sessions).where(eq(sessions.email, email));
     await db.update(users).set({ ...credentials, role: "owner" }).where(eq(users.email, email));
+    await recordActivity(db, { email, displayName: owner.displayName, role: "owner", discipline: owner.discipline, profileImageKey: owner.profileImageKey }, { action: "updated", entityType: "account", entityLabel: owner.displayName, details: "Owner access recovered" });
     const cookie = await createSession(email, request);
 
     return Response.json(

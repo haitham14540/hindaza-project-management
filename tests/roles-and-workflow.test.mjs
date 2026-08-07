@@ -65,7 +65,7 @@ test("task created date, due date label, and creation-time ordering are used", a
   ]);
   assert.match(dashboard, /تاريخ الإنشاء/);
   assert.match(dashboard, /Created Date/);
-  assert.match(dashboard, /تاريخ الإنجاز المتوقع · Due Date/);
+  assert.match(dashboard, /Due Date · تاريخ الإنجاز المتوقع/);
   assert.match(dashboard, /function formatDueDate/);
   assert.match(dashboard, /function formatCreatedDate/);
   assert.match(dashboard, /"JAN", "FEB", "MAR"/);
@@ -400,4 +400,73 @@ test("issue workflow uses project members and automatic close and reopen behavio
   assert.match(styles, /\.issue-attachments-section \{[^}]*border-bottom: 1px solid/);
   assert.match(styles, /\.issue-convert \{[^}]*background: #f7f2ff/);
   assert.match(styles, /\.issue-convert \{[^}]*margin: 0;[^}]*padding: 23px 0;/);
+});
+
+test("project-scoped managers, owner project deletion, and four-character issue numbers are enforced", async () => {
+  const [projectsApi, bootstrapApi, tasksApi, issuesApi, convertApi] = await Promise.all([
+    source("app/api/projects/route.ts"),
+    source("app/api/bootstrap/route.ts"),
+    source("app/api/tasks/route.ts"),
+    source("app/api/issues/route.ts"),
+    source("app/api/issues/convert/route.ts"),
+  ]);
+  assert.match(projectsApi, /Managers can edit only projects they are assigned to/);
+  assert.match(projectsApi, /disciplineByEmail\.get\(email\) === currentUser\.discipline/);
+  assert.match(projectsApi, /PROJECT_NOT_EMPTY/);
+  assert.match(projectsApi, /projectIssues/);
+  assert.match(bootstrapApi, /assignedProjectCodes/);
+  assert.match(tasksApi, /canManageProject/);
+  assert.match(tasksApi, /row\[0\]\.role !== "member" && row\[0\]\.role !== "manager"/);
+  assert.match(issuesApi, /slice\(0, 4\)\.toUpperCase\(\)/);
+  assert.match(issuesApi, /isAssignedToProject/);
+  assert.match(convertApi, /employee\.role !== "member" && employee\.role !== "manager"/);
+});
+
+test("task and issue tables use compact counts, discipline-sorted employees, and team clear filters", async () => {
+  const [dashboard, issuesModule] = await Promise.all([
+    source("app/task-dashboard.tsx"),
+    source("app/issues-module.tsx"),
+  ]);
+  assert.match(dashboard, /employeeOptions/);
+  assert.match(dashboard, /a\.discipline\.localeCompare\(b\.discipline\)/);
+  assert.match(dashboard, /\{employee\.name\} \(\{employee\.discipline\}\)/);
+  assert.match(dashboard, /className="count-badge filter-count"/);
+  assert.match(dashboard, /Clear all team filters/);
+  assert.doesNotMatch(dashboard, /<div className="panel-heading"><div><h2>\{props\.tab === "overview"/);
+  assert.doesNotMatch(issuesModule, /<div className="panel-heading"><div><h2>Project Issues<\/h2>/);
+  assert.match(issuesModule, /count-badge filter-count/);
+});
+
+test("project and team directories use compact filter rows and explain blocked project deletion", async () => {
+  const [dashboard, styles, projectsApi] = await Promise.all([
+    source("app/task-dashboard.tsx"),
+    source("app/globals.css"),
+    source("app/api/projects/route.ts"),
+  ]);
+  assert.doesNotMatch(dashboard, /<h2>سجل المشاريع<\/h2>/);
+  assert.doesNotMatch(dashboard, /<h2>ملخص الفريق<\/h2>/);
+  assert.match(dashboard, /directory-filters project-filter-row/);
+  assert.match(dashboard, /directory-filters team-filter-row/);
+  assert.match(dashboard, /filteredProjectRows\.length === 1 \? "Project" : "Projects"/);
+  assert.match(dashboard, /filteredTeamRows\.length === 1 \? "Employee" : "Employees"/);
+  assert.match(dashboard, /response\.status === 409 && data\.code === "PROJECT_NOT_EMPTY"/);
+  assert.match(dashboard, /project-dependency-counts/);
+  assert.match(projectsApi, /dependencies = \{ tasks: taskCount\.total, issues: issueCount\.total, team: teamCount\.total, rfi: 0 \}/);
+  assert.match(styles, /\.directory-filters\.project-filter-row/);
+  assert.match(styles, /\.project-dependency-counts/);
+});
+
+test("project team picker filters by discipline and shows each member role", async () => {
+  const [dashboard, styles] = await Promise.all([
+    source("app/task-dashboard.tsx"),
+    source("app/globals.css"),
+  ]);
+  assert.match(dashboard, /const \[disciplineFilter, setDisciplineFilter\] = useState\("all"\)/);
+  assert.match(dashboard, /availableDisciplines/);
+  assert.match(dashboard, /filteredTeamMembers/);
+  assert.match(dashboard, /Filter project team by discipline/);
+  assert.match(dashboard, /All disciplines · كل التخصصات/);
+  assert.match(dashboard, /\(\{roleLabel\(user\.role\)\}\)/);
+  assert.match(styles, /\.project-team-controls select/);
+  assert.match(styles, /\.member-picker \.member-role/);
 });

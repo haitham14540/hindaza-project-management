@@ -2,6 +2,7 @@ import { eq } from "drizzle-orm";
 import { getBucket, getDb } from "@/db";
 import { users } from "@/db/schema";
 import { getCurrentUser, unauthorizedResponse } from "@/lib/auth";
+import { recordActivity } from "@/lib/activity";
 
 export const dynamic = "force-dynamic";
 
@@ -50,6 +51,7 @@ export async function POST(request: Request) {
     });
     const db = await getDb();
     await db.update(users).set({ profileImageKey: key }).where(eq(users.email, currentUser.email));
+    await recordActivity(db, currentUser, { action: "updated", entityType: "account", entityLabel: currentUser.displayName, details: "Profile image changed" });
     if (currentUser.profileImageKey && currentUser.profileImageKey !== key) {
       await bucket.delete(currentUser.profileImageKey);
     }
@@ -69,6 +71,7 @@ export async function DELETE(request: Request) {
       await bucket.delete(currentUser.profileImageKey);
       const db = await getDb();
       await db.update(users).set({ profileImageKey: "" }).where(eq(users.email, currentUser.email));
+      await recordActivity(db, currentUser, { action: "updated", entityType: "account", entityLabel: currentUser.displayName, details: "Profile image removed" });
     }
     return Response.json({ ok: true });
   } catch (error) {

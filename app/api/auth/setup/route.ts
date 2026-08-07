@@ -1,6 +1,7 @@
 import { getDb } from "@/db";
 import { users } from "@/db/schema";
 import { createSession, passwordRecord, setupKeyIsValid, setupRequired } from "@/lib/auth";
+import { recordActivity } from "@/lib/activity";
 
 export const dynamic = "force-dynamic";
 
@@ -34,6 +35,7 @@ export async function POST(request: Request) {
         set: { displayName, role: "owner", discipline, active: true, ...credentials },
       });
     const cookie = await createSession(email, request);
+    await recordActivity(db, { email, displayName, role: "owner", discipline, profileImageKey: "" }, { action: "created", entityType: "account", entityLabel: displayName, details: "Owner account configured" });
     return Response.json(
       { user: { email, displayName, role: "owner", discipline, profileImageKey: "" } },
       { status: 201, headers: { "Set-Cookie": cookie } },

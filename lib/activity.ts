@@ -2,8 +2,8 @@ import { getDb } from "@/db";
 import { activityLogs } from "@/db/schema";
 import type { AppUser } from "@/lib/auth";
 
-type ActivityAction = "created" | "updated" | "deleted" | "note_added" | "timer_updated" | "attachment_added" | "attachment_deleted" | "converted";
-type ActivityEntity = "task" | "issue";
+type ActivityAction = "created" | "updated" | "deleted" | "note_added" | "timer_updated" | "attachment_added" | "attachment_deleted" | "converted" | "login" | "logout" | "downloaded" | "restored" | "read";
+type ActivityEntity = "task" | "issue" | "project" | "user" | "account" | "backup" | "notification";
 
 export async function recordActivity(
   db: Awaited<ReturnType<typeof getDb>>,

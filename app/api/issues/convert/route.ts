@@ -24,9 +24,15 @@ export async function POST(request: Request) {
     if (issue.convertedTaskId) return Response.json({ error: "This issue has already been converted to a task." }, { status: 409 });
     const [employee] = await db.select({ email: users.email, displayName: users.displayName, discipline: users.discipline, role: users.role })
       .from(users).where(and(eq(users.email, employeeEmail), eq(users.active, true))).limit(1);
-    if (!employee || employee.role !== "member") return Response.json({ error: "Select an active team member." }, { status: 400 });
+    if (!employee || (employee.role !== "member" && employee.role !== "manager")) return Response.json({ error: "Select an active project team member." }, { status: 400 });
     if (employee.discipline !== issue.discipline) return Response.json({ error: "Select a project member from the same discipline as the issue." }, { status: 400 });
     if (currentUser.role === "manager" && employee.discipline !== currentUser.discipline) return Response.json({ error: "You can assign tasks only within your discipline." }, { status: 403 });
+    if (currentUser.role === "manager") {
+      const [managerMembership] = await db.select({ id: projectMembers.id }).from(projectMembers)
+        .innerJoin(projects, eq(projectMembers.projectId, projects.id))
+        .where(and(eq(projects.code, issue.projectCode), eq(projectMembers.employeeEmail, currentUser.email))).limit(1);
+      if (!managerMembership) return Response.json({ error: "Managers can convert issues only within assigned projects." }, { status: 403 });
+    }
     const [membership] = await db.select({ id: projectMembers.id }).from(projectMembers)
       .innerJoin(projects, eq(projectMembers.projectId, projects.id))
       .where(and(eq(projects.code, issue.projectCode), eq(projectMembers.employeeEmail, employeeEmail))).limit(1);

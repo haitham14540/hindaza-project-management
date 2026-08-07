@@ -2,6 +2,7 @@ import { and, desc, eq } from "drizzle-orm";
 import { getDb } from "@/db";
 import { notifications } from "@/db/schema";
 import { getCurrentUser, unauthorizedResponse } from "@/lib/auth";
+import { recordActivity } from "@/lib/activity";
 
 export const dynamic = "force-dynamic";
 
@@ -29,6 +30,7 @@ export async function PATCH(request: Request) {
 
     if (payload.all === true) {
       await db.update(notifications).set({ read: true }).where(eq(notifications.recipientEmail, currentUser.email));
+      await recordActivity(db, currentUser, { action: "read", entityType: "notification", entityLabel: "All notifications", details: "Marked all notifications as read" });
       return Response.json({ ok: true });
     }
 
@@ -40,6 +42,7 @@ export async function PATCH(request: Request) {
       .update(notifications)
       .set({ read: true })
       .where(and(eq(notifications.id, id), eq(notifications.recipientEmail, currentUser.email)));
+    await recordActivity(db, currentUser, { action: "read", entityType: "notification", entityId: id, entityLabel: `Notification #${id}`, details: "Notification opened" });
     return Response.json({ ok: true });
   } catch (error) {
     const unauthorized = unauthorizedResponse(error);

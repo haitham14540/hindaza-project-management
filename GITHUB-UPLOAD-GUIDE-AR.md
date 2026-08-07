@@ -1,90 +1,66 @@
-# دليل رفع HINDAZA Project Management إلى GitHub وCloudflare
+# رفع HINDAZA Project Management إلى GitHub
 
-هذه الحزمة جاهزة للرفع إلى المستودع:
+المستودع المستهدف:
 
 `https://github.com/haitham14540/hindaza-project-management`
 
-لا تحتوي الحزمة على كلمات مرور أو مفتاح `SETUP_KEY` أو بيانات قاعدة البيانات أو ملف Backup.
+## 1. فك الضغط
 
-## أولًا: رفع الملفات إلى GitHub باستخدام Git Bash
+فك ملف `HINDAZA_Project_Management_Latest_2026-08-06.zip`، ثم افتح Terminal أو Git Bash داخل مجلد المشروع الناتج.
 
-فك ضغط الحزمة، ثم افتح Git Bash داخل مجلد المشروع ونفّذ:
+## 2. تحقق من المتطلبات
+
+- Git مثبت على الجهاز.
+- Node.js إصدار `22.13.0` أو أحدث.
+- تسجيل الدخول إلى حساب GitHub الذي يملك المستودع.
+
+## 3. افحص التطبيق قبل الرفع
+
+```bash
+npm ci
+npm test
+```
+
+يجب أن ينتهي الاختبار دون أخطاء.
+
+## 4. الرفع إلى مستودع فارغ
+
+استخدم هذه الخطوات إذا كان المستودع جديدًا أو فارغًا:
 
 ```bash
 git init
 git branch -M main
 git remote add origin https://github.com/haitham14540/hindaza-project-management.git
 git add .
-git commit -m "HINDAZA Project Management v18"
+git commit -m "Publish latest HINDAZA Project Management app"
+git push -u origin main
+```
+
+## 5. تحديث مستودع يحتوي ملفات سابقة
+
+الأفضل أخذ نسخة احتياطية من المستودع الحالي أولًا، ثم نفّذ:
+
+```bash
+git init
+git branch -M main
+git remote add origin https://github.com/haitham14540/hindaza-project-management.git
+git fetch origin
+git add .
+git commit -m "Update HINDAZA Project Management"
 git pull origin main --rebase
 git push -u origin main
 ```
 
-إذا كان المجلد مرتبطًا بالمستودع مسبقًا، استخدم فقط:
+إذا ظهرت رسالة أن `origin` موجود مسبقًا، استخدم:
 
 ```bash
-git add .
-git commit -m "Update HINDAZA Project Management"
-git pull origin main --rebase
-git push origin main
+git remote set-url origin https://github.com/haitham14540/hindaza-project-management.git
 ```
 
-## ثانيًا: تجهيز Cloudflare
+## 6. التحقق بعد الرفع
 
-سجّل الدخول ثم أنشئ قاعدة D1 وحاوية R2:
+افتح المستودع في GitHub وتأكد من ظهور `package.json` ومجلدات `app` و`db` و`drizzle` و`tests`، ثم راجع أن آخر Commit هو التحديث الذي رفعته.
 
-```bash
-npx wrangler login
-npx wrangler d1 create hindaza-project-management-db
-npx wrangler r2 bucket create hindaza-project-management-files
-```
+## تنبيه أمني
 
-ضع رقم `database_id` الناتج داخل `wrangler.jsonc` بدل:
-
-```text
-00000000-0000-0000-0000-000000000000
-```
-
-ثم طبّق الجداول:
-
-```bash
-npm ci
-npm run db:migrate:remote
-```
-
-## ثالثًا: إعداد مفتاح المالك
-
-في إعدادات Worker على Cloudflare أضف Secret باسم:
-
-```text
-SETUP_KEY
-```
-
-استخدم قيمة قوية خاصة بك ولا تضفها إلى GitHub أو أي ملف داخل المشروع.
-
-## رابعًا: النشر
-
-للنشر يدويًا:
-
-```bash
-npm run deploy:cloudflare
-```
-
-وللنشر التلقائي من GitHub استخدم:
-
-- Production branch: `main`
-- Root directory: `/`
-- Build command: فارغ
-- Deploy command: `npm run deploy:cloudflare`
-- Node.js: `22.13` أو أحدث
-
-## خامسًا: استعادة البيانات
-
-بعد إنشاء حساب المالك في التطبيق الجديد:
-
-1. افتح السهم بجانب اسم المالك.
-2. اختر **Restore Backup**.
-3. اختر ملف Backup المحفوظ على جهازك.
-4. انتظر رسالة نجاح الاستعادة؛ سيبقى حساب المالك الحالي وكلمة مروره كما هما.
-
-لا ترفع ملف Backup إلى GitHub لأنه يحتوي بيانات النظام ومعلومات الدخول المشفرة.
+لا ترفع ملفات `.env` أو كلمات المرور أو مفاتيح الوصول أو ملفات النسخ الاحتياطي لبيانات التطبيق. ملف `.gitignore` المرفق يستبعد الملفات المحلية الشائعة، لكن راجع الملفات قبل تنفيذ `git add .`.

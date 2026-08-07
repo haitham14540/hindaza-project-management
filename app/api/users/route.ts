@@ -2,6 +2,7 @@ import { and, count, eq } from "drizzle-orm";
 import { getDb } from "@/db";
 import { projectMembers, tasks, users } from "@/db/schema";
 import { getCurrentUser, isManagement, isOwner, passwordRecord, unauthorizedResponse } from "@/lib/auth";
+import { recordActivity } from "@/lib/activity";
 
 export const dynamic = "force-dynamic";
 
@@ -64,6 +65,7 @@ export async function POST(request: Request) {
     const db = await getDb();
     const credentials = await passwordRecord(temporaryPassword);
     const inserted = await db.insert(users).values({ email, displayName, role: requestedRole, discipline: employeeDiscipline, ...credentials }).returning();
+    await recordActivity(db, currentUser, { action: "created", entityType: "user", entityLabel: `${displayName} · ${email}`, details: `${requestedRole} · ${employeeDiscipline}` });
     return Response.json({ user: safeUser(inserted[0]) }, { status: 201 });
   } catch (error) {
     const unauthorized = unauthorizedResponse(error);
@@ -110,6 +112,7 @@ export async function PATCH(request: Request) {
     if (displayName !== existing[0].displayName) {
       await db.update(tasks).set({ employeeName: displayName }).where(eq(tasks.employeeEmail, email));
     }
+    await recordActivity(db, currentUser, { action: "updated", entityType: "user", entityLabel: `${displayName} · ${email}`, details: `${requestedRole} · ${employeeDiscipline}` });
     return Response.json({ user: safeUser(updated[0]) });
   } catch (error) {
     const unauthorized = unauthorizedResponse(error);
@@ -156,6 +159,7 @@ export async function DELETE(request: Request) {
     }, { status: 409 });
     await db.delete(projectMembers).where(eq(projectMembers.employeeEmail, email));
     await db.delete(users).where(eq(users.email, email));
+    await recordActivity(db, currentUser, { action: "deleted", entityType: "user", entityLabel: `${target[0].displayName} · ${email}`, details: `${target[0].role} · ${target[0].discipline || "No discipline"}` });
     return Response.json({ ok: true });
   } catch (error) {
     const unauthorized = unauthorizedResponse(error);

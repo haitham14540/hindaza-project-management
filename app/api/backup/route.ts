@@ -14,6 +14,7 @@ import {
   users,
 } from "@/db/schema";
 import { createSession, getCurrentUser, unauthorizedResponse } from "@/lib/auth";
+import { recordActivity } from "@/lib/activity";
 
 export const dynamic = "force-dynamic";
 
@@ -276,8 +277,8 @@ function validateBackup(value: unknown): BackupData {
     id: positiveInteger(item, "id"),
     actorEmail: emailField(item, "actorEmail"),
     actorName: stringField(item, "actorName", 120, false),
-    action: enumField(item, "action", ["created", "updated", "deleted", "note_added", "timer_updated", "attachment_added", "attachment_deleted", "converted"] as const),
-    entityType: enumField(item, "entityType", ["task", "issue"] as const),
+    action: enumField(item, "action", ["created", "updated", "deleted", "note_added", "timer_updated", "attachment_added", "attachment_deleted", "converted", "login", "logout", "downloaded", "restored", "read"] as const),
+    entityType: enumField(item, "entityType", ["task", "issue", "project", "user", "account", "backup", "notification"] as const),
     entityId: optionalNullablePositiveInteger(item, "entityId"),
     entityLabel: stringField(item, "entityLabel", 180, false),
     projectCode: stringField(item, "projectCode", 80),
@@ -350,6 +351,7 @@ export async function GET(request: Request) {
     const currentUser = await getCurrentUser(request);
     if (currentUser.role !== "owner") return Response.json({ error: "Owner access required." }, { status: 403 });
     const db = await getDb();
+    await recordActivity(db, currentUser, { action: "downloaded", entityType: "backup", entityLabel: "Full system backup", details: "Owner downloaded a backup" });
     const [userRows, projectRows, membershipRows, taskRows, commentRows, timeRows, notificationRows, issueRows, issueAttachmentRows, issueCategoryRows, activityRows] = await Promise.all([
       db.select().from(users).orderBy(asc(users.createdAt), asc(users.email)),
       db.select().from(projects).orderBy(asc(projects.id)),
@@ -451,6 +453,7 @@ export async function POST(request: Request) {
       return Response.json({ error: "This backup contains too many records for one safe restore. Please contact support before retrying." }, { status: 400 });
     }
     await d1.batch(statements);
+    await recordActivity(db, currentUser, { action: "restored", entityType: "backup", entityLabel: "Full system backup", details: "Owner restored the system from backup" });
     const sessionCookie = await createSession(currentUser.email, request);
     const recordCounts = Object.fromEntries(Object.entries(data).map(([key, value]) => [key, value.length]));
     return Response.json(

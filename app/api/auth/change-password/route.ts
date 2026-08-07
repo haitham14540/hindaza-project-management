@@ -8,6 +8,7 @@ import {
   unauthorizedResponse,
   verifyPassword,
 } from "@/lib/auth";
+import { recordActivity } from "@/lib/activity";
 
 export const dynamic = "force-dynamic";
 
@@ -38,6 +39,7 @@ export async function POST(request: Request) {
     const credentials = await passwordRecord(newPassword);
     await db.delete(sessions).where(eq(sessions.email, currentUser.email));
     await db.update(users).set(credentials).where(eq(users.email, currentUser.email));
+    await recordActivity(db, currentUser, { action: "updated", entityType: "account", entityLabel: currentUser.displayName, details: "Password changed" });
     const cookie = await createSession(currentUser.email, request);
 
     return Response.json(

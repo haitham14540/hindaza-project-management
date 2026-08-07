@@ -71,7 +71,7 @@ async function closeActiveEntries(
 export async function POST(request: Request) {
   try {
     const currentUser = await getCurrentUser(request);
-    if (currentUser.role !== "member") {
+    if (currentUser.role === "owner") {
       return Response.json({ error: "Employee access required." }, { status: 403 });
     }
     const payload = (await request.json()) as Record<string, unknown>;

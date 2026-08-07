@@ -28,7 +28,8 @@ function enumValue<T extends readonly string[]>(value: unknown, values: T, fallb
 }
 
 function issueNumber(projectCode: string, discipline: string, sequence: number) {
-  return `${projectCode}-${disciplineCodes[discipline] || "ARC"}-${String(sequence).padStart(3, "0")}`;
+  const projectPrefix = projectCode.replace(/[^A-Z0-9]/gi, "").slice(0, 4).toUpperCase();
+  return `${projectPrefix}-${disciplineCodes[discipline] || "ARC"}-${String(sequence).padStart(3, "0")}`;
 }
 
 function operationalDate() {
@@ -44,9 +45,16 @@ async function validRaisedBy(db: Awaited<ReturnType<typeof getDb>>, email: strin
   return raisedBy || null;
 }
 
-function canEditIssue(currentUser: Awaited<ReturnType<typeof getCurrentUser>>, issue: typeof projectIssues.$inferSelect) {
+async function isAssignedToProject(db: Awaited<ReturnType<typeof getDb>>, email: string, projectCode: string) {
+  const [row] = await db.select({ id: projectMembers.id }).from(projectMembers)
+    .innerJoin(projects, eq(projectMembers.projectId, projects.id))
+    .where(and(eq(projectMembers.employeeEmail, email), eq(projects.code, projectCode))).limit(1);
+  return Boolean(row);
+}
+
+async function canEditIssue(db: Awaited<ReturnType<typeof getDb>>, currentUser: Awaited<ReturnType<typeof getCurrentUser>>, issue: typeof projectIssues.$inferSelect) {
   return currentUser.role === "owner" ||
-    (currentUser.role === "manager" && Boolean(currentUser.discipline) && currentUser.discipline === issue.discipline) ||
+    (currentUser.role === "manager" && Boolean(currentUser.discipline) && currentUser.discipline === issue.discipline && await isAssignedToProject(db, currentUser.email, issue.projectCode)) ||
     (currentUser.role === "member" && currentUser.email === issue.raisedByEmail);
 }
 
@@ -64,7 +72,7 @@ async function notifyDisciplineManagers(
     .where(and(inArray(users.email, projectEmails), eq(users.discipline, issue.discipline), eq(users.active, true))).limit(1))[0]);
   const reviewers = await db.select({ email: users.email, role: users.role, discipline: users.discipline }).from(users)
     .where(and(inArray(users.role, ["owner", "manager"]), eq(users.active, true)));
-  const recipients = reviewers.filter((reviewer) => reviewer.role === "owner" || (projectHasDiscipline && reviewer.discipline === issue.discipline));
+  const recipients = reviewers.filter((reviewer) => reviewer.role === "owner" || (projectHasDiscipline && reviewer.discipline === issue.discipline && projectEmails.includes(reviewer.email)));
   if (!recipients.length) return;
   await db.insert(notifications).values(recipients.map((recipient) => ({
     recipientEmail: recipient.email,
@@ -104,12 +112,15 @@ async function issueRows() {
 
 export async function GET(request: Request) {
   try {
-    await getCurrentUser(request);
+    const currentUser = await getCurrentUser(request);
     const db = await getDb();
-    const [issues, savedCategories] = await Promise.all([
+    const [allIssues, savedCategories] = await Promise.all([
       issueRows(),
       db.select({ name: issueCategories.name }).from(issueCategories).orderBy(asc(issueCategories.name)),
     ]);
+    const memberships = currentUser.role === "owner" ? [] : await db.select({ code: projects.code }).from(projectMembers).innerJoin(projects, eq(projectMembers.projectId, projects.id)).where(eq(projectMembers.employeeEmail, currentUser.email));
+    const allowedCodes = new Set(memberships.map((row) => row.code));
+    const issues = currentUser.role === "owner" ? allIssues : allIssues.filter((issue) => allowedCodes.has(issue.projectCode));
     const categories = Array.from(new Set(["Coordination", "Design Issue", "Site Issue", "Client Comment", "Clash", ...savedCategories.map((item) => item.name), ...issues.map((issue) => issue.category).filter(Boolean)])).sort((a, b) => a.localeCompare(b));
     return Response.json({ issues, categories });
   } catch (error) {
@@ -137,6 +148,8 @@ export async function POST(request: Request) {
     const db = await getDb();
     const [project] = await db.select({ code: projects.code }).from(projects).where(eq(projects.code, projectCode)).limit(1);
     if (!project) return Response.json({ error: "Select an existing project." }, { status: 400 });
+    if (currentUser.role === "manager" && !(await isAssignedToProject(db, currentUser.email, projectCode))) return Response.json({ error: "Managers can edit issues only within assigned projects." }, { status: 403 });
+    if (currentUser.role !== "owner" && !(await isAssignedToProject(db, currentUser.email, projectCode))) return Response.json({ error: "You can create issues only in projects you are assigned to." }, { status: 403 });
     const [last] = await db.select({ sequence: projectIssues.sequence })
       .from(projectIssues)
       .where(and(eq(projectIssues.projectCode, projectCode), eq(projectIssues.discipline, discipline)))
@@ -185,7 +198,7 @@ export async function PATCH(request: Request) {
     const db = await getDb();
     const [existing] = await db.select().from(projectIssues).where(eq(projectIssues.id, id)).limit(1);
     if (!existing) return Response.json({ error: "Project issue not found." }, { status: 404 });
-    if (!canEditIssue(currentUser, existing)) {
+    if (!(await canEditIssue(db, currentUser, existing))) {
       const comments = cleanText(payload.comments, 4_000);
       const updated = await db.update(projectIssues).set({ comments, updatedAt: sql`CURRENT_TIMESTAMP` })
         .where(eq(projectIssues.id, id)).returning();
@@ -206,6 +219,7 @@ export async function PATCH(request: Request) {
     const discipline = management && !coreLocked ? enumValue(payload.discipline, disciplines, existing.discipline === "Manager" ? "Architecture" : existing.discipline as (typeof disciplines)[number]) : existing.discipline as (typeof disciplines)[number];
     const [project] = await db.select({ code: projects.code }).from(projects).where(eq(projects.code, projectCode)).limit(1);
     if (!project) return Response.json({ error: "Select an existing project." }, { status: 400 });
+    if (currentUser.role === "manager" && !(await isAssignedToProject(db, currentUser.email, projectCode))) return Response.json({ error: "Managers can edit issues only within assigned projects." }, { status: 403 });
     const raisedByEmail = management && !coreLocked ? cleanText(payload.raisedByEmail, 180).toLowerCase() || existing.raisedByEmail : existing.raisedByEmail;
     const raisedBy = management && !coreLocked ? await validRaisedBy(db, raisedByEmail, discipline, projectCode) : { email: existing.raisedByEmail, displayName: existing.raisedByName };
     if (!raisedBy) return Response.json({ error: "Select an active project team member from the same discipline for Raised by." }, { status: 400 });
@@ -262,7 +276,7 @@ export async function DELETE(request: Request) {
     const db = await getDb();
     const [existing] = await db.select().from(projectIssues).where(eq(projectIssues.id, id)).limit(1);
     if (!existing) return Response.json({ error: "Project issue not found." }, { status: 404 });
-    if (currentUser.role === "manager" && currentUser.discipline !== existing.discipline) {
+    if (currentUser.role === "manager" && (currentUser.discipline !== existing.discipline || !(await isAssignedToProject(db, currentUser.email, existing.projectCode)))) {
       return Response.json({ error: "Managers can delete issues only in their discipline." }, { status: 403 });
     }
     const attachments = await db.select().from(issueAttachments).where(eq(issueAttachments.issueId, id));
