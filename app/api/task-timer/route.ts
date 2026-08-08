@@ -1,6 +1,6 @@
 import { and, asc, eq, inArray, isNull } from "drizzle-orm";
 import { getDb } from "@/db";
-import { notifications, projectMembers, projects, taskTimeEntries, tasks, users } from "@/db/schema";
+import { notifications, projectMembers, projects, taskSubtasks, taskTimeEntries, tasks, users } from "@/db/schema";
 import { getCurrentUser, unauthorizedResponse } from "@/lib/auth";
 import { recordActivity } from "@/lib/activity";
 
@@ -106,8 +106,16 @@ export async function POST(request: Request) {
     if (!task || task.employeeEmail !== currentUser.email) {
       return Response.json({ error: "This task is not assigned to you." }, { status: 403 });
     }
+    const submitForReview = task.visibility === "team" || task.submittedToManager;
     if (action === "start" && task.managerCheck === "approved") {
       return Response.json({ error: "An approved task must be reopened by the manager before work can resume." }, { status: 409 });
+    }
+    if (action === "finish") {
+      const openSubtasks = await db.select({ id: taskSubtasks.id }).from(taskSubtasks)
+        .where(and(eq(taskSubtasks.taskId, taskId), eq(taskSubtasks.completed, false)));
+      if (openSubtasks.length) {
+        return Response.json({ error: `Complete all subtasks before ${submitForReview ? "submitting" : "finishing"} this task (${openSubtasks.length} remaining).` }, { status: 409 });
+      }
     }
 
     const now = new Date().toISOString();
@@ -154,11 +162,11 @@ export async function POST(request: Request) {
       const finished = await refreshTaskTime(db, taskId, "done");
       const reviewed = await db
         .update(tasks)
-        .set({ managerCheck: "pending", updatedAt: now })
+        .set({ managerCheck: submitForReview ? "pending" : "new", updatedAt: now })
         .where(eq(tasks.id, taskId))
         .returning();
       affectedTasks.push(reviewed[0] || finished);
-      if (task.visibility === "team" || task.submittedToManager) {
+      if (submitForReview) {
         const managers = (await db.select({ email: users.email, role: users.role, discipline: users.discipline }).from(users).where(and(inArray(users.role, ["owner", "manager"]), eq(users.active, true))))
           .filter((manager) => manager.role === "owner" || (Boolean(currentUser.discipline) && manager.discipline === currentUser.discipline));
         if (managers.length) {
@@ -182,7 +190,7 @@ export async function POST(request: Request) {
       entries.push(...await db.select().from(taskTimeEntries).where(eq(taskTimeEntries.taskId, id)).orderBy(asc(taskTimeEntries.startedAt), asc(taskTimeEntries.id)));
     }
     await recordActivity(db, currentUser, { action: "timer_updated", entityType: "task", entityId: taskId, entityLabel: task.title, projectCode: task.project, details: `Timer action: ${action}` });
-    return Response.json({ tasks: freshTasks, timeEntries: entries });
+    return Response.json({ tasks: freshTasks, timeEntries: entries, submittedForReview: action === "finish" && submitForReview });
   } catch (error) {
     const unauthorized = unauthorizedResponse(error);
     if (unauthorized) return unauthorized;

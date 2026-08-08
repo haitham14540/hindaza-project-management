@@ -1,0 +1,107 @@
+import { and, eq, inArray, sql } from "drizzle-orm";
+import { getBucket, getDb } from "@/db";
+import { notifications, taskAttachments, taskSubtasks, tasks, users } from "@/db/schema";
+import { getCurrentUser, unauthorizedResponse } from "@/lib/auth";
+import { recordActivity } from "@/lib/activity";
+import { taskForCollaboration } from "@/lib/task-access";
+
+export const dynamic = "force-dynamic";
+
+function title(value: unknown) {
+  return typeof value === "string" ? value.trim().slice(0, 240) : "";
+}
+
+async function notifyCompletion(db: Awaited<ReturnType<typeof getDb>>, task: typeof tasks.$inferSelect, actor: Awaited<ReturnType<typeof getCurrentUser>>, subtaskTitle: string) {
+  if (task.visibility === "private" && !task.submittedToManager) return false;
+  const reviewers = await db.select({ email: users.email, role: users.role, discipline: users.discipline })
+    .from(users)
+    .where(and(inArray(users.role, ["owner", "manager"]), eq(users.active, true)));
+  const recipients = reviewers.filter((reviewer) => reviewer.email !== actor.email && (
+    reviewer.role === "owner" || reviewer.discipline === actor.discipline
+  ));
+  if (!recipients.length) return false;
+  await db.insert(notifications).values(recipients.map((reviewer) => ({
+    recipientEmail: reviewer.email,
+    type: "subtask_completed" as const,
+    taskId: task.id,
+    title: "Subtask completed",
+    message: `${subtaskTitle} · ${task.title} · ${actor.displayName}`,
+  })));
+  return true;
+}
+
+export async function POST(request: Request) {
+  try {
+    const currentUser = await getCurrentUser(request);
+    const payload = await request.json() as Record<string, unknown>;
+    const taskId = Number(payload.taskId);
+    const subtaskTitle = title(payload.title);
+    if (!Number.isInteger(taskId) || !subtaskTitle) return Response.json({ error: "Enter a subtask title." }, { status: 400 });
+    const db = await getDb();
+    const task = await taskForCollaboration(db, currentUser, taskId);
+    if (!task) return Response.json({ error: "You cannot add subtasks to this task." }, { status: 403 });
+    const [subtask] = await db.insert(taskSubtasks).values({ taskId, title: subtaskTitle, createdBy: currentUser.email }).returning();
+    await recordActivity(db, currentUser, { action: "created", entityType: "task", entityId: task.id, entityLabel: task.title, projectCode: task.project, details: `Subtask added: ${subtaskTitle}` });
+    return Response.json({ subtask }, { status: 201 });
+  } catch (error) {
+    const unauthorized = unauthorizedResponse(error);
+    if (unauthorized) return unauthorized;
+    return Response.json({ error: error instanceof Error ? error.message : "Unable to add subtask." }, { status: 500 });
+  }
+}
+
+export async function PATCH(request: Request) {
+  try {
+    const currentUser = await getCurrentUser(request);
+    const payload = await request.json() as Record<string, unknown>;
+    const id = Number(payload.id);
+    if (!Number.isInteger(id)) return Response.json({ error: "Invalid subtask id." }, { status: 400 });
+    const db = await getDb();
+    const [existing] = await db.select().from(taskSubtasks).where(eq(taskSubtasks.id, id)).limit(1);
+    if (!existing) return Response.json({ error: "Subtask not found." }, { status: 404 });
+    const task = await taskForCollaboration(db, currentUser, existing.taskId);
+    if (!task) return Response.json({ error: "You cannot update this subtask." }, { status: 403 });
+    const completed = typeof payload.completed === "boolean" ? payload.completed : existing.completed;
+    const nextTitle = payload.title === undefined ? existing.title : title(payload.title);
+    if (!nextTitle) return Response.json({ error: "Enter a subtask title." }, { status: 400 });
+    const [subtask] = await db.update(taskSubtasks).set({
+      title: nextTitle,
+      completed,
+      completedAt: completed ? sql`CURRENT_TIMESTAMP` : null,
+      completedBy: completed ? currentUser.email : "",
+      updatedAt: sql`CURRENT_TIMESTAMP`,
+    }).where(eq(taskSubtasks.id, id)).returning();
+    const managementNotified = completed && !existing.completed
+      ? await notifyCompletion(db, task, currentUser, nextTitle)
+      : false;
+    await recordActivity(db, currentUser, { action: "updated", entityType: "task", entityId: task.id, entityLabel: task.title, projectCode: task.project, details: `${completed ? "Subtask completed" : "Subtask updated"}: ${nextTitle}` });
+    return Response.json({ subtask, managementNotified });
+  } catch (error) {
+    const unauthorized = unauthorizedResponse(error);
+    if (unauthorized) return unauthorized;
+    return Response.json({ error: error instanceof Error ? error.message : "Unable to update subtask." }, { status: 500 });
+  }
+}
+
+export async function DELETE(request: Request) {
+  try {
+    const currentUser = await getCurrentUser(request);
+    const id = Number(new URL(request.url).searchParams.get("id"));
+    if (!Number.isInteger(id)) return Response.json({ error: "Invalid subtask id." }, { status: 400 });
+    const db = await getDb();
+    const [existing] = await db.select().from(taskSubtasks).where(eq(taskSubtasks.id, id)).limit(1);
+    if (!existing) return Response.json({ error: "Subtask not found." }, { status: 404 });
+    const task = await taskForCollaboration(db, currentUser, existing.taskId);
+    if (!task) return Response.json({ error: "You cannot delete this subtask." }, { status: 403 });
+    const attachments = await db.select().from(taskAttachments).where(eq(taskAttachments.subtaskId, id));
+    if (attachments.length) await (await getBucket()).delete(attachments.map((attachment) => attachment.objectKey));
+    await db.delete(taskAttachments).where(eq(taskAttachments.subtaskId, id));
+    await db.delete(taskSubtasks).where(eq(taskSubtasks.id, id));
+    await recordActivity(db, currentUser, { action: "deleted", entityType: "task", entityId: task.id, entityLabel: task.title, projectCode: task.project, details: `Subtask deleted: ${existing.title}` });
+    return Response.json({ ok: true });
+  } catch (error) {
+    const unauthorized = unauthorizedResponse(error);
+    if (unauthorized) return unauthorized;
+    return Response.json({ error: error instanceof Error ? error.message : "Unable to delete subtask." }, { status: 500 });
+  }
+}

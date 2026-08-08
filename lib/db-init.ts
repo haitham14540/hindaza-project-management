@@ -80,6 +80,32 @@ export async function ensureDatabase() {
         )
       `),
       d1.prepare(`
+        CREATE TABLE IF NOT EXISTS task_subtasks (
+          id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+          task_id INTEGER NOT NULL,
+          title TEXT NOT NULL,
+          completed INTEGER DEFAULT 0 NOT NULL,
+          completed_at TEXT,
+          completed_by TEXT DEFAULT '' NOT NULL,
+          created_by TEXT NOT NULL,
+          created_at TEXT DEFAULT CURRENT_TIMESTAMP NOT NULL,
+          updated_at TEXT DEFAULT CURRENT_TIMESTAMP NOT NULL
+        )
+      `),
+      d1.prepare(`
+        CREATE TABLE IF NOT EXISTS task_attachments (
+          id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+          task_id INTEGER NOT NULL,
+          subtask_id INTEGER,
+          object_key TEXT NOT NULL UNIQUE,
+          file_name TEXT NOT NULL,
+          content_type TEXT NOT NULL,
+          size_bytes INTEGER NOT NULL,
+          uploaded_by TEXT NOT NULL,
+          created_at TEXT DEFAULT CURRENT_TIMESTAMP NOT NULL
+        )
+      `),
+      d1.prepare(`
         CREATE TABLE IF NOT EXISTS project_members (
           id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
           project_id INTEGER NOT NULL,
@@ -131,6 +157,11 @@ export async function ensureDatabase() {
       d1.prepare(
         "CREATE INDEX IF NOT EXISTS task_comments_created_idx ON task_comments (created_at)",
       ),
+      d1.prepare("CREATE INDEX IF NOT EXISTS task_subtasks_task_idx ON task_subtasks (task_id)"),
+      d1.prepare("CREATE INDEX IF NOT EXISTS task_subtasks_completed_idx ON task_subtasks (task_id, completed)"),
+      d1.prepare("CREATE INDEX IF NOT EXISTS task_attachments_task_idx ON task_attachments (task_id)"),
+      d1.prepare("CREATE INDEX IF NOT EXISTS task_attachments_subtask_idx ON task_attachments (subtask_id)"),
+      d1.prepare("CREATE INDEX IF NOT EXISTS task_attachments_created_idx ON task_attachments (created_at)"),
       d1.prepare(
         "CREATE UNIQUE INDEX IF NOT EXISTS project_members_project_employee_idx ON project_members (project_id, employee_email)",
       ),

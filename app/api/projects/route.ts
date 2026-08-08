@@ -6,7 +6,7 @@ import { recordActivity } from "@/lib/activity";
 
 export const dynamic = "force-dynamic";
 
-const statuses = ["active", "on_hold", "completed"] as const;
+const statuses = ["active", "on_hold", "completed", "archived"] as const;
 
 function text(value: unknown, max = 180) {
   return typeof value === "string" ? value.trim().slice(0, max) : "";

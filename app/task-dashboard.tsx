@@ -20,7 +20,7 @@ type Project = {
   code: string;
   name: string;
   client: string;
-  status: "active" | "on_hold" | "completed";
+  status: "active" | "on_hold" | "completed" | "archived";
   startDate: string;
   targetDate: string;
   createdAt: string;
@@ -69,6 +69,32 @@ type TaskComment = {
   createdAt: string;
 };
 
+type TaskSubtask = {
+  id: number;
+  taskId: number;
+  title: string;
+  completed: boolean;
+  completedAt: string | null;
+  completedBy: string;
+  createdBy: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+type TaskAttachment = {
+  id: number;
+  taskId: number;
+  subtaskId: number | null;
+  fileName: string;
+  contentType: string;
+  sizeBytes: number;
+  uploadedBy: string;
+  createdAt: string;
+};
+
+type DraftSubtask = { id: string; title: string };
+type AttachmentUploadProgress = { fileName: string; subtaskId: number | null; percent: number };
+
 type UserRemovalWarning = {
   employeeName: string;
   taskCount: number;
@@ -84,7 +110,7 @@ type ProjectRemovalWarning = {
 type Notification = {
   id: number;
   recipientEmail: string;
-  type: "task_assigned" | "review_updated" | "private_task_submitted" | "task_ready_for_review" | "issue_created" | "issue_updated";
+  type: "task_assigned" | "review_updated" | "private_task_submitted" | "task_ready_for_review" | "subtask_completed" | "issue_created" | "issue_updated";
   taskId: number | null;
   issueId: number | null;
   title: string;
@@ -148,6 +174,8 @@ type WorkspaceData = {
   projects: Project[];
   comments: TaskComment[];
   timeEntries: TaskTimeEntry[];
+  subtasks: TaskSubtask[];
+  taskAttachments: TaskAttachment[];
   notifications: Notification[];
 };
 
@@ -218,6 +246,7 @@ const projectStatusLabel: Record<Project["status"], string> = {
   active: "Active · نشط",
   on_hold: "On hold · معلّق",
   completed: "Completed · مكتمل",
+  archived: "Archived · مؤرشف",
 };
 
 const disciplines: Discipline[] = ["Manager", "Architecture", "ID", "Structure", "Mechanical", "Electrical", "Infrastructure"];
@@ -362,6 +391,8 @@ export default function TaskDashboard() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [comments, setComments] = useState<TaskComment[]>([]);
   const [timeEntries, setTimeEntries] = useState<TaskTimeEntry[]>([]);
+  const [subtasks, setSubtasks] = useState<TaskSubtask[]>([]);
+  const [taskAttachments, setTaskAttachments] = useState<TaskAttachment[]>([]);
   const [users, setUsers] = useState<User[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
   const [notifications, setNotifications] = useState<Notification[]>([]);
@@ -388,6 +419,11 @@ export default function TaskDashboard() {
   const [passwordForm, setPasswordForm] = useState<PasswordForm>({ currentPassword: "", newPassword: "", confirmPassword: "" });
   const [commentDraft, setCommentDraft] = useState("");
   const [savingComment, setSavingComment] = useState(false);
+  const [subtaskDraft, setSubtaskDraft] = useState("");
+  const [draftSubtasks, setDraftSubtasks] = useState<DraftSubtask[]>([]);
+  const [subtaskBusy, setSubtaskBusy] = useState(false);
+  const [taskAttachmentBusy, setTaskAttachmentBusy] = useState(false);
+  const [taskAttachmentProgress, setTaskAttachmentProgress] = useState<AttachmentUploadProgress | null>(null);
   const [savingTimer, setSavingTimer] = useState(false);
   const [backupBusy, setBackupBusy] = useState<"download" | "restore" | null>(null);
   const [profileImageBusy, setProfileImageBusy] = useState(false);
@@ -407,7 +443,7 @@ export default function TaskDashboard() {
   const [reviewFilter, setReviewFilter] = useState("all");
   const [teamDisciplineFilter, setTeamDisciplineFilter] = useState("all");
   const [teamRoleFilter, setTeamRoleFilter] = useState("all");
-  const [projectStatusFilter, setProjectStatusFilter] = useState("all");
+  const [projectStatusFilter, setProjectStatusFilter] = useState("active");
   const [projectView, setProjectView] = useState<DirectoryView>("table");
   const [teamView, setTeamView] = useState<DirectoryView>("table");
   const [reportPeriod, setReportPeriod] = useState<"week" | "month">("week");
@@ -426,6 +462,8 @@ export default function TaskDashboard() {
     setTasks(data.tasks || []);
     setComments(data.comments || []);
     setTimeEntries(data.timeEntries || []);
+    setSubtasks(data.subtasks || []);
+    setTaskAttachments(data.taskAttachments || []);
     setUsers(data.users || []);
     setProjects(data.projects || []);
     setNotifications(data.notifications || []);
@@ -680,6 +718,9 @@ export default function TaskDashboard() {
     setSelectedTaskId(null);
     setTaskForm(blankTask(currentUser || undefined));
     setCommentDraft("");
+    setSubtaskDraft("");
+    setDraftSubtasks([]);
+    setTaskAttachmentProgress(null);
     setTaskDrawerOpen(true);
   }
 
@@ -687,9 +728,12 @@ export default function TaskDashboard() {
     if (!currentUser || currentUser.role !== "member") return;
     setSelectedTaskId(null);
     const form = blankTask(currentUser, "private");
-    form.project = projects[0]?.code || "PERSONAL";
+    form.project = projects.find((project) => project.status === "active")?.code || "PERSONAL";
     setTaskForm(form);
     setCommentDraft("");
+    setSubtaskDraft("");
+    setDraftSubtasks([]);
+    setTaskAttachmentProgress(null);
     setTaskDrawerOpen(true);
   }
 
@@ -711,6 +755,9 @@ export default function TaskDashboard() {
       visibility: task.visibility,
     });
     setCommentDraft("");
+    setSubtaskDraft("");
+    setDraftSubtasks([]);
+    setTaskAttachmentProgress(null);
     setTaskDrawerOpen(true);
   }
 
@@ -807,11 +854,12 @@ export default function TaskDashboard() {
       const response = await fetch("/api/tasks", {
         method: selectedTaskId ? "PATCH" : "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(selectedTaskId ? { ...taskForm, id: selectedTaskId } : taskForm),
+        body: JSON.stringify(selectedTaskId ? { ...taskForm, id: selectedTaskId } : { ...taskForm, subtasks: draftSubtasks.map((subtask) => subtask.title) }),
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || "تعذر حفظ المهمة");
       setTasks((current) => selectedTaskId ? current.map((task) => task.id === selectedTaskId ? data.task : task) : [data.task, ...current]);
+      if (!selectedTaskId && Array.isArray(data.subtasks)) setSubtasks((current) => [...current, ...data.subtasks]);
       if (selectedTaskId) openTask(data.task);
       else setTaskDrawerOpen(false);
       setToast(selectedTaskId ? "تم تحديث المهمة بنجاح" : "تمت إضافة المهمة بنجاح");
@@ -840,6 +888,105 @@ export default function TaskDashboard() {
     }
   }
 
+  async function addSubtask() {
+    const title = subtaskDraft.trim();
+    if (!title) return;
+    if (!selectedTaskId) {
+      setDraftSubtasks((current) => [...current, { id: crypto.randomUUID(), title }]);
+      setSubtaskDraft("");
+      return;
+    }
+    setSubtaskBusy(true); setError("");
+    try {
+      const response = await fetch("/api/task-subtasks", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ taskId: selectedTaskId, title }) });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "Unable to add subtask.");
+      setSubtasks((current) => [...current, data.subtask]);
+      setSubtaskDraft("");
+      setToast("Subtask added · تمت إضافة المهمة الفرعية");
+    } catch (subtaskError) { setError(subtaskError instanceof Error ? subtaskError.message : "Unable to add subtask."); }
+    finally { setSubtaskBusy(false); }
+  }
+
+  function deleteDraftSubtask(id: string) {
+    setDraftSubtasks((current) => current.filter((subtask) => subtask.id !== id));
+  }
+
+  async function toggleSubtask(subtask: TaskSubtask) {
+    setSubtaskBusy(true); setError("");
+    try {
+      const response = await fetch("/api/task-subtasks", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: subtask.id, completed: !subtask.completed }) });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "Unable to update subtask.");
+      setSubtasks((current) => current.map((item) => item.id === data.subtask.id ? data.subtask : item));
+      setToast(data.subtask.completed
+        ? data.managementNotified
+          ? "Subtask closed and management notified · أُغلقت المهمة الفرعية وتم إشعار المسؤول"
+          : "Subtask closed · أُغلقت المهمة الفرعية"
+        : "Subtask reopened · أعيد فتح المهمة الفرعية");
+    } catch (subtaskError) { setError(subtaskError instanceof Error ? subtaskError.message : "Unable to update subtask."); }
+    finally { setSubtaskBusy(false); }
+  }
+
+  async function deleteSubtask(subtask: TaskSubtask) {
+    const approved = await confirm({ title: "Delete subtask?", titleAr: "حذف المهمة الفرعية؟", message: "The subtask and its attachments will be permanently removed.", messageAr: "سيتم حذف المهمة الفرعية ومرفقاتها نهائيًا." });
+    if (!approved) return;
+    setSubtaskBusy(true); setError("");
+    try {
+      const response = await fetch(`/api/task-subtasks?id=${subtask.id}`, { method: "DELETE" });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "Unable to delete subtask.");
+      setSubtasks((current) => current.filter((item) => item.id !== subtask.id));
+      setTaskAttachments((current) => current.filter((attachment) => attachment.subtaskId !== subtask.id));
+      setToast("Subtask deleted · تم حذف المهمة الفرعية");
+    } catch (subtaskError) { setError(subtaskError instanceof Error ? subtaskError.message : "Unable to delete subtask."); }
+    finally { setSubtaskBusy(false); }
+  }
+
+  async function uploadTaskAttachment(file: File, subtaskId: number | null) {
+    if (!selectedTaskId) return;
+    if (file.size > 25 * 1024 * 1024) { setError("Each attachment must not exceed 25 MB."); return; }
+    setTaskAttachmentBusy(true); setTaskAttachmentProgress({ fileName: file.name, subtaskId, percent: 0 }); setError("");
+    let uploadId = "";
+    try {
+      const startResponse = await fetch("/api/task-attachments?action=start", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ taskId: selectedTaskId, subtaskId, fileName: file.name, contentType: file.type || "application/octet-stream", sizeBytes: file.size }) });
+      const started = await startResponse.json();
+      if (!startResponse.ok) throw new Error(started.error || "Unable to start attachment upload.");
+      uploadId = started.uploadId;
+      const chunkBytes = Number(started.chunkBytes);
+      const chunkCount = Number(started.chunkCount);
+      for (let index = 0; index < chunkCount; index += 1) {
+        const chunk = file.slice(index * chunkBytes, Math.min(file.size, (index + 1) * chunkBytes));
+        const response = await fetch(`/api/task-attachments?action=chunk&uploadId=${encodeURIComponent(uploadId)}&index=${index}`, { method: "POST", body: chunk });
+        if (!response.ok) { const data = await response.json().catch(() => ({})); throw new Error(data.error || "Unable to upload attachment part."); }
+        setTaskAttachmentProgress({ fileName: file.name, subtaskId, percent: Math.min(95, Math.round(((index + 1) / chunkCount) * 95)) });
+      }
+      const completeResponse = await fetch("/api/task-attachments?action=complete", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ uploadId }) });
+      const completed = await completeResponse.json();
+      if (!completeResponse.ok) throw new Error(completed.error || "Unable to finish attachment upload.");
+      setTaskAttachments((current) => [...current, completed.attachment]);
+      setTaskAttachmentProgress({ fileName: file.name, subtaskId, percent: 100 });
+      setToast("Attachment uploaded · تم رفع المرفق");
+    } catch (attachmentError) {
+      if (uploadId) void fetch("/api/task-attachments?action=abort", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ uploadId }) });
+      setError(attachmentError instanceof Error ? attachmentError.message : "Unable to upload attachment.");
+    } finally { window.setTimeout(() => setTaskAttachmentProgress(null), 500); setTaskAttachmentBusy(false); }
+  }
+
+  async function deleteTaskAttachment(attachment: TaskAttachment) {
+    const approved = await confirm({ title: "Delete attachment?", titleAr: "حذف المرفق؟", message: "This file will be permanently removed.", messageAr: "سيتم حذف هذا الملف نهائيًا." });
+    if (!approved) return;
+    setTaskAttachmentBusy(true); setError("");
+    try {
+      const response = await fetch(`/api/task-attachments?id=${attachment.id}`, { method: "DELETE" });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "Unable to delete attachment.");
+      setTaskAttachments((current) => current.filter((item) => item.id !== attachment.id));
+      setToast("Attachment deleted · تم حذف المرفق");
+    } catch (attachmentError) { setError(attachmentError instanceof Error ? attachmentError.message : "Unable to delete attachment."); }
+    finally { setTaskAttachmentBusy(false); }
+  }
+
   function mergeTimerResponse(data: { tasks?: Task[]; timeEntries?: TaskTimeEntry[] }) {
     const changedTasks = data.tasks || [];
     const changedIds = new Set(changedTasks.map((task) => task.id));
@@ -864,7 +1011,13 @@ export default function TaskDashboard() {
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || "Unable to update timer.");
       mergeTimerResponse(data);
-      setToast(action === "start" ? "بدأ تسجيل وقت المهمة" : action === "pause" ? "تم إيقاف الوقت مؤقتًا" : "اكتملت المهمة وأُرسلت للمراجعة");
+      setToast(action === "start"
+        ? "بدأ تسجيل وقت المهمة"
+        : action === "pause"
+          ? "تم إيقاف الوقت مؤقتًا"
+          : data.submittedForReview
+            ? "اكتملت المهمة وأُرسلت للمراجعة"
+            : "اكتملت المهمة الخاصة");
     } catch (timerError) {
       setError(timerError instanceof Error ? timerError.message : "تعذر تحديث وقت المهمة");
     } finally {
@@ -936,6 +1089,8 @@ export default function TaskDashboard() {
       setTasks((current) => current.filter((task) => task.id !== selectedTaskId));
       setComments((current) => current.filter((comment) => comment.taskId !== selectedTaskId));
       setTimeEntries((current) => current.filter((entry) => entry.taskId !== selectedTaskId));
+      setSubtasks((current) => current.filter((subtask) => subtask.taskId !== selectedTaskId));
+      setTaskAttachments((current) => current.filter((attachment) => attachment.taskId !== selectedTaskId));
       setTaskDrawerOpen(false); setToast("تم حذف المهمة");
     } catch (deleteError) { setError(deleteError instanceof Error ? deleteError.message : "تعذر حذف المهمة"); }
     finally { setSaving(false); }
@@ -1374,7 +1529,7 @@ export default function TaskDashboard() {
             <article className="stat-card green"><span>Approved · معتمدة</span><strong>{stats.approved}</strong><small>تم اعتمادها من المسؤول</small></article>
             <article className="stat-card amber"><span>Returned · مُعادة</span><strong>{stats.returned}</strong><small>تحتاج إجراء من الموظف</small></article>
           </section>
-          <TaskTable loading={loading} tasks={filteredTasks} filteredCount={filteredTasks.length} tab={tab} employees={employeeOptions} projects={projectCodes} search={search} employeeFilter={employeeFilter} projectFilter={projectFilter} statusFilter={statusFilter} reviewFilter={reviewFilter} showEmployeeFilter={currentUser?.role !== "member"} setSearch={setSearch} setEmployeeFilter={setEmployeeFilter} setProjectFilter={setProjectFilter} setStatusFilter={setStatusFilter} setReviewFilter={setReviewFilter} openTask={openTask} showAll={() => setTab("tasks")} timeEntries={timeEntries} clock={clock} commentCounts={taskCommentCounts} />
+          <TaskTable loading={loading} tasks={filteredTasks} filteredCount={filteredTasks.length} tab={tab} employees={employeeOptions} projects={projectCodes} search={search} employeeFilter={employeeFilter} projectFilter={projectFilter} statusFilter={statusFilter} reviewFilter={reviewFilter} showEmployeeFilter={currentUser?.role !== "member"} setSearch={setSearch} setEmployeeFilter={setEmployeeFilter} setProjectFilter={setProjectFilter} setStatusFilter={setStatusFilter} setReviewFilter={setReviewFilter} openTask={openTask} showAll={() => setTab("tasks")} timeEntries={timeEntries} clock={clock} commentCounts={taskCommentCounts} subtasks={subtasks} />
         </>}
 
         {tab === "rfi" && <section className="panel module-placeholder">
@@ -1441,7 +1596,7 @@ export default function TaskDashboard() {
       {projectRemovalWarning && <div className="drawer-layer dependency-warning-layer" role="dialog" aria-modal="true" aria-label="Project deletion blocked"><button className="drawer-backdrop" onClick={() => setProjectRemovalWarning(null)} aria-label="Close warning" /><section className="dependency-warning-dialog project-dependency-warning"><div className="dependency-warning-icon">!</div><h2>Project cannot be deleted</h2><h3>لا يمكن حذف المشروع حاليًا</h3><p><strong>{projectRemovalWarning.projectCode} · {projectRemovalWarning.projectName}</strong> still contains linked records. Remove all items below, then try deleting the project again.</p><p dir="rtl">يحتوي المشروع على بيانات مرتبطة. يجب إزالة جميع العناصر التالية أولًا ثم إعادة محاولة الحذف.</p><div className="project-dependency-counts"><div><strong>{projectRemovalWarning.dependencies.tasks}</strong><span>Tasks</span><small>مهام</small></div><div><strong>{projectRemovalWarning.dependencies.issues}</strong><span>Issues</span><small>مشاكل</small></div><div><strong>{projectRemovalWarning.dependencies.team}</strong><span>Team</span><small>أعضاء الفريق</small></div><div><strong>{projectRemovalWarning.dependencies.rfi}</strong><span>RFI</span><small>طلبات معلومات</small></div></div><div className="project-dependency-note">Only an empty project can be deleted · يمكن حذف المشروع فقط عندما يكون فارغًا بالكامل</div><button className="secondary-button dependency-close" onClick={() => setProjectRemovalWarning(null)}><ButtonLabel en="Close" ar="إغلاق" /></button></section></div>}
 
       {userRemovalWarning && <div className="drawer-layer dependency-warning-layer" role="dialog" aria-modal="true" aria-label="Employee assigned tasks warning"><button className="drawer-backdrop" onClick={() => setUserRemovalWarning(null)} aria-label="Close warning" /><section className="dependency-warning-dialog"><div className="dependency-warning-icon">!</div><h2>Employee has assigned tasks</h2><h3>لدى الموظف مهام موكلة إليه</h3><p><strong>{userRemovalWarning.employeeName}</strong> has {userRemovalWarning.taskCount} assigned task(s). Reassign these tasks before deleting the employee.</p><p dir="rtl">يجب تغيير الموظف المسؤول عن هذه المهام قبل حذف الموظف من النظام.</p><div className="dependency-project-links">{userRemovalWarning.projects.map((item) => <button key={item.project} onClick={() => reviewEmployeeTasks(userRemovalWarning.employeeName, item.project)}><span>↗</span><strong>Open {item.project} tasks</strong><small>{item.taskCount} tasks</small></button>)}</div><button className="secondary-button dependency-close" onClick={() => setUserRemovalWarning(null)}><ButtonLabel en="Cancel" ar="إلغاء" /></button></section></div>}
-      {taskDrawerOpen && <TaskDrawer selectedId={selectedTaskId} form={taskForm} setOpen={setTaskDrawerOpen} saveTask={saveTask} deleteTask={deleteTask} saving={saving} currentUser={currentUser} users={users} projects={projects} updateForm={updateTaskForm} comments={comments.filter((comment) => comment.taskId === selectedTaskId)} commentDraft={commentDraft} setCommentDraft={setCommentDraft} addComment={addComment} savingComment={savingComment} task={tasks.find((task) => task.id === selectedTaskId) || null} timeEntries={timeEntries.filter((entry) => entry.taskId === selectedTaskId)} clock={clock} updateTimer={updateTimer} updateWorkSession={updateWorkSession} deleteWorkSession={deleteWorkSession} savingTimer={savingTimer} submitPrivateTask={submitPrivateTask} />}
+      {taskDrawerOpen && <TaskDrawer selectedId={selectedTaskId} form={taskForm} setOpen={setTaskDrawerOpen} saveTask={saveTask} deleteTask={deleteTask} saving={saving} currentUser={currentUser} users={users} projects={projects} updateForm={updateTaskForm} comments={comments.filter((comment) => comment.taskId === selectedTaskId)} commentDraft={commentDraft} setCommentDraft={setCommentDraft} addComment={addComment} savingComment={savingComment} task={tasks.find((task) => task.id === selectedTaskId) || null} timeEntries={timeEntries.filter((entry) => entry.taskId === selectedTaskId)} clock={clock} updateTimer={updateTimer} updateWorkSession={updateWorkSession} deleteWorkSession={deleteWorkSession} savingTimer={savingTimer} submitPrivateTask={submitPrivateTask} subtasks={subtasks.filter((subtask) => subtask.taskId === selectedTaskId)} draftSubtasks={draftSubtasks} deleteDraftSubtask={deleteDraftSubtask} subtaskDraft={subtaskDraft} setSubtaskDraft={setSubtaskDraft} addSubtask={addSubtask} toggleSubtask={toggleSubtask} deleteSubtask={deleteSubtask} subtaskBusy={subtaskBusy} attachments={taskAttachments.filter((attachment) => attachment.taskId === selectedTaskId)} uploadAttachment={uploadTaskAttachment} deleteAttachment={deleteTaskAttachment} attachmentBusy={taskAttachmentBusy} attachmentProgress={taskAttachmentProgress} />}
       {projectDrawerOpen && <ProjectDrawer selectedId={selectedProjectId} form={projectForm} setForm={setProjectForm} setOpen={setProjectDrawerOpen} saveProject={saveProject} deleteProject={deleteProject} saving={saving} users={users} tasks={tasks} currentUser={currentUser} projectCode={projects.find((project) => project.id === selectedProjectId)?.code || projectForm.code} onResolveMemberTasks={reviewMemberProjectTasks} />}
       {userDrawerOpen && <UserDrawer selectedEmail={selectedUserEmail} form={userForm} setForm={setUserForm} setOpen={setUserDrawerOpen} saveUser={saveUser} deleteUser={deleteUser} saving={saving} currentUser={currentUser} projects={projects} />}
       {passwordDrawerOpen && <PasswordDrawer form={passwordForm} setForm={setPasswordForm} setOpen={setPasswordDrawerOpen} changePassword={changePassword} saving={saving} />}
@@ -1547,6 +1702,7 @@ type TaskTableProps = {
   openTask: (task: Task) => void; showAll: () => void;
   timeEntries: TaskTimeEntry[]; clock: number;
   commentCounts: Map<number, number>;
+  subtasks: TaskSubtask[];
 };
 
 function TaskTable(props: TaskTableProps) {
@@ -1560,8 +1716,8 @@ function TaskTable(props: TaskTableProps) {
   };
   return <section className="panel">
     <div className="filters"><label className="search-box"><span>⌕</span><input value={props.search} onChange={(event) => props.setSearch(event.target.value)} placeholder="Search for a task or project..." /></label>{props.showEmployeeFilter && <select value={props.employeeFilter} onChange={(event) => props.setEmployeeFilter(event.target.value)} aria-label="Filter by employee"><option value="all">All employees · كل الموظفين</option>{props.employees.map((employee) => <option key={employee.name} value={employee.name}>{employee.name} ({employee.discipline})</option>)}</select>}<select value={props.projectFilter} onChange={(event) => props.setProjectFilter(event.target.value)} aria-label="Filter by project"><option value="all">All projects · كل المشاريع</option>{props.projects.map((project) => <option key={project}>{project}</option>)}</select><select value={props.statusFilter} onChange={(event) => props.setStatusFilter(event.target.value)} aria-label="Filter by status"><option value="all">All employee statuses · كل حالات الموظف</option>{Object.entries(statusLabel).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select><select value={props.reviewFilter} onChange={(event) => props.setReviewFilter(event.target.value)} aria-label="Filter by manager review"><option value="all">All manager reviews · كل مراجعات المسؤول</option>{Object.entries(checkLabel).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select><button type="button" className="clear-filters-button" onClick={clearFilters} disabled={!filtersActive} aria-label="Clear all task filters" title="Clear filters · مسح الفلاتر"><span className="filter-clear-icon" aria-hidden="true" /></button><span className="count-badge filter-count" dir="ltr">{props.filteredCount} {props.filteredCount === 1 ? "Task" : "Tasks"}</span></div>
-    {props.loading ? <div className="loading-state"><div className="spinner" /><p>جاري تحميل المهام...</p></div> : props.tasks.length === 0 ? <div className="empty-state"><strong>لا توجد مهام مطابقة</strong><p>غيّر خيارات البحث أو أضف مهمة جديدة.</p></div> : <><div className="task-table-wrap"><table className={`task-table task-data-table task-table-ltr${props.showEmployeeFilter ? "" : " member-task-table"}`}><thead><tr><th>Task / Project</th>{props.showEmployeeFilter && <th>Employee</th>}<th>Created Date</th><th>Due Date</th><th>Priority</th><th>Hours</th><th>Status</th><th>Manager Review</th><th>Indicator</th></tr></thead><tbody>{props.tasks.map((task) => { const flag = taskFlag(task); const entries = props.timeEntries.filter((entry) => entry.taskId === task.id); const logged = taskLoggedHours(task, entries, props.clock); const active = entries.some((entry) => !entry.endedAt); const noteCount = props.commentCounts.get(task.id) || 0; return <tr key={task.id} onClick={() => props.openTask(task)} tabIndex={0} onKeyDown={(event) => event.key === "Enter" && props.openTask(task)}><td><div className="task-cell"><strong>{task.title}</strong><div className="task-tags"><span className="project-code">{task.project}</span>{task.visibility === "private" && <span className="private-badge">Private</span>}{noteCount > 0 && <span className="note-indicator" title={`${noteCount} notes · ${noteCount} ملاحظات`} aria-label={`${noteCount} notes`}>▰ <small>{noteCount}</small></span>}</div><small>{task.expectedOutput}</small></div></td>{props.showEmployeeFilter && <td><div className="employee-cell"><span className="avatar small">{initials(task.employeeName)}</span><strong>{task.employeeName}</strong></div></td>}<td><span className="due-date" dir="ltr">{formatCreatedDate(task.createdAt)}</span></td><td><span className="due-date" dir="ltr">{formatDueDate(task.taskDate)}</span></td><td><span className={`pill priority-${task.priority}`}>{priorityLabel[task.priority]}</span></td><td><strong className={active ? "live-hours" : ""}>{logged ? logged.toFixed(2) : "—"}{active && <i />}</strong><small className="hours-note"> / {task.plannedHours || "—"}h</small></td><td><span className={`pill status-${task.status}`}>{statusLabel[task.status]}</span></td><td><span className={`pill check-${task.managerCheck}`}>{checkLabel[task.managerCheck]}</span></td><td><span className={`flag flag-${flag.key}`}>{flag.label}</span></td></tr>; })}</tbody></table></div>
-      <div className="mobile-task-list">{props.tasks.map((task) => { const flag = taskFlag(task); const entries = props.timeEntries.filter((entry) => entry.taskId === task.id); const logged = taskLoggedHours(task, entries, props.clock); return <button className="mobile-task" key={task.id} onClick={() => props.openTask(task)}><div className="mobile-task-top"><div className="task-tags"><span className="project-code">{task.project}</span>{task.visibility === "private" && <span className="private-badge">خاص · Private</span>}</div><span className={`flag flag-${flag.key}`}>{flag.label}</span></div><strong>{task.title}</strong><small>{props.showEmployeeFilter ? `${task.employeeName} · ` : ""}<span className="mobile-date-label">Created</span> <span className="due-date" dir="ltr">{formatCreatedDate(task.createdAt)}</span> · <span className="mobile-date-label">Due</span> <span className="due-date" dir="ltr">{formatDueDate(task.taskDate)}</span></small><div className="mobile-task-bottom"><span className={`pill status-${task.status}`}>{statusLabel[task.status]}</span><span>{logged.toFixed(2)}/{task.plannedHours}h</span></div></button>; })}</div>
+    {props.loading ? <div className="loading-state"><div className="spinner" /><p>جاري تحميل المهام...</p></div> : props.tasks.length === 0 ? <div className="empty-state"><strong>لا توجد مهام مطابقة</strong><p>غيّر خيارات البحث أو أضف مهمة جديدة.</p></div> : <><div className="task-table-wrap"><table className={`task-table task-data-table task-table-ltr${props.showEmployeeFilter ? "" : " member-task-table"}`}><thead><tr><th>Task / Project</th>{props.showEmployeeFilter && <th>Employee</th>}<th>Created Date</th><th>Due Date</th><th>Priority</th><th>Hours</th><th>Status</th><th>Manager Review</th><th>Indicator</th></tr></thead><tbody>{props.tasks.map((task) => { const flag = taskFlag(task); const entries = props.timeEntries.filter((entry) => entry.taskId === task.id); const taskSubtasks = props.subtasks.filter((subtask) => subtask.taskId === task.id); const logged = taskLoggedHours(task, entries, props.clock); const active = entries.some((entry) => !entry.endedAt); const noteCount = props.commentCounts.get(task.id) || 0; return <tr key={task.id} onClick={() => props.openTask(task)} tabIndex={0} onKeyDown={(event) => event.key === "Enter" && props.openTask(task)}><td><div className="task-cell"><strong>{task.title}</strong><div className="task-tags"><span className="project-code">{task.project}</span>{task.visibility === "private" && <span className="private-badge">Private</span>}{taskSubtasks.length > 0 && <span className="subtask-indicator" title={`${taskSubtasks.filter((item) => item.completed).length}/${taskSubtasks.length} subtasks completed`} aria-label={`${taskSubtasks.length} subtasks`}>☑ <small>{taskSubtasks.length}</small></span>}{noteCount > 0 && <span className="note-indicator" title={`${noteCount} notes · ${noteCount} ملاحظات`} aria-label={`${noteCount} notes`}>▰ <small>{noteCount}</small></span>}</div><small>{task.expectedOutput}</small></div></td>{props.showEmployeeFilter && <td><div className="employee-cell"><span className="avatar small">{initials(task.employeeName)}</span><strong>{task.employeeName}</strong></div></td>}<td><span className="due-date" dir="ltr">{formatCreatedDate(task.createdAt)}</span></td><td><span className="due-date" dir="ltr">{formatDueDate(task.taskDate)}</span></td><td><span className={`pill priority-${task.priority}`}>{priorityLabel[task.priority]}</span></td><td><strong className={active ? "live-hours" : ""}>{logged ? logged.toFixed(2) : "—"}{active && <i />}</strong><small className="hours-note"> / {task.plannedHours || "—"}h</small></td><td><span className={`pill status-${task.status}`}>{statusLabel[task.status]}</span></td><td><span className={`pill check-${task.managerCheck}`}>{checkLabel[task.managerCheck]}</span></td><td><span className={`flag flag-${flag.key}`}>{flag.label}</span></td></tr>; })}</tbody></table></div>
+      <div className="mobile-task-list">{props.tasks.map((task) => { const flag = taskFlag(task); const entries = props.timeEntries.filter((entry) => entry.taskId === task.id); const taskSubtasks = props.subtasks.filter((subtask) => subtask.taskId === task.id); const logged = taskLoggedHours(task, entries, props.clock); return <button className="mobile-task" key={task.id} onClick={() => props.openTask(task)}><div className="mobile-task-top"><div className="task-tags"><span className="project-code">{task.project}</span>{task.visibility === "private" && <span className="private-badge">خاص · Private</span>}{taskSubtasks.length > 0 && <span className="subtask-indicator">☑ <small>{taskSubtasks.length}</small></span>}</div><span className={`flag flag-${flag.key}`}>{flag.label}</span></div><strong>{task.title}</strong><small>{props.showEmployeeFilter ? `${task.employeeName} · ` : ""}<span className="mobile-date-label">Created</span> <span className="due-date" dir="ltr">{formatCreatedDate(task.createdAt)}</span> · <span className="mobile-date-label">Due</span> <span className="due-date" dir="ltr">{formatDueDate(task.taskDate)}</span></small><div className="mobile-task-bottom"><span className={`pill status-${task.status}`}>{statusLabel[task.status]}</span><span>{logged.toFixed(2)}/{task.plannedHours}h</span></div></button>; })}</div>
       {props.tab === "overview" && props.filteredCount > 7 && <button className="text-button" onClick={props.showAll}><ButtonLabel en="View all tasks →" ar="عرض جميع المهام" /></button>}</>}
   </section>;
 }
@@ -1590,6 +1746,20 @@ type TaskDrawerProps = {
   deleteWorkSession: (entryId: number) => void;
   savingTimer: boolean;
   submitPrivateTask: () => void;
+  subtasks: TaskSubtask[];
+  draftSubtasks: DraftSubtask[];
+  deleteDraftSubtask: (id: string) => void;
+  subtaskDraft: string;
+  setSubtaskDraft: (value: string) => void;
+  addSubtask: () => void;
+  toggleSubtask: (subtask: TaskSubtask) => void;
+  deleteSubtask: (subtask: TaskSubtask) => void;
+  subtaskBusy: boolean;
+  attachments: TaskAttachment[];
+  uploadAttachment: (file: File, subtaskId: number | null) => void;
+  deleteAttachment: (attachment: TaskAttachment) => void;
+  attachmentBusy: boolean;
+  attachmentProgress: AttachmentUploadProgress | null;
 };
 
 function toLocalInput(value: string | null) {
@@ -1611,16 +1781,65 @@ function WorkSessionRow({ entry, clock, editable, busy, onUpdate, onDelete }: { 
   return <article className={entry.endedAt ? "" : "active"}><div><strong>{formatDateTime(entry.startedAt)}</strong><span>Start</span></div><b>→</b><div><strong>{entry.endedAt ? formatDateTime(entry.endedAt) : "Running now"}</strong><span>{formatDuration(entrySeconds(entry, clock))}</span></div>{editable && <div className="session-row-actions"><button type="button" onClick={() => { setStartedAt(toLocalInput(entry.startedAt)); setEndedAt(toLocalInput(entry.endedAt)); setEditing(true); }} disabled={busy} title="Edit work session">✎</button><button type="button" className="session-delete" onClick={() => onDelete(entry.id)} disabled={busy} title="Delete work session">×</button></div>}</article>;
 }
 
-function TaskDrawer({ selectedId, form, setOpen, saveTask, deleteTask, saving, currentUser, users, projects, updateForm, comments, commentDraft, setCommentDraft, addComment, savingComment, task, timeEntries, clock, updateTimer, updateWorkSession, deleteWorkSession, savingTimer, submitPrivateTask }: TaskDrawerProps) {
+function fileSizeLabel(bytes: number) {
+  return bytes >= 1024 * 1024 ? `${(bytes / 1024 / 1024).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`;
+}
+
+type TaskOfficeKind = "word" | "excel" | "powerpoint";
+function taskOfficeKind(attachment: TaskAttachment): TaskOfficeKind | null {
+  const extension = attachment.fileName.split(".").pop()?.toLowerCase();
+  if (extension === "docx" || attachment.contentType.includes("wordprocessingml")) return "word";
+  if (["xlsx", "xls"].includes(extension || "") || attachment.contentType.includes("spreadsheet") || attachment.contentType.includes("ms-excel")) return "excel";
+  if (extension === "pptx" || attachment.contentType.includes("presentationml")) return "powerpoint";
+  return null;
+}
+function taskEscapeHtml(value: string) { return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/\"/g, "&quot;"); }
+function taskOfficeDocument(title: string, body: string, wide = false) { return `<!doctype html><html><head><meta charset="utf-8"><style>body{margin:0;padding:24px;background:#f4f4f1;color:#222;font:14px/1.55 Arial,sans-serif}main{${wide ? "max-width:1200px" : "max-width:860px"};margin:auto;background:#fff;border:1px solid #ddd;border-radius:12px;padding:26px}table{border-collapse:collapse;width:100%;font-size:12px}td,th{border:1px solid #ddd;padding:7px}.slide{margin:0 0 22px;padding:24px;border:1px solid #ddd;border-left:5px solid #ffd200;border-radius:9px}.slide p{white-space:pre-wrap;font-size:17px}</style></head><body><main><h1>${taskEscapeHtml(title)}</h1>${body}</main></body></html>`; }
+
+function TaskOfficePreview({ attachment }: { attachment: TaskAttachment }) {
+  const [html, setHtml] = useState("");
+  const [error, setError] = useState("");
+  useEffect(() => { let active = true; void (async () => { try {
+    const response = await fetch(`/api/task-attachments?id=${attachment.id}`, { cache: "no-store" });
+    if (!response.ok) throw new Error();
+    const buffer = await response.arrayBuffer();
+    const kind = taskOfficeKind(attachment);
+    if (kind === "word") { const mammoth = await import("mammoth/mammoth.browser"); const result = await mammoth.convertToHtml({ arrayBuffer: buffer }); if (active) setHtml(taskOfficeDocument(attachment.fileName, result.value || "<p>This document is empty.</p>")); }
+    if (kind === "excel") { const XLSX = await import("xlsx"); const workbook = XLSX.read(buffer, { type: "array" }); const sheets = workbook.SheetNames.slice(0, 5).map((name) => `<section><h2>${taskEscapeHtml(name)}</h2>${XLSX.utils.sheet_to_html(workbook.Sheets[name])}</section>`).join(""); if (active) setHtml(taskOfficeDocument(attachment.fileName, sheets || "<p>This workbook is empty.</p>", true)); }
+    if (kind === "powerpoint") { const JSZip = (await import("jszip")).default; const zip = await JSZip.loadAsync(buffer); const names = Object.keys(zip.files).filter((name) => /^ppt\/slides\/slide\d+\.xml$/.test(name)).sort((a, b) => Number(a.match(/\d+/)?.[0]) - Number(b.match(/\d+/)?.[0])); const slides = await Promise.all(names.map(async (name, index) => { const xml = await zip.files[name].async("string"); const text = Array.from(xml.matchAll(/<a:t[^>]*>([\s\S]*?)<\/a:t>/g)).map((match) => new DOMParser().parseFromString(`<!doctype html><body>${match[1]}`, "text/html").body.textContent || "").join("\n"); return `<article class="slide"><h2>SLIDE ${index + 1}</h2><p>${taskEscapeHtml(text || "No extractable text on this slide.")}</p></article>`; })); if (active) setHtml(taskOfficeDocument(attachment.fileName, slides.join("") || "<p>This presentation is empty.</p>", true)); }
+  } catch { if (active) setError("This Office file could not be previewed."); } })(); return () => { active = false; }; }, [attachment]);
+  if (error) return <div className="attachment-no-preview"><strong>{error}</strong><a href={`/api/task-attachments?id=${attachment.id}&download=1`} download>Download file</a></div>;
+  if (!html) return <div className="office-preview-loading"><div className="spinner" /><strong>Preparing Office preview...</strong></div>;
+  return <iframe className="office-preview-frame" sandbox="" srcDoc={html} title={`Office preview: ${attachment.fileName}`} />;
+}
+
+function TaskAttachmentTable({ attachments, onUpload, onDelete, busy, compact = false, progress = null }: { attachments: TaskAttachment[]; onUpload: (file: File) => void; onDelete: (attachment: TaskAttachment) => void; busy: boolean; compact?: boolean; progress?: AttachmentUploadProgress | null }) {
+  const [preview, setPreview] = useState<TaskAttachment | null>(null);
+  const canPreview = (attachment: TaskAttachment) => attachment.contentType.startsWith("image/") || attachment.contentType === "application/pdf" || Boolean(taskOfficeKind(attachment));
+  return <>
+    <div className={`task-attachment-toolbar${compact ? " compact" : ""}`}>
+      <label className="task-attachment-add" title="Add attachment"><span>＋</span>{!compact && <strong>Add Attachment</strong>}<input type="file" disabled={busy} onChange={(event) => { const file = event.target.files?.[0]; if (file) onUpload(file); event.currentTarget.value = ""; }} /></label>
+      {!compact && <small>Optional · maximum 25 MB per file</small>}
+    </div>
+    {progress && <div className={`attachment-upload-progress${compact ? " compact" : ""}`} role="status" aria-live="polite"><div><strong>{compact ? "Uploading" : progress.fileName}</strong><span>{progress.percent}%</span></div><progress max="100" value={progress.percent} /></div>}
+    {compact && attachments.length > 0 && <div className="subtask-attachment-list">{attachments.map((attachment) => <div key={attachment.id}><button type="button" className="subtask-attachment-open" onClick={() => canPreview(attachment) ? setPreview(attachment) : window.open(`/api/task-attachments?id=${attachment.id}&download=1`, "_blank")} title={attachment.fileName}>📎 <span>{attachment.fileName}</span></button><button type="button" className="subtask-attachment-remove" onClick={() => onDelete(attachment)} disabled={busy} title="Delete attachment" aria-label={`Delete ${attachment.fileName}`}>×</button></div>)}</div>}
+    {!compact && attachments.length > 0 && <div className="attachment-table-wrap task-attachments-table-wrap"><table className="attachment-table task-attachments-table"><thead><tr><th>File</th><th>Size</th><th>Uploaded</th><th /></tr></thead><tbody>{attachments.map((attachment) => <tr key={attachment.id} className="clickable-attachment" onClick={() => canPreview(attachment) ? setPreview(attachment) : window.open(`/api/task-attachments?id=${attachment.id}&download=1`, "_blank")}><td><strong>{attachment.fileName}</strong></td><td>{fileSizeLabel(attachment.sizeBytes)}</td><td>{formatCreatedDate(attachment.createdAt)}</td><td onClick={(event) => event.stopPropagation()}><button type="button" className="attachment-delete" onClick={() => onDelete(attachment)} disabled={busy} title="Delete attachment" aria-label={`Delete ${attachment.fileName}`}>×</button></td></tr>)}</tbody></table></div>}
+    {preview && <div className="attachment-preview-layer" role="dialog" aria-modal="true" aria-label={`Preview ${preview.fileName}`}><button type="button" className="attachment-preview-backdrop" onClick={() => setPreview(null)} aria-label="Close preview" /><section className="attachment-preview-dialog"><header><div><strong>{preview.fileName}</strong><span>{fileSizeLabel(preview.sizeBytes)}</span></div><div><a href={`/api/task-attachments?id=${preview.id}&download=1`} download>Download</a><button type="button" onClick={() => setPreview(null)} aria-label="Close preview">×</button></div></header><div className="attachment-preview-content">{preview.contentType.startsWith("image/") ? <img src={`/api/task-attachments?id=${preview.id}`} alt={preview.fileName} /> : preview.contentType === "application/pdf" ? <iframe src={`/api/task-attachments?id=${preview.id}`} title={preview.fileName} /> : <TaskOfficePreview attachment={preview} />}</div></section></div>}
+  </>;
+}
+
+function TaskDrawer({ selectedId, form, setOpen, saveTask, deleteTask, saving, currentUser, users, projects, updateForm, comments, commentDraft, setCommentDraft, addComment, savingComment, task, timeEntries, clock, updateTimer, updateWorkSession, deleteWorkSession, savingTimer, submitPrivateTask, subtasks, draftSubtasks, deleteDraftSubtask, subtaskDraft, setSubtaskDraft, addSubtask, toggleSubtask, deleteSubtask, subtaskBusy, attachments, uploadAttachment, deleteAttachment, attachmentBusy, attachmentProgress }: TaskDrawerProps) {
   const privateOwner = currentUser?.role === "member" && form.visibility === "private" && (!task || (task.createdBy === currentUser.email && !task.submittedToManager));
   const management = isManagement(currentUser);
   const canAuditSessions = management && Boolean(task && (task.managerCheck !== "new" || task.submittedToManager));
   const canEditDetails = management || privateOwner;
+  const privateFinishOnly = currentUser?.role === "member" && task?.visibility === "private" && !task.submittedToManager;
+  const openSubtaskCount = subtasks.filter((subtask) => !subtask.completed).length;
   const activeEntry = timeEntries.find((entry) => !entry.endedAt);
   const loggedSeconds = timeEntries.length
     ? timeEntries.reduce((sum, entry) => sum + entrySeconds(entry, clock), 0)
     : Math.round((task?.actualHours || form.actualHours || 0) * 3600);
-  const projectOptions = Array.from(new Set([...projects.map((project) => project.code), ...(form.visibility === "private" ? ["PERSONAL"] : [])]));
+  const projectOptions = Array.from(new Set([...projects.filter((project) => project.status === "active" || project.code === form.project).map((project) => project.code), ...(form.visibility === "private" ? ["PERSONAL"] : [])]));
   const selectedProject = projects.find((project) => project.code === form.project);
   const projectUsers = form.project === "PERSONAL"
     ? users.filter((user) => user.email === form.employeeEmail)
@@ -1633,11 +1852,13 @@ function TaskDrawer({ selectedId, form, setOpen, saveTask, deleteTask, saving, c
     <aside className="task-drawer">
       <div className="drawer-head"><div><p>{selectedId ? `TASK #${selectedId}` : form.visibility === "private" ? "NEW PRIVATE TASK" : "NEW TASK"}</p><h2>{selectedId ? "Task Details & Update" : form.visibility === "private" ? "New Private Task" : "New Task"}</h2>{form.visibility === "private" && <span className="drawer-private-label">Private · خاص</span>}</div><button className="close-button" onClick={() => setOpen(false)} aria-label="Close">×</button></div>
       <form onSubmit={saveTask} className="task-form" dir="ltr">
-        <div className="form-section"><h3>Task Information <span>معلومات المهمة</span></h3><label className="wide"><span>Task · اسم المهمة</span><input required disabled={!canEditDetails} value={form.title} onChange={(event) => updateForm("title", event.target.value)} placeholder="مثال: تدقيق موديل المنطقة 02" /></label><label className="wide"><span>Expected Output · المخرج المتوقع</span><textarea disabled={!canEditDetails} value={form.expectedOutput} onChange={(event) => updateForm("expectedOutput", event.target.value)} rows={3} placeholder="ما المطلوب تسليمه عند اكتمال المهمة؟" /></label><div className="form-grid"><label><span>Project · المشروع</span><select required disabled={!canEditDetails} value={form.project} onChange={(event) => { const code = event.target.value; updateForm("project", code); const project = projects.find((item) => item.code === code); if (management && !project?.memberEmails.includes(form.employeeEmail)) { updateForm("employeeEmail", ""); updateForm("employeeName", ""); } }}><option value="">اختر المشروع</option>{projectOptions.map((project) => <option key={project}>{project}</option>)}</select></label><label><span>Created Date · تاريخ الإنشاء</span><input className="due-date" dir="ltr" disabled value={selectedId ? formatCreatedDate(task?.createdAt || "") : "Automatic on save"} /></label><label><span>Due Date · تاريخ الإنجاز المتوقع</span><input type="date" lang="en-GB" disabled={!canEditDetails} value={form.taskDate} onChange={(event) => updateForm("taskDate", event.target.value)} /></label><label><span>Priority · الأولوية</span><select disabled={!canEditDetails} value={form.priority} onChange={(event) => updateForm("priority", event.target.value as Task["priority"])}>{Object.entries(priorityLabel).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></label><label><span>Status · الحالة</span><select disabled value={form.status}>{Object.entries(statusLabel).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></label></div></div>
-        <div className="form-section"><h3>Assignment & Time <span>الموظف والوقت</span></h3><div className="form-grid"><label><span>Employee · الموظف</span><select disabled={!management} required value={form.employeeEmail} onChange={(event) => { const user = users.find((item) => item.email === event.target.value); updateForm("employeeEmail", event.target.value); if (user) updateForm("employeeName", user.displayName); }}><option value="">{form.project ? "اختر موظفًا من فريق المشروع" : "اختر المشروع أولاً"}</option>{assignmentOptions.map((user) => <option key={user.email} value={user.email}>{user.displayName}{user.discipline ? ` · ${user.discipline}` : ""}</option>)}</select></label><label><span>Email · البريد</span><input disabled value={form.employeeEmail} placeholder="يُعبأ تلقائيًا" /></label><label><span>Planned Hours · الساعات المخططة</span><input type="number" disabled={!canEditDetails} min="0" step="0.25" value={form.plannedHours} onChange={(event) => updateForm("plannedHours", Number(event.target.value))} /></label><label><span>Logged Hours · الساعات المسجلة</span><input disabled value={formatDuration(loggedSeconds)} /></label></div></div>
-        {selectedId && currentUser?.role !== "owner" && task?.employeeEmail === currentUser.email && <div className="form-section timer-section"><div className="timer-head"><div><h3>Work Timer <span>تسجيل وقت العمل</span></h3><p>يمكنك إيقاف المهمة للبريك أو عند الانتقال لمهمة أخرى، ثم استئنافها في أي يوم لاحق.</p></div><strong className={activeEntry ? "running" : ""} dir="ltr">{formatDuration(loggedSeconds)}</strong></div><div className="timer-actions">{activeEntry ? <button type="button" className="pause-task-button" onClick={() => updateTimer("pause")} disabled={savingTimer}><ButtonLabel en="Ⅱ Pause" ar="إيقاف مؤقت" /></button> : <button type="button" className="start-task-button" onClick={() => updateTimer("start")} disabled={savingTimer || task.managerCheck === "approved"}><ButtonLabel en="▶ Start / Resume" ar="ابدأ / استأنف" /></button>}{task.status !== "done" && <button type="button" className="finish-task-button" onClick={() => updateTimer("finish")} disabled={savingTimer}><ButtonLabel en="✓ Finish & Submit" ar="إنهاء وإرسال للمراجعة" /></button>}</div>{task.managerCheck === "approved" && <div className="timer-lock-note">المهمة معتمدة. يجب على المسؤول إعادة فتح المراجعة قبل استئناف العمل.</div>}</div>}
+        <div className="form-section"><h3>Task Information <span>معلومات المهمة</span></h3><label className="wide"><span>Task · اسم المهمة</span><input required disabled={!canEditDetails} value={form.title} onChange={(event) => updateForm("title", event.target.value)} placeholder="مثال: تدقيق موديل المنطقة 02" /></label><label className="wide"><span>Expected Output · المخرج المتوقع</span><textarea disabled={!canEditDetails} value={form.expectedOutput} onChange={(event) => updateForm("expectedOutput", event.target.value)} rows={3} placeholder="ما المطلوب تسليمه عند اكتمال المهمة؟" /></label><div className="form-grid"><label><span>Project · المشروع</span><select required disabled={!canEditDetails} value={form.project} onChange={(event) => { const code = event.target.value; updateForm("project", code); const project = projects.find((item) => item.code === code); if (management && !project?.memberEmails.includes(form.employeeEmail)) { updateForm("employeeEmail", ""); updateForm("employeeName", ""); } }}><option value="">اختر المشروع</option>{projectOptions.map((project) => <option key={project}>{project}</option>)}</select></label><label><span>Due Date · تاريخ الإنجاز المتوقع</span><input type="date" lang="en-GB" disabled={!canEditDetails} value={form.taskDate} onChange={(event) => updateForm("taskDate", event.target.value)} /></label><label><span>Priority · الأولوية</span><select disabled={!canEditDetails} value={form.priority} onChange={(event) => updateForm("priority", event.target.value as Task["priority"])}>{Object.entries(priorityLabel).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></label><label><span>Status · الحالة</span><select disabled value={form.status}>{Object.entries(statusLabel).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></label></div></div>
+        <div className="form-section assignment-time-section"><h3>Assignment & Time</h3><div className={`assignment-time-grid ${management ? "management" : "member"}`}>{management && <label className="assignment-employee"><span>Employee</span><select required value={form.employeeEmail} onChange={(event) => { const user = users.find((item) => item.email === event.target.value); updateForm("employeeEmail", event.target.value); if (user) updateForm("employeeName", user.displayName); }}><option value="">{form.project ? "Select a project employee" : "Select a project first"}</option>{assignmentOptions.map((user) => <option key={user.email} value={user.email}>{user.displayName}{user.discipline ? ` · ${user.discipline}` : ""}</option>)}</select></label>}<label><span>Planned Hours</span><input type="number" disabled={!canEditDetails} min="0" step="0.25" value={form.plannedHours} onChange={(event) => updateForm("plannedHours", Number(event.target.value))} /></label><label><span>Logged Hours</span><input disabled value={formatDuration(loggedSeconds)} /></label></div></div>
+        <div className="form-section task-attachments-section"><div className="comments-heading"><h3>Task Attachments <span>مرفقات المهمة</span></h3><span>{attachments.filter((attachment) => attachment.subtaskId === null).length}</span></div>{selectedId ? <TaskAttachmentTable attachments={attachments.filter((attachment) => attachment.subtaskId === null)} onUpload={(file) => uploadAttachment(file, null)} onDelete={deleteAttachment} busy={attachmentBusy} progress={attachmentProgress?.subtaskId === null ? attachmentProgress : null} /> : <div className="comments-empty">Save the task first to add optional attachments.</div>}</div>
+        <div className="form-section subtasks-section"><div className="comments-heading"><h3>Subtasks <span>المهام الفرعية</span></h3><span>{selectedId ? `${subtasks.filter((subtask) => subtask.completed).length}/${subtasks.length}` : draftSubtasks.length}</span></div><div className="subtask-composer"><input maxLength={240} value={subtaskDraft} onChange={(event) => setSubtaskDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); addSubtask(); } }} placeholder="Add an optional subtask..." /><button type="button" onClick={addSubtask} disabled={subtaskBusy || !subtaskDraft.trim()} title="Add subtask" aria-label="Add subtask">＋</button></div>{selectedId ? (subtasks.length === 0 ? <div className="comments-empty">No subtasks · لا توجد مهام فرعية</div> : <div className="subtask-table-wrap"><table className="subtask-table"><thead><tr><th>#</th><th>Done</th><th>Subtask</th><th>Attachments</th><th /></tr></thead><tbody>{subtasks.map((subtask, index) => { const rowAttachments = attachments.filter((attachment) => attachment.subtaskId === subtask.id); return <tr key={subtask.id} className={subtask.completed ? "completed" : ""}><td className="subtask-number">{index + 1}</td><td><input type="checkbox" checked={subtask.completed} onChange={() => toggleSubtask(subtask)} disabled={subtaskBusy} aria-label={`Mark ${subtask.title} ${subtask.completed ? "open" : "complete"}`} /></td><td><strong>{subtask.title}</strong>{subtask.completed && <small>Closed {subtask.completedAt ? formatDateTime(subtask.completedAt) : ""}</small>}</td><td><TaskAttachmentTable compact attachments={rowAttachments} onUpload={(file) => uploadAttachment(file, subtask.id)} onDelete={deleteAttachment} busy={attachmentBusy} progress={attachmentProgress?.subtaskId === subtask.id ? attachmentProgress : null} /></td><td><button type="button" className="subtask-delete" onClick={() => deleteSubtask(subtask)} disabled={subtaskBusy} title="Delete subtask" aria-label={`Delete ${subtask.title}`}>×</button></td></tr>; })}</tbody></table></div>) : (draftSubtasks.length === 0 ? <div className="comments-empty">Add subtasks now; they will be saved with the new task.</div> : <div className="subtask-table-wrap"><table className="subtask-table draft-subtask-table"><thead><tr><th>#</th><th>Subtask</th><th>Attachments</th><th /></tr></thead><tbody>{draftSubtasks.map((subtask, index) => <tr key={subtask.id}><td className="subtask-number">{index + 1}</td><td><strong>{subtask.title}</strong></td><td><small className="save-first-note">Available after saving</small></td><td><button type="button" className="subtask-delete" onClick={() => deleteDraftSubtask(subtask.id)} title="Delete subtask" aria-label={`Delete ${subtask.title}`}>×</button></td></tr>)}</tbody></table></div>)}</div>
+        {selectedId && currentUser?.role !== "owner" && task?.employeeEmail === currentUser.email && <div className="form-section timer-section"><div className="timer-head"><div><h3>Work Timer <span>تسجيل وقت العمل</span></h3><p>يمكنك إيقاف المهمة للبريك أو عند الانتقال لمهمة أخرى، ثم استئنافها في أي يوم لاحق.</p></div><strong className={activeEntry ? "running" : ""} dir="ltr">{formatDuration(loggedSeconds)}</strong></div><div className="timer-actions">{activeEntry ? <button type="button" className="pause-task-button" onClick={() => updateTimer("pause")} disabled={savingTimer}><ButtonLabel en="Ⅱ Pause" ar="إيقاف مؤقت" /></button> : <button type="button" className="start-task-button" onClick={() => updateTimer("start")} disabled={savingTimer || task.managerCheck === "approved"}><ButtonLabel en="▶ Start / Resume" ar="ابدأ / استأنف" /></button>}{task.status !== "done" && <button type="button" className="finish-task-button" onClick={() => updateTimer("finish")} disabled={savingTimer || openSubtaskCount > 0} title={openSubtaskCount ? `Complete ${openSubtaskCount} open subtasks first` : privateFinishOnly ? "Finish private task" : "Finish and submit task"}><ButtonLabel en={privateFinishOnly ? "✓ Finish" : "✓ Finish & Submit"} ar={privateFinishOnly ? "إنهاء المهمة" : "إنهاء وإرسال للمراجعة"} /></button>}</div>{openSubtaskCount > 0 && <div className="subtask-submit-lock">{privateFinishOnly ? "Complete all subtasks before finishing the main task" : "Complete all subtasks before submitting the main task"} · يجب إغلاق جميع المهام الفرعية أولًا ({openSubtaskCount})</div>}{task.managerCheck === "approved" && <div className="timer-lock-note">المهمة معتمدة. يجب على المسؤول إعادة فتح المراجعة قبل استئناف العمل.</div>}</div>}
         {selectedId && timeEntries.length > 0 && <div className="form-section time-history"><div className="comments-heading"><h3>Work Sessions <span>سجل جلسات العمل</span></h3><span>{timeEntries.length}</span></div>{canAuditSessions && <div className="session-audit-note">Management review mode · يمكن للمالك والمسؤول تدقيق الوقت وتعديله أو حذف الجلسة</div>}<div className="time-entry-list">{[...timeEntries].reverse().map((entry) => <WorkSessionRow key={entry.id} entry={entry} clock={clock} editable={canAuditSessions && Boolean(entry.endedAt)} busy={savingTimer} onUpdate={updateWorkSession} onDelete={deleteWorkSession} />)}</div></div>}
-        {selectedId && currentUser?.role === "member" && task?.visibility === "private" && task.createdBy === currentUser.email && <div className="form-section private-share-section"><h3>Private Task Sharing <span>مشاركة المهمة</span></h3>{task.submittedToManager ? <div className="private-shared-note">تم إرسال المهمة إلى المسؤول، ويمكنه الآن مراجعتها أو تفويضها لموظف آخر.</div> : <><p>تبقى هذه المهمة ظاهرة لك فقط حتى تختار إرسالها للمسؤول.</p><button type="button" className="share-task-button" onClick={submitPrivateTask} disabled={saving}><ButtonLabel en="Send to Manager" ar="إرسال وإشعار المسؤول" /></button></>}</div>}
+        {selectedId && currentUser?.role === "member" && task?.visibility === "private" && task.createdBy === currentUser.email && <div className="form-section private-share-section"><h3>Private Task Sharing <span>مشاركة المهمة</span></h3>{task.submittedToManager ? <div className="private-shared-note">تم إرسال المهمة إلى المسؤول، ويمكنه الآن مراجعتها أو تفويضها لموظف آخر.</div> : <><p>تبقى هذه المهمة ظاهرة لك فقط حتى تختار إرسالها للمسؤول.</p><button type="button" className="share-task-button" onClick={submitPrivateTask} disabled={saving || openSubtaskCount > 0} title={openSubtaskCount ? `Complete ${openSubtaskCount} open subtasks first` : "Send task to manager"}><ButtonLabel en="Send to Manager" ar="إرسال وإشعار المسؤول" /></button>{openSubtaskCount > 0 && <div className="subtask-submit-lock">Complete all subtasks before sending this task ({openSubtaskCount} remaining).</div>}</>}</div>}
         {management && <div className="form-section manager-section"><h3>Manager Review <span>مراجعة المسؤول</span></h3><div className="review-choice">{(["new", "pending", "approved", "returned"] as const).map((value) => <button type="button" key={value} className={form.managerCheck === value ? `selected ${value}` : value} onClick={() => updateForm("managerCheck", value)}>{checkLabel[value]}</button>)}</div></div>}
         {selectedId && <div className="form-section comments-section">
           <div className="comments-heading"><h3>Activity Notes <span>سجل الملاحظات</span></h3><span>{comments.length}</span></div>

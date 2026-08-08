@@ -57,20 +57,19 @@ test("manager scope follows discipline while owner keeps full access", async () 
   assert.match(dashboard, /managerLimited/);
 });
 
-test("task created date, due date label, and creation-time ordering are used", async () => {
+test("task creation date stays automatic and table-only while due dates remain editable", async () => {
   const [dashboard, bootstrapApi, schema] = await Promise.all([
     source("app/task-dashboard.tsx"),
     source("app/api/bootstrap/route.ts"),
     source("db/schema.ts"),
   ]);
-  assert.match(dashboard, /تاريخ الإنشاء/);
-  assert.match(dashboard, /Created Date/);
+  assert.match(dashboard, /<th>Created Date<\/th>/);
+  assert.doesNotMatch(dashboard, /Created Date · تاريخ الإنشاء/);
   assert.match(dashboard, /Due Date · تاريخ الإنجاز المتوقع/);
   assert.match(dashboard, /function formatDueDate/);
   assert.match(dashboard, /function formatCreatedDate/);
   assert.match(dashboard, /"JAN", "FEB", "MAR"/);
   assert.match(dashboard, /className="due-date" dir="ltr"/);
-  assert.match(dashboard, /disabled value=\{selectedId \? formatCreatedDate/);
   assert.match(dashboard, /b\.createdAt\.localeCompare\(a\.createdAt\)/);
   assert.match(bootstrapApi, /orderBy\(desc\(tasks\.createdAt\), desc\(tasks\.id\)\)/);
   assert.match(schema, /createdAt: text\("created_at"\)\.notNull\(\)\.default\(sql`CURRENT_TIMESTAMP`\)/);
@@ -110,7 +109,7 @@ test("workspace loading times out safely, prevents overlap, and can be retried",
   assert.match(bootstrapApi, /no-store, no-cache, must-revalidate/);
   assert.doesNotMatch(bootstrapApi, /selectDistinct\(\{ code: tasks\.project \}\)/);
   assert.match(bootstrapApi, /const \[allTaskRows, userRows, allProjectRows, membershipRows\] = await Promise\.all/);
-  assert.match(bootstrapApi, /const \[allCommentRows, allTimeRows, notificationRows\] = await Promise\.all/);
+  assert.match(bootstrapApi, /const \[allCommentRows, allTimeRows, allSubtaskRows, allTaskAttachmentRows, notificationRows\] = await Promise\.all/);
   assert.match(databaseInit, /if \(process\.env\.NODE_ENV === "production"\) return true/);
 });
 
@@ -166,7 +165,7 @@ test("project issue client responses, closure dates, and single-save behavior ar
   assert.match(issuesModule, /setFiles\(\[\]\); setClientFiles\(\[\]\);/);
   assert.match(issuesModule, /if \(!selectedId\) setDrawerOpen\(false\)/);
   assert.match(dashboard, /Task Details & Update/);
-  assert.match(backupApi, /const SCHEMA_VERSION = 6/);
+  assert.match(backupApi, /const SCHEMA_VERSION = 7/);
   assert.match(backupApi, /item\.source === undefined \? "internal"/);
 });
 
@@ -390,6 +389,23 @@ test("record drawer actions are compact, icon-led, and shown above form fields",
   assert.match(styles, /\.primary-button::before \{ content: "✓"/);
   assert.match(styles, /\.secondary-button::before \{ content: "×"/);
   assert.match(styles, /\.delete-button::before \{ content: "⌫"/);
+});
+
+test("open drawers and attachment previews isolate wheel scrolling from background tables", async () => {
+  const [layout, scrollLock, styles] = await Promise.all([
+    source("app/layout.tsx"),
+    source("app/overlay-scroll-lock.tsx"),
+    source("app/globals.css"),
+  ]);
+  assert.match(layout, /<OverlayScrollLock \/>/);
+  assert.match(scrollLock, /\.drawer-layer, \.attachment-preview-layer, \.app-confirm-layer/);
+  assert.match(scrollLock, /\.attachment-preview-content, \.task-form, \.dependency-warning-dialog, \.app-confirm-dialog/);
+  assert.match(scrollLock, /document\.addEventListener\("wheel", redirectWheel, \{ capture: true, passive: false \}\)/);
+  assert.match(scrollLock, /scrollTarget\.scrollBy\(\{ left: event\.deltaX, top: event\.deltaY, behavior: "auto" \}\)/);
+  assert.match(scrollLock, /document\.documentElement\.classList\.toggle\("overlay-scroll-locked", locked\)/);
+  assert.match(scrollLock, /document\.body\.classList\.toggle\("overlay-scroll-locked", locked\)/);
+  assert.match(styles, /html\.overlay-scroll-locked, body\.overlay-scroll-locked \{ overflow: hidden; overscroll-behavior: none; \}/);
+  assert.match(styles, /attachment-preview-content[^}]*overscroll-behavior: contain/);
 });
 
 test("employee deletion links to project-filtered tasks and issue metadata is compact", async () => {
@@ -650,4 +666,76 @@ test("page headings and overview titles are English-only while typography matche
   assert.match(styles, /\.issue-table td \{ font-size: 10px; \}/);
   assert.match(styles, /\.issue-description strong .*font-size: 14px;/);
   assert.match(styles, /\.attachment-table td .*font-size: 10px;/);
+});
+
+test("projects archive cleanly and tasks support guarded subtasks with optional attachments", async () => {
+  const [dashboard, schema, projectsApi, subtasksApi, attachmentsApi, tasksApi, timerApi, bootstrapApi, styles, migration] = await Promise.all([
+    source("app/task-dashboard.tsx"),
+    source("db/schema.ts"),
+    source("app/api/projects/route.ts"),
+    source("app/api/task-subtasks/route.ts"),
+    source("app/api/task-attachments/route.ts"),
+    source("app/api/tasks/route.ts"),
+    source("app/api/task-timer/route.ts"),
+    source("app/api/bootstrap/route.ts"),
+    source("app/globals.css"),
+    source("drizzle/0013_outstanding_lady_vermin.sql"),
+  ]);
+  assert.match(schema, /"active", "on_hold", "completed", "archived"/);
+  assert.match(projectsApi, /"active", "on_hold", "completed", "archived"/);
+  assert.match(dashboard, /useState\("active"\)/);
+  assert.match(dashboard, /archived: "Archived · مؤرشف"/);
+  assert.match(schema, /export const taskSubtasks/);
+  assert.match(schema, /export const taskAttachments/);
+  assert.match(migration, /CREATE TABLE `task_subtasks`/);
+  assert.match(migration, /CREATE TABLE `task_attachments`/);
+  assert.match(subtasksApi, /type: "subtask_completed"/);
+  assert.match(subtasksApi, /taskForCollaboration/);
+  assert.match(attachmentsApi, /MAX_FILE_BYTES = 25 \* 1024 \* 1024/);
+  assert.match(attachmentsApi, /action === "chunk"/);
+  assert.match(attachmentsApi, /subtaskId/);
+  assert.match(tasksApi, /Complete all subtasks before sending this task/);
+  assert.match(timerApi, /Complete all subtasks before \$\{submitForReview \? "submitting" : "finishing"\} this task/);
+  assert.match(bootstrapApi, /subtasks: subtaskRows/);
+  assert.match(bootstrapApi, /taskAttachments: taskAttachmentRows/);
+  assert.match(dashboard, /Task Attachments/);
+  assert.match(dashboard, /Subtasks/);
+  assert.match(dashboard, /className="subtask-indicator"/);
+  assert.match(dashboard, /uploadTaskAttachment/);
+  assert.match(styles, /\.subtask-table/);
+});
+
+test("task creation drafts subtasks while uploads report progress and private activity stays private", async () => {
+  const [dashboard, tasksApi, subtasksApi, timerApi, issuesModule, styles] = await Promise.all([
+    source("app/task-dashboard.tsx"),
+    source("app/api/tasks/route.ts"),
+    source("app/api/task-subtasks/route.ts"),
+    source("app/api/task-timer/route.ts"),
+    source("app/issues-module.tsx"),
+    source("app/globals.css"),
+  ]);
+  assert.match(dashboard, /type DraftSubtask/);
+  assert.match(dashboard, /setDraftSubtasks\(\(current\) => \[\.\.\.current/);
+  assert.match(dashboard, /subtasks: draftSubtasks\.map/);
+  assert.match(tasksApi, /initialSubtaskTitles/);
+  assert.match(tasksApi, /subtasks: createdSubtasks/);
+  assert.match(dashboard, /className="subtask-number">\{index \+ 1\}/);
+  assert.match(dashboard, /className=\{`assignment-time-grid/);
+  assert.match(dashboard, /\{management && <label className="assignment-employee"/);
+  assert.match(dashboard, /<option key=\{user\.email\} value=\{user\.email\}>\{user\.displayName\}\{user\.discipline/);
+  assert.match(styles, /assignment-time-grid\.management \{ grid-template-columns: minmax\(0, 1\.35fr\)/);
+  assert.match(dashboard, /setTaskAttachmentProgress/);
+  assert.match(dashboard, /<progress max="100" value=\{progress\.percent\}/);
+  assert.match(issuesModule, /setUploadProgress/);
+  assert.match(issuesModule, /<progress max="100" value=\{item\.percent\}/);
+  assert.match(subtasksApi, /task\.visibility === "private" && !task\.submittedToManager/);
+  assert.match(subtasksApi, /managementNotified/);
+  assert.match(dashboard, /data\.managementNotified/);
+  assert.match(dashboard, /Subtask closed · أُغلقت المهمة الفرعية/);
+  assert.match(dashboard, /privateFinishOnly/);
+  assert.match(dashboard, /privateFinishOnly \? "✓ Finish" : "✓ Finish & Submit"/);
+  assert.match(timerApi, /managerCheck: submitForReview \? "pending" : "new"/);
+  assert.match(timerApi, /submittedForReview: action === "finish" && submitForReview/);
+  assert.match(dashboard, /className="subtask-attachment-list"/);
+  assert.match(styles, /\.subtask-attachment-list/);
 });

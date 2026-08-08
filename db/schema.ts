@@ -31,7 +31,7 @@ export const projects = sqliteTable("projects", {
   code: text("code").notNull().unique(),
   name: text("name").notNull(),
   client: text("client").notNull().default(""),
-  status: text("status", { enum: ["active", "on_hold", "completed"] })
+  status: text("status", { enum: ["active", "on_hold", "completed", "archived"] })
     .notNull()
     .default("active"),
   startDate: text("start_date").notNull().default(""),
@@ -116,7 +116,7 @@ export const notifications = sqliteTable(
   {
     id: integer("id").primaryKey({ autoIncrement: true }),
     recipientEmail: text("recipient_email").notNull(),
-    type: text("type", { enum: ["task_assigned", "review_updated", "private_task_submitted", "task_ready_for_review", "issue_created", "issue_updated"] }).notNull(),
+    type: text("type", { enum: ["task_assigned", "review_updated", "private_task_submitted", "task_ready_for_review", "subtask_completed", "issue_created", "issue_updated"] }).notNull(),
     taskId: integer("task_id"),
     issueId: integer("issue_id"),
     title: text("title").notNull(),
@@ -165,6 +165,45 @@ export const taskComments = sqliteTable(
   (table) => [
     index("task_comments_task_idx").on(table.taskId),
     index("task_comments_created_idx").on(table.createdAt),
+  ],
+);
+
+export const taskSubtasks = sqliteTable(
+  "task_subtasks",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    taskId: integer("task_id").notNull(),
+    title: text("title").notNull(),
+    completed: integer("completed", { mode: "boolean" }).notNull().default(false),
+    completedAt: text("completed_at"),
+    completedBy: text("completed_by").notNull().default(""),
+    createdBy: text("created_by").notNull(),
+    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+    updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  },
+  (table) => [
+    index("task_subtasks_task_idx").on(table.taskId),
+    index("task_subtasks_completed_idx").on(table.taskId, table.completed),
+  ],
+);
+
+export const taskAttachments = sqliteTable(
+  "task_attachments",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    taskId: integer("task_id").notNull(),
+    subtaskId: integer("subtask_id"),
+    objectKey: text("object_key").notNull().unique(),
+    fileName: text("file_name").notNull(),
+    contentType: text("content_type").notNull(),
+    sizeBytes: integer("size_bytes").notNull(),
+    uploadedBy: text("uploaded_by").notNull(),
+    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  },
+  (table) => [
+    index("task_attachments_task_idx").on(table.taskId),
+    index("task_attachments_subtask_idx").on(table.subtaskId),
+    index("task_attachments_created_idx").on(table.createdAt),
   ],
 );
 

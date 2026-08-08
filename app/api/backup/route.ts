@@ -9,6 +9,8 @@ import {
   projectMembers,
   projects,
   taskComments,
+  taskAttachments,
+  taskSubtasks,
   taskTimeEntries,
   tasks,
   users,
@@ -19,7 +21,7 @@ import { recordActivity } from "@/lib/activity";
 export const dynamic = "force-dynamic";
 
 const APP_NAME = "HINDAZA Project Management";
-const SCHEMA_VERSION = 6;
+const SCHEMA_VERSION = 7;
 const MAX_BACKUP_BYTES = 20 * 1024 * 1024;
 const MAX_TABLE_ROWS = 100_000;
 const MAX_D1_BOUND_PARAMETERS = 100;
@@ -33,6 +35,8 @@ type BackupData = {
   projectMembers: Array<typeof projectMembers.$inferInsert>;
   tasks: Array<typeof tasks.$inferInsert>;
   taskComments: Array<typeof taskComments.$inferInsert>;
+  taskSubtasks: Array<typeof taskSubtasks.$inferInsert>;
+  taskAttachments: Array<typeof taskAttachments.$inferInsert>;
   taskTimeEntries: Array<typeof taskTimeEntries.$inferInsert>;
   notifications: Array<typeof notifications.$inferInsert>;
   projectIssues: Array<typeof projectIssues.$inferInsert>;
@@ -140,7 +144,7 @@ function optionalNullablePositiveInteger(source: Record<string, unknown>, key: s
 
 function validateBackup(value: unknown): BackupData {
   const payload = record(value, "Backup");
-  if (payload.app !== APP_NAME || ![1, 2, 3, 4, 5, 6].includes(Number(payload.schemaVersion))) {
+  if (payload.app !== APP_NAME || ![1, 2, 3, 4, 5, 6, 7].includes(Number(payload.schemaVersion))) {
     fail("This file is not a compatible HINDAZA backup.");
   }
   const data = record(payload.data, "data");
@@ -167,7 +171,7 @@ function validateBackup(value: unknown): BackupData {
     code: stringField(item, "code", 80, false),
     name: stringField(item, "name", 180, false),
     client: stringField(item, "client", 180),
-    status: enumField(item, "status", ["active", "on_hold", "completed"] as const),
+    status: enumField(item, "status", ["active", "on_hold", "completed", "archived"] as const),
     startDate: stringField(item, "startDate", 10),
     targetDate: stringField(item, "targetDate", 10),
     createdAt: stringField(item, "createdAt", 50, false),
@@ -222,10 +226,34 @@ function validateBackup(value: unknown): BackupData {
     createdAt: stringField(item, "createdAt", 50, false),
   }));
 
+  const restoredSubtasks: BackupData["taskSubtasks"] = (Array.isArray(data.taskSubtasks) ? rows(data.taskSubtasks, "taskSubtasks") : []).map((item) => ({
+    id: positiveInteger(item, "id"),
+    taskId: positiveInteger(item, "taskId"),
+    title: stringField(item, "title", 240, false),
+    completed: booleanField(item, "completed"),
+    completedAt: nullableString(item, "completedAt", 50),
+    completedBy: emailField(item, "completedBy", true),
+    createdBy: emailField(item, "createdBy"),
+    createdAt: stringField(item, "createdAt", 50, false),
+    updatedAt: stringField(item, "updatedAt", 50, false),
+  }));
+
+  const restoredTaskAttachments: BackupData["taskAttachments"] = (Array.isArray(data.taskAttachments) ? rows(data.taskAttachments, "taskAttachments") : []).map((item) => ({
+    id: positiveInteger(item, "id"),
+    taskId: positiveInteger(item, "taskId"),
+    subtaskId: optionalNullablePositiveInteger(item, "subtaskId"),
+    objectKey: stringField(item, "objectKey", 500, false),
+    fileName: stringField(item, "fileName", 180, false),
+    contentType: stringField(item, "contentType", 180, false),
+    sizeBytes: nonNegativeInteger(item, "sizeBytes"),
+    uploadedBy: emailField(item, "uploadedBy"),
+    createdAt: stringField(item, "createdAt", 50, false),
+  }));
+
   const restoredNotifications: BackupData["notifications"] = rows(data.notifications, "notifications").map((item) => ({
     id: positiveInteger(item, "id"),
     recipientEmail: emailField(item, "recipientEmail"),
-    type: enumField(item, "type", ["task_assigned", "review_updated", "private_task_submitted", "task_ready_for_review", "issue_created", "issue_updated"] as const),
+    type: enumField(item, "type", ["task_assigned", "review_updated", "private_task_submitted", "task_ready_for_review", "subtask_completed", "issue_created", "issue_updated"] as const),
     taskId: nullablePositiveInteger(item, "taskId"),
     issueId: optionalNullablePositiveInteger(item, "issueId"),
     title: stringField(item, "title", 180, false),
@@ -297,6 +325,9 @@ function validateBackup(value: unknown): BackupData {
   ensureUnique(restoredProjectMembers, (membership) => `${membership.projectId}:${membership.employeeEmail}`, "project membership");
   ensureUnique(restoredComments, (comment) => comment.id!, "comment id");
   ensureUnique(restoredTimeEntries, (entry) => entry.id!, "time entry id");
+  ensureUnique(restoredSubtasks, (subtask) => subtask.id!, "subtask id");
+  ensureUnique(restoredTaskAttachments, (attachment) => attachment.id!, "task attachment id");
+  ensureUnique(restoredTaskAttachments, (attachment) => attachment.objectKey, "task attachment object key");
   ensureUnique(restoredNotifications, (notification) => notification.id!, "notification id");
   ensureUnique(restoredIssues, (issue) => issue.id!, "project issue id");
   ensureUnique(restoredIssues, (issue) => issue.issueNumber, "project issue number");
@@ -308,6 +339,9 @@ function validateBackup(value: unknown): BackupData {
   if (restoredProjectMembers.some((membership) => !projectIds.has(membership.projectId))) fail("Backup contains an invalid project membership.");
   if (restoredComments.some((comment) => !taskIds.has(comment.taskId))) fail("Backup contains a note for a missing task.");
   if (restoredTimeEntries.some((entry) => !taskIds.has(entry.taskId))) fail("Backup contains a time entry for a missing task.");
+  const subtaskIds = new Set(restoredSubtasks.map((subtask) => subtask.id));
+  if (restoredSubtasks.some((subtask) => !taskIds.has(subtask.taskId))) fail("Backup contains a subtask for a missing task.");
+  if (restoredTaskAttachments.some((attachment) => !taskIds.has(attachment.taskId) || (attachment.subtaskId && !subtaskIds.has(attachment.subtaskId)))) fail("Backup contains an attachment for a missing task or subtask.");
   if (restoredNotifications.some((notification) => notification.taskId && !taskIds.has(notification.taskId))) fail("Backup contains a notification for a missing task.");
   if (restoredNotifications.some((notification) => notification.issueId && !issueIds.has(notification.issueId))) fail("Backup contains a notification for a missing project issue.");
   if (restoredIssues.some((issue) => issue.convertedTaskId && !taskIds.has(issue.convertedTaskId))) fail("Backup contains an issue linked to a missing task.");
@@ -319,6 +353,8 @@ function validateBackup(value: unknown): BackupData {
     projectMembers: restoredProjectMembers,
     tasks: restoredTasks,
     taskComments: restoredComments,
+    taskSubtasks: restoredSubtasks,
+    taskAttachments: restoredTaskAttachments,
     taskTimeEntries: restoredTimeEntries,
     notifications: restoredNotifications,
     projectIssues: restoredIssues,
@@ -352,12 +388,14 @@ export async function GET(request: Request) {
     if (currentUser.role !== "owner") return Response.json({ error: "Owner access required." }, { status: 403 });
     const db = await getDb();
     await recordActivity(db, currentUser, { action: "downloaded", entityType: "backup", entityLabel: "Full system backup", details: "Owner downloaded a backup" });
-    const [userRows, projectRows, membershipRows, taskRows, commentRows, timeRows, notificationRows, issueRows, issueAttachmentRows, issueCategoryRows, activityRows] = await Promise.all([
+    const [userRows, projectRows, membershipRows, taskRows, commentRows, subtaskRows, taskAttachmentRows, timeRows, notificationRows, issueRows, issueAttachmentRows, issueCategoryRows, activityRows] = await Promise.all([
       db.select().from(users).orderBy(asc(users.createdAt), asc(users.email)),
       db.select().from(projects).orderBy(asc(projects.id)),
       db.select().from(projectMembers).orderBy(asc(projectMembers.id)),
       db.select().from(tasks).orderBy(asc(tasks.id)),
       db.select().from(taskComments).orderBy(asc(taskComments.id)),
+      db.select().from(taskSubtasks).orderBy(asc(taskSubtasks.id)),
+      db.select().from(taskAttachments).orderBy(asc(taskAttachments.id)),
       db.select().from(taskTimeEntries).orderBy(asc(taskTimeEntries.id)),
       db.select().from(notifications).orderBy(asc(notifications.id)),
       db.select().from(projectIssues).orderBy(asc(projectIssues.id)),
@@ -371,6 +409,8 @@ export async function GET(request: Request) {
       projectMembers: membershipRows,
       tasks: taskRows,
       taskComments: commentRows,
+      taskSubtasks: subtaskRows,
+      taskAttachments: taskAttachmentRows,
       taskTimeEntries: timeRows,
       notifications: notificationRows,
       projectIssues: issueRows,
@@ -430,6 +470,8 @@ export async function POST(request: Request) {
       d1.prepare("DELETE FROM issue_categories"),
       d1.prepare("DELETE FROM project_issues"),
       d1.prepare("DELETE FROM task_time_entries"),
+      d1.prepare("DELETE FROM task_attachments"),
+      d1.prepare("DELETE FROM task_subtasks"),
       d1.prepare("DELETE FROM task_comments"),
       d1.prepare("DELETE FROM notifications"),
       d1.prepare("DELETE FROM project_members"),
@@ -442,6 +484,8 @@ export async function POST(request: Request) {
       ...insertStatements(d1, "tasks", ["id", "task_date", "employee_name", "employee_email", "project", "title", "expected_output", "priority", "planned_hours", "start_time", "end_time", "actual_hours", "status", "manager_check", "manager_note", "visibility", "submitted_to_manager", "created_by", "created_at", "updated_at"], data.tasks, (task) => [task.id!, task.taskDate, task.employeeName, task.employeeEmail, task.project, task.title, task.expectedOutput, task.priority, task.plannedHours, task.startTime, task.endTime, task.actualHours, task.status, task.managerCheck, task.managerNote, task.visibility, task.submittedToManager, task.createdBy, task.createdAt, task.updatedAt]),
       ...insertStatements(d1, "project_members", ["id", "project_id", "employee_email", "created_at"], data.projectMembers, (membership) => [membership.id!, membership.projectId, membership.employeeEmail, membership.createdAt]),
       ...insertStatements(d1, "task_comments", ["id", "task_id", "author_email", "author_name", "body", "created_at"], data.taskComments, (comment) => [comment.id!, comment.taskId, comment.authorEmail, comment.authorName, comment.body, comment.createdAt]),
+      ...insertStatements(d1, "task_subtasks", ["id", "task_id", "title", "completed", "completed_at", "completed_by", "created_by", "created_at", "updated_at"], data.taskSubtasks, (subtask) => [subtask.id!, subtask.taskId, subtask.title, subtask.completed, subtask.completedAt ?? null, subtask.completedBy, subtask.createdBy, subtask.createdAt, subtask.updatedAt]),
+      ...insertStatements(d1, "task_attachments", ["id", "task_id", "subtask_id", "object_key", "file_name", "content_type", "size_bytes", "uploaded_by", "created_at"], data.taskAttachments, (attachment) => [attachment.id!, attachment.taskId, attachment.subtaskId ?? null, attachment.objectKey, attachment.fileName, attachment.contentType, attachment.sizeBytes, attachment.uploadedBy, attachment.createdAt]),
       ...insertStatements(d1, "task_time_entries", ["id", "task_id", "employee_email", "started_at", "ended_at", "duration_seconds", "created_at"], data.taskTimeEntries, (entry) => [entry.id!, entry.taskId, entry.employeeEmail, entry.startedAt, entry.endedAt ?? null, entry.durationSeconds, entry.createdAt]),
       ...insertStatements(d1, "notifications", ["id", "recipient_email", "type", "task_id", "issue_id", "title", "message", "read", "created_at"], data.notifications, (notification) => [notification.id!, notification.recipientEmail, notification.type, notification.taskId ?? null, notification.issueId ?? null, notification.title, notification.message, notification.read, notification.createdAt]),
       ...insertStatements(d1, "project_issues", ["id", "issue_number", "sequence", "project_code", "status", "discipline", "description", "category", "priority", "assignee_email", "raised_by_email", "raised_by_name", "issue_date", "resolved_date", "comments", "client_reply", "converted_task_id", "created_at", "updated_at"], data.projectIssues, (issue) => [issue.id!, issue.issueNumber, issue.sequence, issue.projectCode, issue.status, issue.discipline, issue.description, issue.category, issue.priority, issue.assigneeEmail, issue.raisedByEmail, issue.raisedByName, issue.issueDate, issue.resolvedDate, issue.comments, issue.clientReply, issue.convertedTaskId ?? null, issue.createdAt, issue.updatedAt]),

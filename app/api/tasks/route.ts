@@ -1,6 +1,6 @@
 import { and, eq, inArray, sql } from "drizzle-orm";
-import { getDb } from "@/db";
-import { notifications, projectMembers, projects, taskComments, taskTimeEntries, tasks, users } from "@/db/schema";
+import { getBucket, getDb } from "@/db";
+import { notifications, projectMembers, projects, taskAttachments, taskComments, taskSubtasks, taskTimeEntries, tasks, users } from "@/db/schema";
 import { getCurrentUser, isManagement, unauthorizedResponse } from "@/lib/auth";
 import { recordActivity } from "@/lib/activity";
 
@@ -82,6 +82,12 @@ async function canManageProject(db: Database, currentUser: CurrentUser, projectC
   return isProjectMember(db, projectCode, currentUser.email);
 }
 
+async function isActiveProject(db: Database, projectCode: string) {
+  if (projectCode === "PERSONAL") return true;
+  const [project] = await db.select({ status: projects.status }).from(projects).where(eq(projects.code, projectCode)).limit(1);
+  return project?.status === "active";
+}
+
 export async function POST(request: Request) {
   try {
     const currentUser = await getCurrentUser(request);
@@ -102,6 +108,9 @@ export async function POST(request: Request) {
       return Response.json({ error: "Select an employee for this task." }, { status: 400 });
     }
     const db = await getDb();
+    if (!(await isActiveProject(db, project))) {
+      return Response.json({ error: "New tasks can be created only in active projects." }, { status: 409 });
+    }
     if (management && !(await canManageProject(db, currentUser, project))) {
       return Response.json({ error: "Managers can create tasks only in projects they are assigned to." }, { status: 403 });
     }
@@ -142,6 +151,12 @@ export async function POST(request: Request) {
         createdBy: currentUser.email,
       })
       .returning();
+    const initialSubtaskTitles = Array.isArray(payload.subtasks)
+      ? payload.subtasks.map((value) => text(value, 240)).filter(Boolean).slice(0, 50)
+      : [];
+    const createdSubtasks = initialSubtaskTitles.length
+      ? await db.insert(taskSubtasks).values(initialSubtaskTitles.map((subtaskTitle) => ({ taskId: inserted[0].id, title: subtaskTitle, createdBy: currentUser.email }))).returning()
+      : [];
 
     if (management) {
       await db.insert(notifications).values({
@@ -155,7 +170,7 @@ export async function POST(request: Request) {
 
     await recordActivity(db, currentUser, { action: "created", entityType: "task", entityId: inserted[0].id, entityLabel: inserted[0].title, projectCode: inserted[0].project, details: `Assigned to ${inserted[0].employeeName}` });
 
-    return Response.json({ task: inserted[0] }, { status: 201 });
+    return Response.json({ task: inserted[0], subtasks: createdSubtasks }, { status: 201 });
   } catch (error) {
     const unauthorized = unauthorizedResponse(error);
     if (unauthorized) return unauthorized;
@@ -187,6 +202,11 @@ export async function PATCH(request: Request) {
         && existing[0].employeeEmail === currentUser.email;
       if (!canSubmit) {
         return Response.json({ error: "Only the owner can submit this private task." }, { status: 403 });
+      }
+      const openSubtasks = await db.select({ id: taskSubtasks.id }).from(taskSubtasks)
+        .where(and(eq(taskSubtasks.taskId, id), eq(taskSubtasks.completed, false)));
+      if (openSubtasks.length) {
+        return Response.json({ error: `Complete all subtasks before sending this task to the manager (${openSubtasks.length} remaining).` }, { status: 409 });
       }
       const submitted = await db
         .update(tasks)
@@ -328,6 +348,10 @@ export async function DELETE(request: Request) {
     }
     await db.delete(taskComments).where(eq(taskComments.taskId, id));
     await db.delete(taskTimeEntries).where(eq(taskTimeEntries.taskId, id));
+    const attachments = await db.select().from(taskAttachments).where(eq(taskAttachments.taskId, id));
+    if (attachments.length) await (await getBucket()).delete(attachments.map((attachment) => attachment.objectKey));
+    await db.delete(taskAttachments).where(eq(taskAttachments.taskId, id));
+    await db.delete(taskSubtasks).where(eq(taskSubtasks.taskId, id));
     await db.delete(notifications).where(eq(notifications.taskId, id));
     await db.delete(tasks).where(eq(tasks.id, id));
     await recordActivity(db, currentUser, { action: "deleted", entityType: "task", entityId: id, entityLabel: existing[0].title, projectCode: existing[0].project, details: `Assigned to ${existing[0].employeeName}` });
