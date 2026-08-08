@@ -1,6 +1,6 @@
 import { asc, count, desc, eq } from "drizzle-orm";
 import { getDb } from "@/db";
-import { notifications, projectMembers, projects, taskComments, taskTimeEntries, tasks, users } from "@/db/schema";
+import { notifications, projectMembers, projects, taskAttachments, taskComments, taskSubtasks, taskTimeEntries, tasks, users } from "@/db/schema";
 import { getCurrentUser, isManagement, unauthorizedResponse } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
@@ -119,9 +119,11 @@ export async function GET(request: Request) {
       db.select().from(projects).orderBy(asc(projects.code)),
       db.select().from(projectMembers),
     ]);
-    const [allCommentRows, allTimeRows, notificationRows] = await Promise.all([
+    const [allCommentRows, allTimeRows, allSubtaskRows, allTaskAttachmentRows, notificationRows] = await Promise.all([
       db.select().from(taskComments).orderBy(asc(taskComments.createdAt), asc(taskComments.id)),
       db.select().from(taskTimeEntries).orderBy(asc(taskTimeEntries.startedAt), asc(taskTimeEntries.id)),
+      db.select().from(taskSubtasks).orderBy(asc(taskSubtasks.createdAt), asc(taskSubtasks.id)),
+      db.select().from(taskAttachments).orderBy(asc(taskAttachments.createdAt), asc(taskAttachments.id)),
       db.select().from(notifications).where(eq(notifications.recipientEmail, currentUser.email)).orderBy(desc(notifications.createdAt), desc(notifications.id)),
     ]);
 
@@ -157,6 +159,8 @@ export async function GET(request: Request) {
     }));
     const commentRows = allCommentRows.filter((comment) => visibleTaskIds.has(comment.taskId));
     const timeRows = allTimeRows.filter((entry) => visibleTaskIds.has(entry.taskId));
+    const subtaskRows = allSubtaskRows.filter((subtask) => visibleTaskIds.has(subtask.taskId));
+    const taskAttachmentRows = allTaskAttachmentRows.filter((attachment) => visibleTaskIds.has(attachment.taskId));
 
     const visibleUsers = currentUser.role === "owner"
       ? userRows
@@ -171,6 +175,8 @@ export async function GET(request: Request) {
       projects: projectRows,
       comments: commentRows,
       timeEntries: timeRows,
+      subtasks: subtaskRows,
+      taskAttachments: taskAttachmentRows,
       notifications: notificationRows,
     }, { headers: { "Cache-Control": "no-store, no-cache, must-revalidate" } });
   } catch (error) {

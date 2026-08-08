@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import ButtonTooltips from "./button-tooltips";
+import OverlayScrollLock from "./overlay-scroll-lock";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -36,6 +37,7 @@ export default function RootLayout({
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
       >
         <ButtonTooltips />
+        <OverlayScrollLock />
         {children}
       </body>
     </html>

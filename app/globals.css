@@ -30,6 +30,8 @@ body {
   direction: ltr;
   text-align: left;
 }
+html.overlay-scroll-locked, body.overlay-scroll-locked { overflow: hidden; overscroll-behavior: none; }
+body.overlay-scroll-locked :is(.task-form, .attachment-preview-content, .dependency-warning-dialog, .app-confirm-dialog) { overscroll-behavior: contain; }
 button, input, select, textarea, table, th, td { font-family: var(--font-ui); }
 button, input, select, textarea { font-size: inherit; }
 input, select, textarea { direction: ltr; text-align: left; }
@@ -896,4 +898,59 @@ button.overview-kpi:hover { transform: translateY(-2px); border-color: #d8bc35; 
   .overview-kpi.kpi-hours { grid-column: 1 / -1; }
   .overview-panel-heading { align-items: flex-start; }
   .overview-donut-row { flex-direction: column; }.overview-legend { width: 100%; }
+}
+
+.project-status.archived { background: #ececef; color: #60616a; }
+.subtask-indicator { display: inline-flex; align-items: center; gap: 3px; min-width: 28px; height: 23px; justify-content: center; border: 1px solid #cfc7eb; border-radius: 7px; background: #f3efff; color: #6d54a3; font-size: 12px; font-weight: 900; line-height: 1; }
+.subtask-indicator small { color: inherit !important; font-size: 8px !important; margin: 0 !important; }
+.task-attachment-toolbar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.task-attachment-toolbar > small { color: #7a858a; font-size: 10px; }
+.task-attachment-add { display: inline-flex; align-items: center; gap: 7px; width: fit-content; min-height: 35px; padding: 7px 11px; border: 1px dashed #9b8bc1; border-radius: 9px; background: #f7f4ff; color: #5d477f; cursor: pointer; font-size: 10px; }
+.task-attachment-add span { font-size: 18px; line-height: 1; }
+.task-attachment-add input { display: none; }
+.task-attachment-toolbar.compact { display: inline-flex; }
+.task-attachment-toolbar.compact .task-attachment-add { width: 30px; min-height: 28px; height: 28px; padding: 2px; justify-content: center; border-style: solid; }
+.task-attachments-table-wrap { margin-top: 10px; }
+.task-attachments-table { min-width: 460px; }
+.task-attachments-table-wrap.compact { display: inline-block; width: auto; max-width: 270px; margin: 6px 0 0; vertical-align: middle; }
+.task-attachments-table-wrap.compact .task-attachments-table { min-width: 245px; }
+.task-attachments-table td strong { display: block; max-width: 250px; overflow: hidden; text-overflow: ellipsis; }
+.task-attachments-table td small { display: block; color: #8b9498; font-size: 8px; margin-top: 2px; }
+.subtask-composer { display: grid; grid-template-columns: 1fr 40px; gap: 8px; margin-bottom: 12px; }
+.subtask-composer input { min-height: 40px; border: 1px solid #dce2e3; border-radius: 9px; padding: 9px 11px; font: inherit; }
+.subtask-composer button { border: 0; border-radius: 9px; background: #6d54a3; color: white; font-size: 22px; cursor: pointer; }
+.subtask-composer button:disabled { opacity: .45; cursor: default; }
+.subtask-table-wrap { overflow-x: auto; border: 1px solid #e1e5e6; border-radius: 11px; }
+.subtask-table { width: 100%; min-width: 610px; border-collapse: collapse; text-align: left; }
+.subtask-table th { padding: 9px; background: #f5f6f5; border-bottom: 1px solid #e1e5e6; color: #707b80; font-size: 9px; }
+.subtask-table td { padding: 10px 9px; border-bottom: 1px solid #ecefef; vertical-align: top; font-size: 10px; }
+.subtask-table tr:last-child td { border-bottom: 0; }
+.subtask-table tr.completed > td:nth-child(3) strong { text-decoration: line-through; color: #899295; }
+.subtask-table td > small { display: block; margin-top: 4px; color: #3d8064; font-size: 8px; }
+.subtask-table input[type="checkbox"] { width: 18px; height: 18px; accent-color: #32845e; }
+.subtask-delete { width: 28px; height: 28px; border: 1px solid #efcaca; border-radius: 8px; background: #fff5f5; color: #b42c36; cursor: pointer; }
+.subtask-submit-lock { margin-top: 10px; padding: 9px 11px; border: 1px solid #efc76c; border-radius: 8px; background: #fff8dc; color: #7b5b10; font-size: 10px; font-weight: 700; }
+.assignment-time-section { padding-top: 15px; padding-bottom: 15px; }
+.assignment-time-grid { display: grid; align-items: end; gap: 10px; }
+.assignment-time-grid.management { grid-template-columns: minmax(0, 1.35fr) minmax(110px, .5fr) minmax(110px, .5fr); }
+.assignment-time-grid.member { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.assignment-time-grid label { min-width: 0; }
+.assignment-time-grid label > span { display: block; margin-bottom: 5px; color: #64737a; font-size: 9px; font-weight: 800; }
+.assignment-time-grid select, .assignment-time-grid input { width: 100%; min-height: 39px; }
+.attachment-upload-progress { margin-top: 9px; padding: 9px 10px; border: 1px solid #ddd4f0; border-radius: 9px; background: #faf8ff; }
+.attachment-upload-progress > div { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 6px; color: #5d477f; font-size: 9px; }
+.attachment-upload-progress > div strong { max-width: 75%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.attachment-upload-progress progress { display: block; width: 100%; height: 7px; accent-color: #6d54a3; }
+.attachment-upload-progress.compact { width: 150px; margin: 5px 0 0; padding: 6px 8px; }
+.attachment-upload-progress.compact > div { margin-bottom: 4px; font-size: 8px; }
+.subtask-attachment-list { display: grid; gap: 4px; margin-top: 5px; max-width: 260px; }
+.subtask-attachment-list > div { display: flex; align-items: center; min-width: 0; border: 1px solid #e1e4e5; border-radius: 7px; background: #fff; }
+.subtask-attachment-open { display: flex; align-items: center; gap: 5px; min-width: 0; flex: 1; padding: 5px 7px; border: 0; background: transparent; color: #4f5d63; font-size: 9px; cursor: pointer; }
+.subtask-attachment-open span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.subtask-attachment-remove { width: 25px; height: 25px; border: 0; border-left: 1px solid #eceeef; background: transparent; color: #b42c36; cursor: pointer; }
+.subtask-number { width: 34px; color: #6d54a3; font-weight: 900; text-align: center; }
+.save-first-note { color: #8a9498 !important; font-style: italic; }
+@media (max-width: 620px) {
+  .assignment-time-grid.management { grid-template-columns: 1fr 1fr; }
+  .assignment-time-grid.management .assignment-employee { grid-column: 1 / -1; }
 }
