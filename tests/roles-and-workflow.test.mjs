@@ -218,6 +218,10 @@ test("team and project filters support safe project-member removal", async () =>
   ]);
   assert.match(dashboard, /teamDisciplineFilter/);
   assert.match(dashboard, /teamRoleFilter/);
+  assert.match(dashboard, /teamSearch/);
+  assert.match(dashboard, /memberSearch/);
+  assert.match(dashboard, /aria-label="Search employee"/);
+  assert.match(dashboard, /aria-label="Search project employees"/);
   assert.match(dashboard, /projectStatusFilter/);
   assert.match(dashboard, /Employee cannot be removed yet/);
   assert.match(dashboard, /onResolveMemberTasks/);
@@ -236,7 +240,9 @@ test("task management uses an English left-to-right table and actions", async ()
   ]);
   assert.match(dashboard, /task-table-ltr/);
   assert.match(dashboard, /<th>Task \/ Project<\/th>/);
+  assert.match(dashboard, /<th>Created By<\/th>/);
   assert.match(dashboard, /<th>Created Date<\/th><th>Due Date<\/th>/);
+  assert.match(dashboard, /className="creator-cell"/);
   assert.match(dashboard, /<ButtonLabel en="Delete Task" ar="حذف المهمة"/);
   assert.match(dashboard, /en=\{saving \? "Saving\.\.\." : selectedId \? "Save Changes" : "Create Task"\}/);
   assert.match(styles, /\.task-table-ltr \{[^}]*direction: ltr/);
@@ -324,18 +330,18 @@ test("buttons use English-only labels, global tooltips, and unified report and n
     source("app/globals.css"),
   ]);
   assert.match(dashboard, /<strong>\{item\.en\}<\/strong><small dir="rtl">\{item\.ar\}<\/small><\/span><\/button>/);
-  assert.match(dashboard, /ar: "نظرة عامة"/);
+  assert.match(dashboard, /<strong>Overview<\/strong><small dir="rtl">نظرة عامة<\/small>/);
   assert.match(dashboard, /ar: "التقارير"/);
-  assert.match(dashboard, /tab === "tasks"[\s\S]*?className="button-icon"[^>]*>✓<\/span><span>New Task<\/span>/);
-  assert.match(dashboard, /tab === "issues"[\s\S]*?className="button-icon"[^>]*>!<\/span><span>New Issue<\/span>/);
+  assert.match(dashboard, /projectWorkspaceTab === "tasks"[\s\S]*?className="button-icon"[^>]*>✓<\/span><span>New Task<\/span>/);
+  assert.match(dashboard, /projectWorkspaceTab === "issues"[\s\S]*?className="button-icon"[^>]*>!<\/span><span>New Issue<\/span>/);
   assert.match(dashboard, /tab === "projects"[\s\S]*?src="\/icons\/projects-v2\.png"[\s\S]*?<span>New Project<\/span>/);
   assert.match(dashboard, /tab === "team"[\s\S]*?src="\/icons\/team-v2\.png"[\s\S]*?<span>Add Employee<\/span>/);
   assert.doesNotMatch(dashboard, /<ButtonLabel en="(?:New Task|New Issue|New Project|Add Employee)"/);
-  assert.match(dashboard, /className="topbar-icon-action task-action-icon"[\s\S]*?aria-label="New Task"/);
-  assert.match(dashboard, /className="topbar-icon-action task-action-icon private-task-action-icon"[\s\S]*?aria-label="Private Task"/);
-  assert.match(dashboard, /className="topbar-icon-action issue-action-icon"[\s\S]*?aria-label="New Issue"/);
-  assert.match(dashboard, /function openNewTaskFromOverview\(\)[\s\S]*?setTab\("tasks"\)[\s\S]*?currentUser\?\.role === "member"[\s\S]*?openNewPrivateTask\(\)[\s\S]*?openNewTask\(\)/);
-  assert.match(dashboard, /function openNewIssue\(\)[\s\S]*?setTab\("issues"\)[\s\S]*?issuesModuleRef\.current\?\.openNew\(\)/);
+  assert.doesNotMatch(dashboard, /tab === "overview"[\s\S]{0,180}topbar-icon-action/);
+  assert.doesNotMatch(dashboard, /function openNewTaskFromOverview/);
+  const topbarActions = dashboard.slice(dashboard.indexOf('<div className="topbar-actions">'), dashboard.indexOf('</header>'));
+  assert.ok(topbarActions.indexOf("Add Employee") < topbarActions.indexOf('className="notification-center"'));
+  assert.match(dashboard, /function openNewIssue\(\)[\s\S]*?openProjectWorkspace\(projectCode, "issues"\)[\s\S]*?issuesModuleRef\.current\?\.openNew\(\)/);
   assert.match(dashboard, /function ButtonLabel\(\{ en \}:[\s\S]*?<strong>\{en\}<\/strong><\/span>/);
   assert.match(issuesModule, /function ButtonLabel\(\{ en \}:[\s\S]*?<strong>\{en\}<\/strong><\/span>/);
   assert.match(login, /function ButtonLabel\(\{ en \}:[\s\S]*?<strong>\{en\}<\/strong><\/span>/);
@@ -350,7 +356,7 @@ test("buttons use English-only labels, global tooltips, and unified report and n
   assert.match(styles, /\.private-task-action-icon \{[^}]*background: #f3edff;[^}]*color: #5f4788/);
   assert.match(styles, /\.topbar \.topbar-add-button \{[^}]*font-size: 11px;[^}]*font-weight: 400/);
   assert.doesNotMatch(styles, /\.topbar-icon-action::after/);
-  assert.match(dashboard, /\{ key: "projects", icon: "\/icons\/projects-v2\.png"/);
+  assert.match(dashboard, /className="nav-icon has-image"><img src="\/icons\/projects-v2\.png"/);
   assert.match(dashboard, /\{ key: "team", icon: "\/icons\/team-v2\.png"/);
   assert.match(dashboard, /\{ key: "reports", icon: "\/icons\/reports-v2\.png"/);
   assert.match(dashboard, /<img src=\{item\.icon\} alt="" aria-hidden="true"/);
@@ -528,13 +534,14 @@ test("project team picker filters by discipline and shows each member role", asy
   assert.match(dashboard, /availableDisciplines/);
   assert.match(dashboard, /filteredTeamMembers/);
   assert.match(dashboard, /Filter project team by discipline/);
+  assert.match(dashboard, /Search project employees/);
   assert.match(dashboard, /All disciplines · كل التخصصات/);
   assert.match(dashboard, /\(\{roleLabel\(user\.role\)\}\)/);
   assert.match(styles, /\.project-team-controls select/);
   assert.match(styles, /\.member-picker \.member-role/);
 });
 
-test("management can audit submitted work sessions and directory records support table views", async () => {
+test("management can audit submitted work sessions and directories use the requested tables", async () => {
   const [dashboard, timerApi, issuesModule, styles] = await Promise.all([
     source("app/task-dashboard.tsx"),
     source("app/api/task-timer/route.ts"),
@@ -548,10 +555,10 @@ test("management can audit submitted work sessions and directory records support
   assert.match(dashboard, /updateWorkSession/);
   assert.match(dashboard, /deleteWorkSession/);
   assert.match(dashboard, /canAuditSessions/);
-  assert.match(dashboard, /projectView === "table"/);
   assert.match(dashboard, /teamView === "table"/);
-  assert.match(dashboard, /projectView, setProjectView\] = useState<DirectoryView>\("table"\)/);
   assert.match(dashboard, /teamView, setTeamView\] = useState<DirectoryView>\("table"\)/);
+  assert.match(dashboard, /className="task-table directory-table project-management-table"/);
+  assert.match(dashboard, /className="project-settings-button"/);
   assert.match(dashboard, /view-switcher/);
   assert.match(issuesModule, /attachment-preview-dialog/);
   assert.match(issuesModule, /download>Download/);
@@ -568,7 +575,7 @@ test("project overview is a detailed drill-down dashboard and Office attachments
     source("app/globals.css"),
     source("package.json"),
   ]);
-  assert.match(dashboard, /overview: "Project Overview"/);
+  assert.match(dashboard, /overview: "PROJECT OVERVIEW"/);
   assert.doesNotMatch(dashboard, /Team Daily Overview/);
   assert.match(dashboard, /ProjectOverviewDashboard/);
   assert.match(dashboard, /PORTFOLIO HEALTH/);
@@ -655,7 +662,9 @@ test("page headings and overview titles are English-only while typography matche
     source("app/globals.css"),
   ]);
   assert.match(dashboard, /const pageTitle: Record<Tab, string>/);
-  assert.match(dashboard, /<h1 dir="ltr">\{pageTitle\[tab\]\}<\/h1><p className="subhead"/);
+  assert.match(dashboard, /reports: "REPORTS"/);
+  assert.match(dashboard, /projects: "PROJECT MANAGEMENT"/);
+  assert.match(dashboard, /<div className="project-heading-line"><h1 dir="ltr">\{tab === "projects" && selectedProject \? selectedProject\.name : pageTitle\[tab\]\}<\/h1>/);
   assert.doesNotMatch(dashboard, /pageTitle\[tab\]\.ar|page-title-ar/);
   assert.match(dashboard, /<span>Active Projects<\/span>/);
   const overview = dashboard.slice(dashboard.indexOf("function ProjectOverviewDashboard"), dashboard.indexOf("function TaskTable"));
@@ -666,6 +675,96 @@ test("page headings and overview titles are English-only while typography matche
   assert.match(styles, /\.issue-table td \{ font-size: 10px; \}/);
   assert.match(styles, /\.issue-description strong .*font-size: 14px;/);
   assert.match(styles, /\.attachment-table td .*font-size: 10px;/);
+});
+
+test("project navigation scopes tasks and issues without changing reports", async () => {
+  const [dashboard, issuesModule, styles] = await Promise.all([
+    source("app/task-dashboard.tsx"),
+    source("app/issues-module.tsx"),
+    source("app/globals.css"),
+  ]);
+  assert.match(dashboard, /onClick=\{openProjectDirectory\} aria-label="Open Project Management"/);
+  assert.doesNotMatch(dashboard, /Toggle Project list|projectMenuOpen|project-nav-list/);
+  assert.match(dashboard, /<tr key=\{project\.id\} onClick=\{\(\) => openProjectWorkspace\(project\.code\)\}/);
+  assert.match(dashboard, /event\.stopPropagation\(\); openProject\(project\)/);
+  assert.match(dashboard, /<th>Issues<\/th><th>RFI<\/th>/);
+  assert.match(dashboard, /project\.closedIssues/);
+  assert.match(dashboard, /project\.closedRfi/);
+  assert.match(dashboard, /type ProjectWorkspaceTab = "tasks" \| "issues" \| "rfi"/);
+  assert.match(dashboard, /role="tablist" aria-label="Project sections"/);
+  assert.match(dashboard, /className="report-type-icon" aria-hidden="true">✓<\/span> Tasks/);
+  assert.match(dashboard, /className="project-switcher" ref=\{projectSwitcherRef\}/);
+  assert.match(dashboard, /className="project-switcher-button"/);
+  assert.match(dashboard, /className="project-switcher-menu" role="menu"/);
+  assert.match(dashboard, /aria-label="Switch project"/);
+  assert.match(dashboard, /value=\{projectSearch\}/);
+  assert.match(dashboard, /aria-label="Clear all project filters"/);
+  assert.match(dashboard, /setProjectSearch\(""\); setProjectStatusFilter\("all"\)/);
+  assert.match(dashboard, /className="project-table-identity"><strong>\{project\.name\}<\/strong><small className="project-code">\{project\.code\}<\/small>/);
+  assert.doesNotMatch(dashboard, /<small>Tasks in this project<\/small>/);
+  assert.doesNotMatch(dashboard, /project-workspace-header panel/);
+  assert.match(dashboard, /lockedProjectCode=\{selectedProject\.code\}/);
+  assert.match(dashboard, /!props\.lockedProjectCode && <select[\s\S]*?Filter by project/);
+  assert.match(issuesModule, /lockedProjectCode\?: string/);
+  assert.match(issuesModule, /!lockedProjectCode && <select value=\{projectFilter\}/);
+  assert.match(dashboard, /tab === "reports" && <div className="reports-workspace"/);
+  assert.match(styles, /\.project-workspace-tabs/);
+  assert.match(styles, /\.project-switcher/);
+  assert.match(styles, /\.project-switcher-menu \{ position: absolute;[^}]*right: 0;/);
+  assert.match(styles, /\.project-switcher-menu strong \{ color: #171717;/);
+  assert.match(styles, /\.project-table-identity > strong/);
+});
+
+test("project managers have project-wide visibility and modern project navigation", async () => {
+  const [schema, migration, projectsApi, bootstrapApi, access, attachmentsApi, dashboard, styles] = await Promise.all([
+    source("db/schema.ts"),
+    source("drizzle/0014_smooth_carlie_cooper.sql"),
+    source("app/api/projects/route.ts"),
+    source("app/api/bootstrap/route.ts"),
+    source("lib/task-access.ts"),
+    source("app/api/task-attachments/route.ts"),
+    source("app/task-dashboard.tsx"),
+    source("app/globals.css"),
+  ]);
+  assert.match(schema, /isProjectManager: integer\("is_project_manager"/);
+  assert.match(migration, /ADD `is_project_manager` integer DEFAULT false NOT NULL/);
+  assert.match(projectsApi, /projectManagerEmails/);
+  assert.match(projectsApi, /isProjectManager: assignedProjectManagers\.includes\(employeeEmail\)/);
+  assert.match(bootstrapApi, /managedProjectCodes/);
+  assert.match(bootstrapApi, /managedProjectCodes\.has\(task\.project\)/);
+  assert.match(bootstrapApi, /projectManagerEmails:/);
+  assert.match(access, /export async function canViewTask/);
+  assert.match(access, /membership\?\.isProjectManager/);
+  assert.match(attachmentsApi, /taskForView/);
+  assert.match(dashboard, /Project Manager/);
+  assert.match(dashboard, /toggleProjectManager/);
+  assert.match(dashboard, /aria-label="Back to Projects" title="Back to Projects"/);
+  assert.match(dashboard, /<svg viewBox="0 0 24 24"/);
+  assert.match(styles, /\.project-switcher-button .*background: linear-gradient/);
+  assert.match(styles, /\.project-directory-back/);
+});
+
+test("project managers see employee assignments but other creators' tasks stay read-only", async () => {
+  const [dashboard, tasksApi, taskAccess, timerApi, styles] = await Promise.all([
+    source("app/task-dashboard.tsx"),
+    source("app/api/tasks/route.ts"),
+    source("lib/task-access.ts"),
+    source("app/api/task-timer/route.ts"),
+    source("app/globals.css"),
+  ]);
+  assert.match(dashboard, /currentUserIsProjectManager/);
+  assert.match(dashboard, /showEmployeeFilter=\{currentUser\?\.role !== "member" \|\| currentUserIsProjectManager\}/);
+  assert.match(dashboard, /projectManagerReadOnly/);
+  assert.match(dashboard, /task\.createdBy !== currentUser\.email/);
+  assert.match(dashboard, /readOnly=\{!canCollaborate\}/);
+  assert.match(tasksApi, /isReadOnlyProjectManager/);
+  assert.match(tasksApi, /Project managers can edit or delete only tasks they created/);
+  assert.match(taskAccess, /!membership\.isProjectManager/);
+  assert.match(timerApi, /!membership\.isProjectManager \|\| task\.createdBy === currentUser\.email/);
+  assert.match(dashboard, /className="project-settings-topbar"/);
+  assert.match(dashboard, /aria-label="Project settings" title="Project settings"/);
+  assert.match(styles, /\.project-directory-back \{ height: 43px; min-height: 43px;/);
+  assert.match(styles, /\.project-settings-topbar \{ width: 43px; height: 43px;/);
 });
 
 test("projects archive cleanly and tasks support guarded subtasks with optional attachments", async () => {
@@ -694,7 +793,7 @@ test("projects archive cleanly and tasks support guarded subtasks with optional 
   assert.match(attachmentsApi, /MAX_FILE_BYTES = 25 \* 1024 \* 1024/);
   assert.match(attachmentsApi, /action === "chunk"/);
   assert.match(attachmentsApi, /subtaskId/);
-  assert.match(tasksApi, /Complete all subtasks before sending this task/);
+  assert.doesNotMatch(tasksApi, /Complete all subtasks before sending this task/);
   assert.match(timerApi, /Complete all subtasks before \$\{submitForReview \? "submitting" : "finishing"\} this task/);
   assert.match(bootstrapApi, /subtasks: subtaskRows/);
   assert.match(bootstrapApi, /taskAttachments: taskAttachmentRows/);
@@ -719,6 +818,13 @@ test("task creation drafts subtasks while uploads report progress and private ac
   assert.match(dashboard, /subtasks: draftSubtasks\.map/);
   assert.match(tasksApi, /initialSubtaskTitles/);
   assert.match(tasksApi, /subtasks: createdSubtasks/);
+  assert.match(tasksApi, /Created by \$\{currentUser\.displayName\}/);
+  assert.match(tasksApi, /Private task shared with management/);
+  assert.match(tasksApi, /const ownPrivateTask = currentUser\.role === "member"/);
+  assert.match(tasksApi, /You can delete only your own private tasks/);
+  assert.match(dashboard, /memberOwnPrivate/);
+  assert.match(dashboard, /Share with Manager/);
+  assert.match(dashboard, /team: "TEAM"/);
   assert.match(dashboard, /className="subtask-number">\{index \+ 1\}/);
   assert.match(dashboard, /className=\{`assignment-time-grid/);
   assert.match(dashboard, /\{management && <label className="assignment-employee"/);
@@ -738,4 +844,30 @@ test("task creation drafts subtasks while uploads report progress and private ac
   assert.match(timerApi, /submittedForReview: action === "finish" && submitForReview/);
   assert.match(dashboard, /className="subtask-attachment-list"/);
   assert.match(styles, /\.subtask-attachment-list/);
+});
+
+test("project tabs are compact, task notes edit for fifteen minutes, and due dates filter tasks", async () => {
+  const [dashboard, commentsApi, styles] = await Promise.all([
+    source("app/task-dashboard.tsx"),
+    source("app/api/task-comments/route.ts"),
+    source("app/globals.css"),
+  ]);
+  const workspaceStart = dashboard.indexOf('aria-label={`${selectedProject.name} workspace`}');
+  const tabsStart = dashboard.indexOf('className="project-workspace-tabs"', workspaceStart);
+  const statsStart = dashboard.indexOf('className="stats-grid task-stats-ltr"', workspaceStart);
+  assert.ok(workspaceStart >= 0 && tabsStart > workspaceStart && tabsStart < statsStart);
+  assert.match(styles, /\.project-workspace-tabs button \{ min-height: 38px;/);
+  assert.match(styles, /\.report-type-selector button \{ min-height: 38px;/);
+  assert.match(dashboard, /aria-label="Filter by due date"/);
+  assert.match(dashboard, /!dueDateFilter \|\| task\.taskDate === dueDateFilter/);
+  assert.match(dashboard, /setDueDateFilter\(""\)/);
+  assert.match(dashboard, /label: "Overdue · متجاوزة الوقت"/);
+  assert.doesNotMatch(dashboard, /label: "Overtime/);
+  assert.match(dashboard, /canEditComment\(comment, currentUser, clock\)/);
+  assert.match(dashboard, /className="comment-edit-button"/);
+  assert.match(dashboard, /fetch\("\/api\/task-comments"[\s\S]*?method: "PATCH"/);
+  assert.match(commentsApi, /COMMENT_EDIT_WINDOW_MS = 15 \* 60 \* 1000/);
+  assert.match(commentsApi, /comment\.authorEmail\.toLowerCase\(\) !== currentUser\.email\.toLowerCase\(\)/);
+  assert.match(commentsApi, /elapsed > COMMENT_EDIT_WINDOW_MS/);
+  assert.match(commentsApi, /Only the note author can edit it/);
 });

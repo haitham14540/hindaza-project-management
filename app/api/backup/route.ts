@@ -204,6 +204,7 @@ function validateBackup(value: unknown): BackupData {
     id: positiveInteger(item, "id"),
     projectId: positiveInteger(item, "projectId"),
     employeeEmail: emailField(item, "employeeEmail"),
+    isProjectManager: item.isProjectManager === undefined ? false : booleanField(item, "isProjectManager"),
     createdAt: stringField(item, "createdAt", 50, false),
   }));
 
@@ -482,7 +483,7 @@ export async function POST(request: Request) {
       ...insertStatements(d1, "users", ["email", "display_name", "role", "discipline", "password_hash", "password_salt", "profile_image_key", "active", "created_at"], data.users, (user) => [user.email, user.displayName, user.role, user.discipline, user.passwordHash, user.passwordSalt, user.profileImageKey ?? "", user.active, user.createdAt]),
       ...insertStatements(d1, "projects", ["id", "code", "name", "client", "status", "start_date", "target_date", "created_at"], data.projects, (project) => [project.id!, project.code, project.name, project.client, project.status, project.startDate, project.targetDate, project.createdAt]),
       ...insertStatements(d1, "tasks", ["id", "task_date", "employee_name", "employee_email", "project", "title", "expected_output", "priority", "planned_hours", "start_time", "end_time", "actual_hours", "status", "manager_check", "manager_note", "visibility", "submitted_to_manager", "created_by", "created_at", "updated_at"], data.tasks, (task) => [task.id!, task.taskDate, task.employeeName, task.employeeEmail, task.project, task.title, task.expectedOutput, task.priority, task.plannedHours, task.startTime, task.endTime, task.actualHours, task.status, task.managerCheck, task.managerNote, task.visibility, task.submittedToManager, task.createdBy, task.createdAt, task.updatedAt]),
-      ...insertStatements(d1, "project_members", ["id", "project_id", "employee_email", "created_at"], data.projectMembers, (membership) => [membership.id!, membership.projectId, membership.employeeEmail, membership.createdAt]),
+      ...insertStatements(d1, "project_members", ["id", "project_id", "employee_email", "is_project_manager", "created_at"], data.projectMembers, (membership) => [membership.id!, membership.projectId, membership.employeeEmail, membership.isProjectManager, membership.createdAt]),
       ...insertStatements(d1, "task_comments", ["id", "task_id", "author_email", "author_name", "body", "created_at"], data.taskComments, (comment) => [comment.id!, comment.taskId, comment.authorEmail, comment.authorName, comment.body, comment.createdAt]),
       ...insertStatements(d1, "task_subtasks", ["id", "task_id", "title", "completed", "completed_at", "completed_by", "created_by", "created_at", "updated_at"], data.taskSubtasks, (subtask) => [subtask.id!, subtask.taskId, subtask.title, subtask.completed, subtask.completedAt ?? null, subtask.completedBy, subtask.createdBy, subtask.createdAt, subtask.updatedAt]),
       ...insertStatements(d1, "task_attachments", ["id", "task_id", "subtask_id", "object_key", "file_name", "content_type", "size_bytes", "uploaded_by", "created_at"], data.taskAttachments, (attachment) => [attachment.id!, attachment.taskId, attachment.subtaskId ?? null, attachment.objectKey, attachment.fileName, attachment.contentType, attachment.sizeBytes, attachment.uploadedBy, attachment.createdAt]),

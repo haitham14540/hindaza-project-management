@@ -3,7 +3,7 @@ import { getBucket, getDb } from "@/db";
 import { taskAttachments, taskSubtasks } from "@/db/schema";
 import { getCurrentUser, unauthorizedResponse } from "@/lib/auth";
 import { recordActivity } from "@/lib/activity";
-import { taskForCollaboration } from "@/lib/task-access";
+import { taskForCollaboration, taskForView } from "@/lib/task-access";
 
 export const dynamic = "force-dynamic";
 
@@ -55,7 +55,7 @@ export async function GET(request: Request) {
     if (!Number.isInteger(id)) return Response.json({ error: "Invalid attachment id." }, { status: 400 });
     const db = await getDb();
     const [attachment] = await db.select().from(taskAttachments).where(eq(taskAttachments.id, id)).limit(1);
-    if (!attachment || !(await taskForCollaboration(db, currentUser, attachment.taskId))) return new Response(null, { status: 404 });
+    if (!attachment || !(await taskForView(db, currentUser, attachment.taskId))) return new Response(null, { status: 404 });
     const object = await (await getBucket()).get(attachment.objectKey);
     if (!object) return new Response(null, { status: 404 });
     const headers = new Headers({

@@ -5,6 +5,12 @@ import { getCurrentUser, unauthorizedResponse } from "@/lib/auth";
 import { recordActivity } from "@/lib/activity";
 
 export const dynamic = "force-dynamic";
+const COMMENT_EDIT_WINDOW_MS = 15 * 60 * 1000;
+
+function timestampMs(value: string) {
+  const normalized = value.includes("T") ? value : `${value.replace(" ", "T")}Z`;
+  return new Date(normalized).getTime();
+}
 
 export async function POST(request: Request) {
   try {
@@ -67,5 +73,37 @@ export async function POST(request: Request) {
       { error: error instanceof Error ? error.message : "Unable to post comment." },
       { status: 500 },
     );
+  }
+}
+
+export async function PATCH(request: Request) {
+  try {
+    const currentUser = await getCurrentUser(request);
+    const payload = (await request.json()) as Record<string, unknown>;
+    const id = Number(payload.id);
+    const body = typeof payload.body === "string" ? payload.body.trim().slice(0, 2000) : "";
+    if (!Number.isInteger(id)) return Response.json({ error: "Invalid note id." }, { status: 400 });
+    if (!body) return Response.json({ error: "The note cannot be empty." }, { status: 400 });
+
+    const db = await getDb();
+    const [comment] = await db.select().from(taskComments).where(eq(taskComments.id, id)).limit(1);
+    if (!comment) return Response.json({ error: "Note not found." }, { status: 404 });
+    if (comment.authorEmail.toLowerCase() !== currentUser.email.toLowerCase()) {
+      return Response.json({ error: "Only the note author can edit it." }, { status: 403 });
+    }
+    const elapsed = Date.now() - timestampMs(comment.createdAt);
+    if (!Number.isFinite(elapsed) || elapsed < 0 || elapsed > COMMENT_EDIT_WINDOW_MS) {
+      return Response.json({ error: "The 15-minute note editing window has expired." }, { status: 403 });
+    }
+
+    const [updated] = await db.update(taskComments).set({ body }).where(eq(taskComments.id, id)).returning();
+    await db.update(tasks).set({ updatedAt: sql`CURRENT_TIMESTAMP` }).where(eq(tasks.id, comment.taskId));
+    const [taskDetails] = await db.select({ title: tasks.title, project: tasks.project }).from(tasks).where(eq(tasks.id, comment.taskId)).limit(1);
+    if (taskDetails) await recordActivity(db, currentUser, { action: "updated", entityType: "task", entityId: comment.taskId, entityLabel: taskDetails.title, projectCode: taskDetails.project, details: `Note edited: ${body}` });
+    return Response.json({ comment: updated });
+  } catch (error) {
+    const unauthorized = unauthorizedResponse(error);
+    if (unauthorized) return unauthorized;
+    return Response.json({ error: error instanceof Error ? error.message : "Unable to edit note." }, { status: 500 });
   }
 }
