@@ -45,6 +45,7 @@ export const projectMembers = sqliteTable(
     id: integer("id").primaryKey({ autoIncrement: true }),
     projectId: integer("project_id").notNull(),
     employeeEmail: text("employee_email").notNull(),
+    isProjectManager: integer("is_project_manager", { mode: "boolean" }).notNull().default(false),
     createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
   },
   (table) => [

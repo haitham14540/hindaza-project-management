@@ -14,12 +14,12 @@ async function canAuditTask(db: Database, currentUser: Awaited<ReturnType<typeof
   if (currentUser.role !== "manager" || !currentUser.discipline) return false;
   const [employee] = await db.select({ discipline: users.discipline }).from(users).where(eq(users.email, task.employeeEmail)).limit(1);
   if (employee?.discipline !== currentUser.discipline) return false;
-  const [membership] = await db.select({ id: projectMembers.id })
+  const [membership] = await db.select({ id: projectMembers.id, isProjectManager: projectMembers.isProjectManager })
     .from(projectMembers)
     .innerJoin(projects, eq(projectMembers.projectId, projects.id))
     .where(and(eq(projects.code, task.project), eq(projectMembers.employeeEmail, currentUser.email)))
     .limit(1);
-  return Boolean(membership);
+  return Boolean(membership) && (!membership.isProjectManager || task.createdBy === currentUser.email);
 }
 
 function validDate(value: unknown) {

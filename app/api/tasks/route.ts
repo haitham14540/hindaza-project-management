@@ -82,6 +82,16 @@ async function canManageProject(db: Database, currentUser: CurrentUser, projectC
   return isProjectMember(db, projectCode, currentUser.email);
 }
 
+async function isReadOnlyProjectManager(db: Database, currentUser: CurrentUser, task: typeof tasks.$inferSelect) {
+  if (currentUser.role === "owner" || task.createdBy === currentUser.email || task.project === "PERSONAL") return false;
+  const [membership] = await db.select({ isProjectManager: projectMembers.isProjectManager })
+    .from(projectMembers)
+    .innerJoin(projects, eq(projectMembers.projectId, projects.id))
+    .where(and(eq(projects.code, task.project), eq(projectMembers.employeeEmail, currentUser.email)))
+    .limit(1);
+  return Boolean(membership?.isProjectManager);
+}
+
 async function isActiveProject(db: Database, projectCode: string) {
   if (projectCode === "PERSONAL") return true;
   const [project] = await db.select({ status: projects.status }).from(projects).where(eq(projects.code, projectCode)).limit(1);
@@ -168,7 +178,7 @@ export async function POST(request: Request) {
       });
     }
 
-    await recordActivity(db, currentUser, { action: "created", entityType: "task", entityId: inserted[0].id, entityLabel: inserted[0].title, projectCode: inserted[0].project, details: `Assigned to ${inserted[0].employeeName}` });
+    await recordActivity(db, currentUser, { action: "created", entityType: "task", entityId: inserted[0].id, entityLabel: inserted[0].title, projectCode: inserted[0].project, details: `Created by ${currentUser.displayName} · Assigned to ${inserted[0].employeeName}` });
 
     return Response.json({ task: inserted[0], subtasks: createdSubtasks }, { status: 201 });
   } catch (error) {
@@ -203,11 +213,6 @@ export async function PATCH(request: Request) {
       if (!canSubmit) {
         return Response.json({ error: "Only the owner can submit this private task." }, { status: 403 });
       }
-      const openSubtasks = await db.select({ id: taskSubtasks.id }).from(taskSubtasks)
-        .where(and(eq(taskSubtasks.taskId, id), eq(taskSubtasks.completed, false)));
-      if (openSubtasks.length) {
-        return Response.json({ error: `Complete all subtasks before sending this task to the manager (${openSubtasks.length} remaining).` }, { status: 409 });
-      }
       const submitted = await db
         .update(tasks)
         .set({ submittedToManager: true, managerCheck: "new", updatedAt: sql`CURRENT_TIMESTAMP` })
@@ -223,10 +228,10 @@ export async function PATCH(request: Request) {
           message: `${existing[0].title} · ${currentUser.displayName}`,
         })));
       }
-      await recordActivity(db, currentUser, { action: "updated", entityType: "task", entityId: id, entityLabel: submitted[0].title, projectCode: submitted[0].project, details: "Private task submitted to management" });
+      await recordActivity(db, currentUser, { action: "updated", entityType: "task", entityId: id, entityLabel: submitted[0].title, projectCode: submitted[0].project, details: "Private task shared with management" });
       return Response.json({ task: submitted[0] });
     }
-    const scopedManagement = isManagement(currentUser) && await managedEmployee(db, currentUser, existing[0].employeeEmail) && await canManageProject(db, currentUser, existing[0].project);
+    const scopedManagement = isManagement(currentUser) && await managedEmployee(db, currentUser, existing[0].employeeEmail) && await canManageProject(db, currentUser, existing[0].project) && !(await isReadOnlyProjectManager(db, currentUser, existing[0]));
     const canEdit =
       (scopedManagement && (existing[0].visibility === "team" || existing[0].submittedToManager)) ||
       existing[0].employeeEmail === currentUser.email;
@@ -331,20 +336,32 @@ export async function PATCH(request: Request) {
 export async function DELETE(request: Request) {
   try {
     const currentUser = await getCurrentUser(request);
-    if (!isManagement(currentUser)) {
-      return Response.json({ error: "Manager access required." }, { status: 403 });
-    }
     const id = Number(new URL(request.url).searchParams.get("id"));
     if (!Number.isInteger(id)) {
       return Response.json({ error: "Invalid task id." }, { status: 400 });
     }
     const db = await getDb();
     const existing = await db.select().from(tasks).where(eq(tasks.id, id)).limit(1);
-    if (!existing[0] || (existing[0].visibility === "private" && !existing[0].submittedToManager)) {
+    if (!existing[0]) {
       return Response.json({ error: "Task not found." }, { status: 404 });
     }
-    if (!(await managedEmployee(db, currentUser, existing[0].employeeEmail)) || !(await canManageProject(db, currentUser, existing[0].project))) {
-      return Response.json({ error: "You can manage tasks only within your discipline." }, { status: 403 });
+    const ownPrivateTask = currentUser.role === "member"
+      && existing[0].visibility === "private"
+      && existing[0].createdBy === currentUser.email
+      && existing[0].employeeEmail === currentUser.email;
+    if (!isManagement(currentUser) && !ownPrivateTask) {
+      return Response.json({ error: "You can delete only your own private tasks." }, { status: 403 });
+    }
+    if (isManagement(currentUser)) {
+      if (existing[0].visibility === "private" && !existing[0].submittedToManager) {
+        return Response.json({ error: "Task not found." }, { status: 404 });
+      }
+      if (!(await managedEmployee(db, currentUser, existing[0].employeeEmail)) || !(await canManageProject(db, currentUser, existing[0].project))) {
+        return Response.json({ error: "You can manage tasks only within your discipline." }, { status: 403 });
+      }
+      if (await isReadOnlyProjectManager(db, currentUser, existing[0])) {
+        return Response.json({ error: "Project managers can edit or delete only tasks they created." }, { status: 403 });
+      }
     }
     await db.delete(taskComments).where(eq(taskComments.taskId, id));
     await db.delete(taskTimeEntries).where(eq(taskTimeEntries.taskId, id));

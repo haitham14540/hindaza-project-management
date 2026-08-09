@@ -56,11 +56,13 @@ export async function POST(request: Request) {
     const db = await getDb();
     const requestedMembers = memberEmails(payload.memberEmails);
     const assignedMembers = await validMemberEmails(db, requestedMembers);
+    const requestedProjectManagers = memberEmails(payload.projectManagerEmails);
+    const assignedProjectManagers = requestedProjectManagers.filter((email) => assignedMembers.includes(email));
     if (assignedMembers.length !== requestedMembers.length) return Response.json({ error: "One or more project members are invalid." }, { status: 400 });
     const inserted = await db.insert(projects).values({ code, name, client: text(payload.client), status: status(payload.status), startDate: text(payload.startDate, 10), targetDate: text(payload.targetDate, 10) }).returning();
-    if (assignedMembers.length) await db.insert(projectMembers).values(assignedMembers.map((employeeEmail) => ({ projectId: inserted[0].id, employeeEmail })));
+    if (assignedMembers.length) await db.insert(projectMembers).values(assignedMembers.map((employeeEmail) => ({ projectId: inserted[0].id, employeeEmail, isProjectManager: assignedProjectManagers.includes(employeeEmail) })));
     await recordActivity(db, currentUser, { action: "created", entityType: "project", entityId: inserted[0].id, entityLabel: `${code} · ${name}`, projectCode: code, details: `Project created with ${assignedMembers.length} team members` });
-    return Response.json({ project: { ...inserted[0], memberEmails: assignedMembers } }, { status: 201 });
+    return Response.json({ project: { ...inserted[0], memberEmails: assignedMembers, projectManagerEmails: assignedProjectManagers } }, { status: 201 });
   } catch (error) {
     const unauthorized = unauthorizedResponse(error);
     if (unauthorized) return unauthorized;
@@ -85,10 +87,11 @@ export async function PATCH(request: Request) {
       if (!membership) return Response.json({ error: "Managers can edit only projects they are assigned to." }, { status: 403 });
     }
 
-    const currentRows = await db.select({ employeeEmail: projectMembers.employeeEmail }).from(projectMembers).where(eq(projectMembers.projectId, id));
+    const currentRows = await db.select({ employeeEmail: projectMembers.employeeEmail, isProjectManager: projectMembers.isProjectManager }).from(projectMembers).where(eq(projectMembers.projectId, id));
     const currentMembers = await validMemberEmails(db, currentRows.map((row) => row.employeeEmail));
     const requestedMembers = memberEmails(payload.memberEmails);
     const validRequested = await validMemberEmails(db, requestedMembers);
+    const requestedProjectManagers = memberEmails(payload.projectManagerEmails);
     let assignedMembers = validRequested;
     if (currentUser.role === "manager") {
       const candidates = [...new Set([...currentMembers, ...validRequested])];
@@ -115,9 +118,16 @@ export async function PATCH(request: Request) {
     }).where(eq(projects.id, id)).returning();
     if (code !== existing.code) await db.update(tasks).set({ project: code, updatedAt: sql`CURRENT_TIMESTAMP` }).where(eq(tasks.project, existing.code));
     await db.delete(projectMembers).where(eq(projectMembers.projectId, id));
-    if (assignedMembers.length) await db.insert(projectMembers).values(assignedMembers.map((employeeEmail) => ({ projectId: id, employeeEmail })));
+    const editableProjectManagers = requestedProjectManagers.filter((email) => assignedMembers.includes(email));
+    const assignedProjectManagers = currentUser.role === "owner"
+      ? editableProjectManagers
+      : [...new Set([
+        ...currentRows.filter((row) => row.isProjectManager && row.employeeEmail !== currentUser.email).map((row) => row.employeeEmail),
+        ...editableProjectManagers.filter((email) => email === currentUser.email || assignedMembers.includes(email)),
+      ])].filter((email) => assignedMembers.includes(email));
+    if (assignedMembers.length) await db.insert(projectMembers).values(assignedMembers.map((employeeEmail) => ({ projectId: id, employeeEmail, isProjectManager: assignedProjectManagers.includes(employeeEmail) })));
     await recordActivity(db, currentUser, { action: "updated", entityType: "project", entityId: id, entityLabel: `${code} · ${updated[0].name}`, projectCode: code, details: `${currentUser.role === "manager" ? "Discipline membership" : "Project details and membership"} updated; ${assignedMembers.length} team members` });
-    return Response.json({ project: { ...updated[0], memberEmails: assignedMembers }, removedInvalidMembers: requestedMembers.length - validRequested.length });
+    return Response.json({ project: { ...updated[0], memberEmails: assignedMembers, projectManagerEmails: assignedProjectManagers }, removedInvalidMembers: requestedMembers.length - validRequested.length });
   } catch (error) {
     const unauthorized = unauthorizedResponse(error);
     if (unauthorized) return unauthorized;
