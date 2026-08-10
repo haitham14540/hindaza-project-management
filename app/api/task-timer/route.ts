@@ -1,6 +1,6 @@
 import { and, asc, eq, inArray, isNull } from "drizzle-orm";
 import { getDb } from "@/db";
-import { notifications, projectMembers, projects, taskSubtasks, taskTimeEntries, tasks, users } from "@/db/schema";
+import { notifications, taskSubtasks, taskTimeEntries, tasks, users } from "@/db/schema";
 import { getCurrentUser, unauthorizedResponse } from "@/lib/auth";
 import { recordActivity } from "@/lib/activity";
 
@@ -11,15 +11,7 @@ type TimerAction = "start" | "pause" | "finish";
 
 async function canAuditTask(db: Database, currentUser: Awaited<ReturnType<typeof getCurrentUser>>, task: typeof tasks.$inferSelect) {
   if (currentUser.role === "owner") return true;
-  if (currentUser.role !== "manager" || !currentUser.discipline) return false;
-  const [employee] = await db.select({ discipline: users.discipline }).from(users).where(eq(users.email, task.employeeEmail)).limit(1);
-  if (employee?.discipline !== currentUser.discipline) return false;
-  const [membership] = await db.select({ id: projectMembers.id, isProjectManager: projectMembers.isProjectManager })
-    .from(projectMembers)
-    .innerJoin(projects, eq(projectMembers.projectId, projects.id))
-    .where(and(eq(projects.code, task.project), eq(projectMembers.employeeEmail, currentUser.email)))
-    .limit(1);
-  return Boolean(membership) && (!membership.isProjectManager || task.createdBy === currentUser.email);
+  return currentUser.role === "manager" && task.createdBy === currentUser.email;
 }
 
 function validDate(value: unknown) {
@@ -167,16 +159,18 @@ export async function POST(request: Request) {
         .returning();
       affectedTasks.push(reviewed[0] || finished);
       if (submitForReview) {
-        const managers = (await db.select({ email: users.email, role: users.role, discipline: users.discipline }).from(users).where(and(inArray(users.role, ["owner", "manager"]), eq(users.active, true))))
-          .filter((manager) => manager.role === "owner" || (Boolean(currentUser.discipline) && manager.discipline === currentUser.discipline));
-        if (managers.length) {
-          await db.insert(notifications).values(managers.map((manager) => ({
-            recipientEmail: manager.email,
+        const [creator] = await db.select({ email: users.email, role: users.role })
+          .from(users)
+          .where(and(eq(users.email, task.createdBy), inArray(users.role, ["owner", "manager"]), eq(users.active, true)))
+          .limit(1);
+        if (creator && creator.email !== currentUser.email) {
+          await db.insert(notifications).values({
+            recipientEmail: creator.email,
             type: "task_ready_for_review" as const,
             taskId,
             title: "Task ready for review",
             message: `${task.title} · ${currentUser.displayName}`,
-          })));
+          });
         }
       }
     }

@@ -1,6 +1,6 @@
 import { and, asc, desc, eq, gt, inArray, sql } from "drizzle-orm";
 import { getBucket, getDb } from "@/db";
-import { issueAttachments, issueCategories, notifications, projectIssues, projectMembers, projects, users } from "@/db/schema";
+import { activityLogs, issueAttachments, issueCategories, notifications, projectIssues, projectMembers, projects, users } from "@/db/schema";
 import { getCurrentUser, isManagement, unauthorizedResponse } from "@/lib/auth";
 import { recordActivity } from "@/lib/activity";
 
@@ -81,6 +81,41 @@ async function notifyDisciplineManagers(
     title: type === "issue_created" ? "New project issue" : "Project issue updated",
     message: `${issue.issueNumber} · ${actor.displayName}`,
   })));
+}
+
+async function notifyIssueNoteCounterpart(
+  db: Awaited<ReturnType<typeof getDb>>,
+  actor: Awaited<ReturnType<typeof getCurrentUser>>,
+  issue: typeof projectIssues.$inferSelect,
+) {
+  const [createdActivity] = await db.select({ actorEmail: activityLogs.actorEmail })
+    .from(activityLogs)
+    .where(and(
+      eq(activityLogs.entityType, "issue"),
+      eq(activityLogs.entityId, issue.id),
+      eq(activityLogs.action, "created"),
+    ))
+    .orderBy(asc(activityLogs.id))
+    .limit(1);
+  const creatorEmail = createdActivity?.actorEmail || "";
+  let recipientEmail = "";
+  if (actor.role === "member") {
+    const [creator] = creatorEmail ? await db.select({ email: users.email, role: users.role })
+      .from(users)
+      .where(and(eq(users.email, creatorEmail), inArray(users.role, ["owner", "manager"]), eq(users.active, true)))
+      .limit(1) : [];
+    recipientEmail = creator?.email || "";
+  } else if (actor.role === "owner" || actor.email === creatorEmail) {
+    recipientEmail = issue.raisedByEmail;
+  }
+  if (!recipientEmail || recipientEmail === actor.email) return;
+  await db.insert(notifications).values({
+    recipientEmail,
+    type: "issue_updated",
+    issueId: issue.id,
+    title: "Project issue note added",
+    message: `${issue.issueNumber} · ${actor.displayName}`,
+  });
 }
 
 async function rememberCategory(db: Awaited<ReturnType<typeof getDb>>, category: string, createdBy: string) {
@@ -205,7 +240,7 @@ export async function PATCH(request: Request) {
       const updated = await db.update(projectIssues).set({ comments, updatedAt: sql`CURRENT_TIMESTAMP` })
         .where(eq(projectIssues.id, id)).returning();
       await recordActivity(db, currentUser, { action: "note_added", entityType: "issue", entityId: id, entityLabel: existing.issueNumber, projectCode: existing.projectCode, details: comments });
-      await notifyDisciplineManagers(db, currentUser, updated[0], "issue_updated");
+      if (comments !== existing.comments) await notifyIssueNoteCounterpart(db, currentUser, updated[0]);
       const attachments = await db.select().from(issueAttachments).where(eq(issueAttachments.issueId, id)).orderBy(asc(issueAttachments.createdAt));
       return Response.json({ issue: { ...updated[0], attachments } });
     }
@@ -262,7 +297,7 @@ export async function PATCH(request: Request) {
     }).where(eq(projectIssues.id, id)).returning();
     await rememberCategory(db, category, currentUser.email);
     await recordActivity(db, currentUser, { action: "updated", entityType: "issue", entityId: id, entityLabel: updated[0].issueNumber, projectCode, details: description });
-    await notifyDisciplineManagers(db, currentUser, updated[0], "issue_updated");
+    if (updated[0].comments !== existing.comments) await notifyIssueNoteCounterpart(db, currentUser, updated[0]);
     const attachments = await db.select().from(issueAttachments).where(eq(issueAttachments.issueId, id)).orderBy(asc(issueAttachments.createdAt));
     return Response.json({ issue: { ...updated[0], attachments } });
   } catch (error) {

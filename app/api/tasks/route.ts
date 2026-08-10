@@ -82,14 +82,12 @@ async function canManageProject(db: Database, currentUser: CurrentUser, projectC
   return isProjectMember(db, projectCode, currentUser.email);
 }
 
-async function isReadOnlyProjectManager(db: Database, currentUser: CurrentUser, task: typeof tasks.$inferSelect) {
-  if (currentUser.role === "owner" || task.createdBy === currentUser.email || task.project === "PERSONAL") return false;
-  const [membership] = await db.select({ isProjectManager: projectMembers.isProjectManager })
-    .from(projectMembers)
-    .innerJoin(projects, eq(projectMembers.projectId, projects.id))
-    .where(and(eq(projects.code, task.project), eq(projectMembers.employeeEmail, currentUser.email)))
-    .limit(1);
-  return Boolean(membership?.isProjectManager);
+async function canManageExistingTask(db: Database, currentUser: CurrentUser, task: typeof tasks.$inferSelect) {
+  if (currentUser.role === "owner") return true;
+  return currentUser.role === "manager"
+    && task.createdBy === currentUser.email
+    && await managedEmployee(db, currentUser, task.employeeEmail)
+    && await canManageProject(db, currentUser, task.project);
 }
 
 async function isActiveProject(db: Database, projectCode: string) {
@@ -231,7 +229,7 @@ export async function PATCH(request: Request) {
       await recordActivity(db, currentUser, { action: "updated", entityType: "task", entityId: id, entityLabel: submitted[0].title, projectCode: submitted[0].project, details: "Private task shared with management" });
       return Response.json({ task: submitted[0] });
     }
-    const scopedManagement = isManagement(currentUser) && await managedEmployee(db, currentUser, existing[0].employeeEmail) && await canManageProject(db, currentUser, existing[0].project) && !(await isReadOnlyProjectManager(db, currentUser, existing[0]));
+    const scopedManagement = await canManageExistingTask(db, currentUser, existing[0]);
     const canEdit =
       (scopedManagement && (existing[0].visibility === "team" || existing[0].submittedToManager)) ||
       existing[0].employeeEmail === currentUser.email;
@@ -356,11 +354,8 @@ export async function DELETE(request: Request) {
       if (existing[0].visibility === "private" && !existing[0].submittedToManager) {
         return Response.json({ error: "Task not found." }, { status: 404 });
       }
-      if (!(await managedEmployee(db, currentUser, existing[0].employeeEmail)) || !(await canManageProject(db, currentUser, existing[0].project))) {
-        return Response.json({ error: "You can manage tasks only within your discipline." }, { status: 403 });
-      }
-      if (await isReadOnlyProjectManager(db, currentUser, existing[0])) {
-        return Response.json({ error: "Project managers can edit or delete only tasks they created." }, { status: 403 });
+      if (!(await canManageExistingTask(db, currentUser, existing[0]))) {
+        return Response.json({ error: "Managers can edit or delete only tasks they created." }, { status: 403 });
       }
     }
     await db.delete(taskComments).where(eq(taskComments.taskId, id));
