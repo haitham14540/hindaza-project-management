@@ -1,145 +1,122 @@
-# دليل رفع HINDAZA Project Management v60 إلى GitHub
+# رفع HINDAZA Project Management V76 إلى GitHub
 
-هذه الحزمة تحتوي على الشفرة المصدرية الكاملة، ملفات قاعدة البيانات، الأصول، الاختبارات، وملفات إعداد البناء. لا تتضمن `node_modules` أو ملفات البناء المؤقتة لأنها تُنشأ تلقائيًا بعد التنزيل.
+هذه الحزمة تحتوي على كود النسخة المعتمدة **V76**، وتشمل الواجهة، واجهات API، مخطط قاعدة البيانات، ملفات الترحيل، الاختبارات، الأصول، وإعدادات البناء.
 
-## المتطلبات
+> تنبيه: بيانات التشغيل الموجودة حاليًا داخل قاعدة D1 والمرفقات المحفوظة في R2 وكلمات المرور والقيم السرية ليست جزءًا من حزمة الكود. احتفظ بنسخة احتياطية من داخل التطبيق بصورة منفصلة عند الحاجة إلى نقل البيانات.
 
-- تثبيت Git: https://git-scm.com/downloads
-- تثبيت Node.js 22.13 أو أحدث: https://nodejs.org/
-- حساب GitHub وصلاحية الكتابة على المستودع.
-- المستودع المستهدف: `https://github.com/haitham14540/hindaza-project-management.git`
+## الطريقة الآمنة الموصى بها
 
-## الطريقة الموصى بها: نسخة نظيفة وفرع مراجعة
+ارفع V76 في فرع مستقل، ثم ادمجه مع `main` من GitHub. بهذه الطريقة تبقى النسخة الحالية قابلة للاسترجاع.
 
-استخدم هذه الطريقة لتجنب خطأ `non-fast-forward` أو بقاء عملية `REBASE` معلقة.
+### 1. فك الضغط
 
-1. فك ضغط ملف التطبيق في مجلد واضح، مثل:
+فك الملف في هذا المسار مثلًا:
 
-   `C:\Users\ADMIN\Downloads\hindaza-project-management-v60`
-
-2. افتح **Git Bash** ثم انتقل إلى مجلد مناسب للعمل:
-
-   ```bash
-   cd /c/Users/ADMIN
-   ```
-
-3. نزّل المستودع الحالي من GitHub داخل مجلد جديد:
-
-   ```bash
-   git clone https://github.com/haitham14540/hindaza-project-management.git hindaza-project-management-v60-github
-   cd hindaza-project-management-v60-github
-   ```
-
-4. أنشئ فرعًا مستقلًا للإصدار الجديد:
-
-   ```bash
-   git switch -c release/v60
-   ```
-
-5. انسخ **محتويات** مجلد `hindaza-project-management-v60` بعد فك الضغط إلى هذا المجلد، مع الموافقة على استبدال الملفات. لا تحذف مجلد `.git` الموجود داخل مجلد GitHub الجديد.
-
-   من PowerShell يمكن تنفيذ النسخ بالأمر التالي بعد تعديل المسار عند الحاجة:
-
-   ```powershell
-   robocopy "C:\Users\ADMIN\Downloads\hindaza-project-management-v60" "C:\Users\ADMIN\hindaza-project-management-v60-github" /E /XD .git node_modules dist .next .wrangler
-   ```
-
-   ملاحظة: قد يعيد `robocopy` رمز خروج من 1 إلى 7 رغم نجاح النسخ؛ هذه الرموز تعني عادة أن الملفات نُسخت أو حُدثت.
-
-6. ارجع إلى Git Bash وافحص الملفات:
-
-   ```bash
-   git status
-   ```
-
-7. ثبّت الاعتماديات وشغّل الفحوصات:
-
-   ```bash
-   npm ci
-   npm run lint
-   npm test
-   ```
-
-8. أضف جميع تغييرات الإصدار، ثم أنشئ Commit:
-
-   ```bash
-   git add -A
-   git commit -m "Publish HINDAZA Project Management v60"
-   ```
-
-9. ارفع الفرع إلى GitHub:
-
-   ```bash
-   git push -u origin release/v60
-   ```
-
-10. افتح صفحة المستودع في GitHub. ستظهر رسالة **Compare & pull request**. اضغط عليها، واجعل:
-
-    - Base branch: `main`
-    - Compare branch: `release/v60`
-    - العنوان: `Publish HINDAZA Project Management v60`
-
-11. راجع الملفات، ثم أنشئ Pull Request واضغط **Merge pull request** بعد نجاح الفحوصات.
-
-## إذا أردت الرفع مباشرة إلى main
-
-نفّذ هذا فقط بعد الاحتفاظ بنسخة احتياطية والتأكد أن محتوى GitHub الحالي لا يحتوي على تغييرات تريد الاحتفاظ بها:
-
-```bash
-git switch main
-git pull --rebase origin main
-git merge --ff-only release/v60
-git push origin main
+```text
+C:\Users\ADMIN\hindaza-project-management-v76
 ```
 
-إذا فشل `--ff-only`، لا تستخدم `--force`. أكمل عبر Pull Request كما في الطريقة الموصى بها.
+### 2. إنشاء نسخة نظيفة من مستودع GitHub
 
-## حل مشكلة REBASE المعلّقة
-
-إذا ظهر في الطرفية `(REBASE 1/1)`، افحص الحالة أولًا:
+افتح **Git Bash** ونفّذ الأوامر التالية فقط:
 
 ```bash
+cd /c/Users/ADMIN
+git clone https://github.com/haitham14540/hindaza-project-management.git hindaza-project-management-github
+cd /c/Users/ADMIN/hindaza-project-management-github
+git switch -c release/v76 origin/main
+```
+
+إذا كان المجلد `hindaza-project-management-github` موجودًا مسبقًا، غيّر اسمه أو احذفه بعد التأكد أنه لا يحتوي عملًا غير محفوظ، ثم أعد أمر `git clone`.
+
+### 3. نسخ ملفات V76 فوق النسخة المستنسخة
+
+من **PowerShell** نفّذ:
+
+```powershell
+Get-ChildItem -Force "C:\Users\ADMIN\hindaza-project-management-v76" | Copy-Item -Destination "C:\Users\ADMIN\hindaza-project-management-github" -Recurse -Force
+```
+
+لا تنسخ أي مجلد باسم `.git` من المصدر. الحزمة المرفقة لا تحتويه أصلًا.
+
+### 4. فحص الملفات وتثبيت المتطلبات
+
+ارجع إلى **Git Bash**:
+
+```bash
+cd /c/Users/ADMIN/hindaza-project-management-github
+git status
+npm ci
+npm test
+```
+
+يجب أن تنتهي الاختبارات دون أخطاء قبل الرفع.
+
+### 5. حفظ النسخة ورفع الفرع
+
+```bash
+git add -A
+git commit -m "Publish HINDAZA Project Management V76"
+git push -u origin release/v76
+```
+
+### 6. دمج الفرع مع main
+
+افتح صفحة المستودع:
+
+```text
+https://github.com/haitham14540/hindaza-project-management
+```
+
+ثم:
+
+1. افتح **Pull requests**.
+2. اختر **New pull request**.
+3. اجعل `base` هو `main` و`compare` هو `release/v76`.
+4. اضغط **Create pull request**.
+5. راجع الملفات، ثم اضغط **Merge pull request**.
+6. أكد الدمج.
+
+لا تكتب كلمات مثل `Open:` أو `Click:` أو رابط GitHub مباشرة داخل Git Bash؛ هذه تعليمات وليست أوامر. افتح الرابط من المتصفح.
+
+### 7. تأكيد أن main يحمل V76
+
+```bash
+cd /c/Users/ADMIN/hindaza-project-management-github
+git switch main
+git pull origin main
+git log -1 --oneline
 git status
 ```
 
-إذا كنت لا تحتاج متابعة عملية الدمج القديمة:
+المفترض أن يعرض `git status` العبارة:
 
-```bash
-git rebase --abort
+```text
+nothing to commit, working tree clean
 ```
 
-بعدها استخدم طريقة النسخة النظيفة أعلاه. لا تحذف ملفات المشروع ولا تستخدم `git reset --hard`.
+## في حال ظهور non-fast-forward
+
+لا تستخدم `git push --force` على `main`. نفّذ:
+
+```bash
+git fetch origin
+git rebase origin/main
+git push -u origin release/v76
+```
+
+إذا ظهر تعارض، أوقف العملية وأرسل صورة الرسالة قبل اختيار أي ملف أو حذفه.
 
 ## تشغيل التطبيق محليًا
-
-داخل مجلد المشروع:
 
 ```bash
 npm ci
 npm run dev
 ```
 
-ثم افتح العنوان الذي يظهر في الطرفية. لإجراء الفحص الكامل:
+## بناء نسخة الإنتاج
 
 ```bash
-npm run lint
-npm test
+npm run build
 ```
-
-## قاعدة البيانات والنشر
-
-الأسرار وقيم البيئة لا تُحفظ داخل GitHub. يجب إعدادها في منصة الاستضافة. لتطبيق ترحيلات قاعدة البيانات على Cloudflare D1 بعد ضبط Wrangler:
-
-```bash
-npx wrangler d1 migrations apply DB --remote
-```
-
-لا تشغّل هذا الأمر قبل التأكد من أن ربط `DB` يشير إلى قاعدة البيانات الصحيحة.
-
-## الملفات غير المضمّنة عمدًا
-
-- `node_modules`: يُنشأ بواسطة `npm ci`.
-- `dist` و`.next`: تُنشأ بواسطة البناء.
-- `.wrangler`: ملفات محلية مؤقتة.
-- كلمات المرور، مفاتيح API، وقيم البيئة السرية.
 

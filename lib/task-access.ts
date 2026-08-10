@@ -11,6 +11,10 @@ export async function canCollaborateOnTask(db: Database, currentUser: CurrentUse
   if (task.employeeEmail === currentUser.email) return true;
   if (currentUser.role === "owner") return true;
   if (task.createdBy === currentUser.email) return true;
+  return false;
+}
+
+async function managerCanViewTask(db: Database, currentUser: CurrentUser, task: Task) {
   if (currentUser.role !== "manager" || !currentUser.discipline) return false;
   const [employee] = await db.select({ discipline: users.discipline })
     .from(users)
@@ -23,11 +27,12 @@ export async function canCollaborateOnTask(db: Database, currentUser: CurrentUse
     .innerJoin(projects, eq(projectMembers.projectId, projects.id))
     .where(and(eq(projects.code, task.project), eq(projectMembers.employeeEmail, currentUser.email)))
     .limit(1);
-  return Boolean(membership) && !membership.isProjectManager && (task.visibility === "team" || task.submittedToManager);
+  return Boolean(membership) && (task.visibility === "team" || task.submittedToManager);
 }
 
 export async function canViewTask(db: Database, currentUser: CurrentUser, task: Task) {
   if (await canCollaborateOnTask(db, currentUser, task)) return true;
+  if (await managerCanViewTask(db, currentUser, task)) return true;
   if (task.project === "PERSONAL" || (task.visibility === "private" && !task.submittedToManager)) return false;
   const [membership] = await db.select({ isProjectManager: projectMembers.isProjectManager })
     .from(projectMembers)

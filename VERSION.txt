@@ -1,0 +1,6 @@
+HINDAZA Project Management
+Release: V76
+Source commit: d3d3fb0cedf577b2182698281fef18b6d4fc1559
+Tests: 41 passed
+Production URL: https://hindaza-team-tasks.hindaza-1983.chatgpt.site
+

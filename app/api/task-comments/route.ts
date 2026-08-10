@@ -1,6 +1,6 @@
 import { eq, sql } from "drizzle-orm";
 import { getDb } from "@/db";
-import { taskComments, tasks, users } from "@/db/schema";
+import { taskComments, tasks } from "@/db/schema";
 import { getCurrentUser, unauthorizedResponse } from "@/lib/auth";
 import { recordActivity } from "@/lib/activity";
 
@@ -37,13 +37,9 @@ export async function POST(request: Request) {
     if (!task[0]) {
       return Response.json({ error: "Task not found." }, { status: 404 });
     }
-    const employee = currentUser.role === "manager"
-      ? await db.select({ discipline: users.discipline }).from(users).where(eq(users.email, task[0].employeeEmail)).limit(1)
-      : [];
     const managementAccess = currentUser.role === "owner" || (
       currentUser.role === "manager" &&
-      Boolean(currentUser.discipline) &&
-      employee[0]?.discipline === currentUser.discipline
+      task[0].createdBy === currentUser.email
     );
     const canComment = managementAccess
       ? task[0].visibility === "team" || task[0].submittedToManager

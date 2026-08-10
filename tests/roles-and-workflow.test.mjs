@@ -744,7 +744,7 @@ test("project managers have project-wide visibility and modern project navigatio
   assert.match(styles, /\.project-directory-back/);
 });
 
-test("project managers see employee assignments but other creators' tasks stay read-only", async () => {
+test("project managers see employee assignments but every manager is read-only on other creators' tasks", async () => {
   const [dashboard, tasksApi, taskAccess, timerApi, styles] = await Promise.all([
     source("app/task-dashboard.tsx"),
     source("app/api/tasks/route.ts"),
@@ -754,13 +754,13 @@ test("project managers see employee assignments but other creators' tasks stay r
   ]);
   assert.match(dashboard, /currentUserIsProjectManager/);
   assert.match(dashboard, /showEmployeeFilter=\{currentUser\?\.role !== "member" \|\| currentUserIsProjectManager\}/);
-  assert.match(dashboard, /projectManagerReadOnly/);
+  assert.match(dashboard, /managerCreatorReadOnly/);
   assert.match(dashboard, /task\.createdBy !== currentUser\.email/);
   assert.match(dashboard, /readOnly=\{!canCollaborate\}/);
-  assert.match(tasksApi, /isReadOnlyProjectManager/);
-  assert.match(tasksApi, /Project managers can edit or delete only tasks they created/);
-  assert.match(taskAccess, /!membership\.isProjectManager/);
-  assert.match(timerApi, /!membership\.isProjectManager \|\| task\.createdBy === currentUser\.email/);
+  assert.match(tasksApi, /canManageExistingTask/);
+  assert.match(tasksApi, /Managers can edit or delete only tasks they created/);
+  assert.match(taskAccess, /if \(task\.createdBy === currentUser\.email\) return true;[\s\S]*?return false;/);
+  assert.match(timerApi, /currentUser\.role === "manager" && task\.createdBy === currentUser\.email/);
   assert.match(dashboard, /className="project-settings-topbar"/);
   assert.match(dashboard, /aria-label="Project settings" title="Project settings"/);
   assert.match(styles, /\.project-directory-back \{ height: 43px; min-height: 43px;/);
@@ -870,4 +870,65 @@ test("project tabs are compact, task notes edit for fifteen minutes, and due dat
   assert.match(commentsApi, /comment\.authorEmail\.toLowerCase\(\) !== currentUser\.email\.toLowerCase\(\)/);
   assert.match(commentsApi, /elapsed > COMMENT_EDIT_WINDOW_MS/);
   assert.match(commentsApi, /Only the note author can edit it/);
+});
+
+test("task project settings return to the task and project leaders can filter tasks by discipline", async () => {
+  const [dashboard, styles] = await Promise.all([
+    source("app/task-dashboard.tsx"),
+    source("app/globals.css"),
+  ]);
+  assert.match(dashboard, /openProjectSettings=\{openProjectFromTask\}/);
+  assert.match(dashboard, /className="task-project-settings"/);
+  assert.match(dashboard, /aria-label="Project settings" title="Project settings"/);
+  assert.match(dashboard, /if \(projectDrawerReturnToTask\) \{[\s\S]*?setProjectDrawerOpen\(false\)/);
+  assert.match(dashboard, /showDisciplineColumn=\{currentUser\?\.role === "owner" \|\| currentUser\?\.role === "manager" \|\| currentUserIsProjectManager\}/);
+  assert.match(dashboard, /aria-label="Filter by discipline"/);
+  assert.match(dashboard, /<th>Discipline<\/th>/);
+  assert.match(dashboard, /className="task-discipline"/);
+  assert.match(styles, /\.task-project-settings/);
+  assert.match(styles, /\.task-discipline/);
+});
+
+test("managers see task disciplines and project team members open in a returning editor", async () => {
+  const [dashboard, bootstrapApi, styles] = await Promise.all([
+    source("app/task-dashboard.tsx"),
+    source("app/api/bootstrap/route.ts"),
+    source("app/globals.css"),
+  ]);
+  assert.match(dashboard, /showDisciplineColumn=\{currentUser\?\.role === "owner" \|\| currentUser\?\.role === "manager" \|\| currentUserIsProjectManager\}/);
+  assert.match(bootstrapApi, /createdByName: displayNameByEmail\.get\(task\.createdBy\.toLowerCase\(\)\) \|\| "Unknown user"/);
+  assert.match(bootstrapApi, /employeeDiscipline: disciplineByEmail\.get\(task\.employeeEmail\.toLowerCase\(\)\) \|\| ""/);
+  assert.match(dashboard, /const creatorName = task\.createdByName/);
+  assert.doesNotMatch(dashboard, /creator\?\.displayName \|\| task\.createdBy \|\| "—"/);
+  assert.match(dashboard, /className="project-member-settings"/);
+  assert.match(dashboard, /onEditUser=\{openUserFromProject\}/);
+  assert.match(dashboard, /if \(userDrawerReturnToProject\) \{[\s\S]*?setUserDrawerOpen\(false\)/);
+  assert.match(styles, /\.project-member-settings/);
+});
+
+test("task completion and issue notes notify only the responsible creator and counterpart", async () => {
+  const [timerApi, subtasksApi, issuesApi, taskAccess, tasksApi, commentsApi, dashboard] = await Promise.all([
+    source("app/api/task-timer/route.ts"),
+    source("app/api/task-subtasks/route.ts"),
+    source("app/api/issues/route.ts"),
+    source("lib/task-access.ts"),
+    source("app/api/tasks/route.ts"),
+    source("app/api/task-comments/route.ts"),
+    source("app/task-dashboard.tsx"),
+  ]);
+  assert.match(timerApi, /eq\(users\.email, task\.createdBy\)/);
+  assert.match(timerApi, /recipientEmail: creator\.email/);
+  assert.doesNotMatch(timerApi, /managers\.map/);
+  assert.match(subtasksApi, /eq\(users\.email, task\.createdBy\)/);
+  assert.match(subtasksApi, /recipientEmail: creator\.email/);
+  assert.match(tasksApi, /task\.createdBy === currentUser\.email/);
+  assert.match(commentsApi, /task\[0\]\.createdBy === currentUser\.email/);
+  assert.match(taskAccess, /export async function canCollaborateOnTask[\s\S]*?if \(task\.createdBy === currentUser\.email\) return true;[\s\S]*?return false;/);
+  assert.match(dashboard, /currentUser\?\.role === "manager" && task && task\.createdBy !== currentUser\.email/);
+  assert.match(dashboard, /\{canCollaborate && <div className="comment-composer">/);
+  assert.match(issuesApi, /notifyIssueNoteCounterpart/);
+  assert.match(issuesApi, /eq\(activityLogs\.action, "created"\)/);
+  assert.match(issuesApi, /recipientEmail = issue\.raisedByEmail/);
+  assert.match(issuesApi, /if \(comments !== existing\.comments\) await notifyIssueNoteCounterpart/);
+  assert.match(issuesApi, /if \(updated\[0\]\.comments !== existing\.comments\) await notifyIssueNoteCounterpart/);
 });

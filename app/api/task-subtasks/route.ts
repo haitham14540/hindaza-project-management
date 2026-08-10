@@ -13,20 +13,18 @@ function title(value: unknown) {
 
 async function notifyCompletion(db: Awaited<ReturnType<typeof getDb>>, task: typeof tasks.$inferSelect, actor: Awaited<ReturnType<typeof getCurrentUser>>, subtaskTitle: string) {
   if (task.visibility === "private" && !task.submittedToManager) return false;
-  const reviewers = await db.select({ email: users.email, role: users.role, discipline: users.discipline })
+  const [creator] = await db.select({ email: users.email, role: users.role })
     .from(users)
-    .where(and(inArray(users.role, ["owner", "manager"]), eq(users.active, true)));
-  const recipients = reviewers.filter((reviewer) => reviewer.email !== actor.email && (
-    reviewer.role === "owner" || reviewer.discipline === actor.discipline
-  ));
-  if (!recipients.length) return false;
-  await db.insert(notifications).values(recipients.map((reviewer) => ({
-    recipientEmail: reviewer.email,
+    .where(and(eq(users.email, task.createdBy), inArray(users.role, ["owner", "manager"]), eq(users.active, true)))
+    .limit(1);
+  if (!creator || creator.email === actor.email) return false;
+  await db.insert(notifications).values({
+    recipientEmail: creator.email,
     type: "subtask_completed" as const,
     taskId: task.id,
     title: "Subtask completed",
     message: `${subtaskTitle} · ${task.title} · ${actor.displayName}`,
-  })));
+  });
   return true;
 }
 

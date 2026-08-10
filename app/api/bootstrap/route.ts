@@ -152,6 +152,13 @@ export async function GET(request: Request) {
           (task.project === "PERSONAL" || assignedProjectCodes.has(task.project)),
         )
         : allTaskRows.filter((task) => task.employeeEmail === currentUser.email || (task.visibility === "private" && task.createdBy === currentUser.email) || ((task.visibility === "team" || task.submittedToManager) && managedProjectCodes.has(task.project)));
+    const displayNameByEmail = new Map(userRows.map((user) => [user.email.toLowerCase(), user.displayName]));
+    const disciplineByEmail = new Map(userRows.map((user) => [user.email.toLowerCase(), user.discipline]));
+    const taskRowsWithCreator = taskRows.map((task) => ({
+      ...task,
+      createdByName: displayNameByEmail.get(task.createdBy.toLowerCase()) || "Unknown user",
+      employeeDiscipline: disciplineByEmail.get(task.employeeEmail.toLowerCase()) || "",
+    }));
     const visibleTaskIds = new Set(taskRows.map((task) => task.id));
     const taskProjectCodes = new Set(taskRows.map((task) => task.project));
     const visibleProjects = currentUser.role === "owner"
@@ -179,7 +186,7 @@ export async function GET(request: Request) {
 
     return Response.json({
       currentUser,
-      tasks: taskRows,
+      tasks: taskRowsWithCreator,
       users: visibleUsers,
       projects: projectRows,
       comments: commentRows,
