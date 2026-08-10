@@ -3,6 +3,7 @@ import { getBucket, getDb } from "@/db";
 import { activityLogs, issueAttachments, issueCategories, issueComments, notifications, projectIssues, projectMembers, projects, users } from "@/db/schema";
 import { getCurrentUser, isManagement, unauthorizedResponse } from "@/lib/auth";
 import { recordActivity } from "@/lib/activity";
+import { ensureIssueCommentsStorage } from "@/lib/issue-comments-storage";
 
 export const dynamic = "force-dynamic";
 
@@ -104,6 +105,7 @@ async function renumberAfter(db: Awaited<ReturnType<typeof getDb>>, projectCode:
 }
 
 async function issueRows() {
+  await ensureIssueCommentsStorage();
   const db = await getDb();
   const [issues, attachments, notes, createdActivities] = await Promise.all([
     db.select().from(projectIssues).orderBy(asc(projectIssues.projectCode), asc(projectIssues.discipline), asc(projectIssues.sequence), asc(projectIssues.id)),
@@ -153,6 +155,7 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   try {
     const currentUser = await getCurrentUser(request);
+    await ensureIssueCommentsStorage();
     const payload = await request.json() as Record<string, unknown>;
     const projectCode = cleanText(payload.projectCode, 80).toUpperCase();
     const requestedDiscipline = enumValue(payload.discipline, disciplines, "Architecture");
@@ -215,6 +218,7 @@ export async function POST(request: Request) {
 export async function PATCH(request: Request) {
   try {
     const currentUser = await getCurrentUser(request);
+    await ensureIssueCommentsStorage();
     const payload = await request.json() as Record<string, unknown>;
     const id = Number(payload.id);
     if (!Number.isInteger(id)) return Response.json({ error: "Invalid issue id." }, { status: 400 });
@@ -297,6 +301,7 @@ export async function PATCH(request: Request) {
 export async function DELETE(request: Request) {
   try {
     const currentUser = await getCurrentUser(request);
+    await ensureIssueCommentsStorage();
     if (!isManagement(currentUser)) return Response.json({ error: "Only management can delete project issues." }, { status: 403 });
     const id = Number(new URL(request.url).searchParams.get("id"));
     if (!Number.isInteger(id)) return Response.json({ error: "Invalid issue id." }, { status: 400 });

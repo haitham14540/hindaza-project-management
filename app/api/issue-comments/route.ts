@@ -3,6 +3,7 @@ import { getDb } from "@/db";
 import { activityLogs, issueComments, notifications, projectIssues, users } from "@/db/schema";
 import { getCurrentUser, unauthorizedResponse } from "@/lib/auth";
 import { recordActivity } from "@/lib/activity";
+import { ensureIssueCommentsStorage } from "@/lib/issue-comments-storage";
 
 export const dynamic = "force-dynamic";
 const COMMENT_EDIT_WINDOW_MS = 15 * 60 * 1000;
@@ -57,6 +58,7 @@ async function notifyCounterpart(
 export async function POST(request: Request) {
   try {
     const currentUser = await getCurrentUser(request);
+    await ensureIssueCommentsStorage();
     const payload = await request.json() as Record<string, unknown>;
     const issueId = Number(payload.issueId);
     const section = payload.section === "client" ? "client" as const : "internal" as const;
@@ -83,6 +85,7 @@ export async function POST(request: Request) {
 export async function PATCH(request: Request) {
   try {
     const currentUser = await getCurrentUser(request);
+    await ensureIssueCommentsStorage();
     const payload = await request.json() as Record<string, unknown>;
     const id = Number(payload.id);
     const body = cleanText(payload.body);
@@ -111,6 +114,7 @@ export async function PATCH(request: Request) {
 export async function DELETE(request: Request) {
   try {
     const currentUser = await getCurrentUser(request);
+    await ensureIssueCommentsStorage();
     if (currentUser.role !== "owner") return Response.json({ error: "Only the owner can delete issue notes." }, { status: 403 });
     const id = Number(new URL(request.url).searchParams.get("id"));
     if (!Number.isInteger(id)) return Response.json({ error: "Invalid note id." }, { status: 400 });
