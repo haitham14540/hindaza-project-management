@@ -86,7 +86,7 @@ async function canManageExistingTask(db: Database, currentUser: CurrentUser, tas
   if (currentUser.role === "owner") return true;
   return currentUser.role === "manager"
     && task.createdBy === currentUser.email
-    && await managedEmployee(db, currentUser, task.employeeEmail)
+    && (!task.employeeEmail || await managedEmployee(db, currentUser, task.employeeEmail))
     && await canManageProject(db, currentUser, task.project);
 }
 
@@ -165,6 +165,10 @@ export async function POST(request: Request) {
     const createdSubtasks = initialSubtaskTitles.length
       ? await db.insert(taskSubtasks).values(initialSubtaskTitles.map((subtaskTitle) => ({ taskId: inserted[0].id, title: subtaskTitle, createdBy: currentUser.email }))).returning()
       : [];
+    const initialNote = text(payload.initialNote, 2_000);
+    const createdComments = initialNote
+      ? await db.insert(taskComments).values({ taskId: inserted[0].id, authorEmail: currentUser.email, authorName: currentUser.displayName, body: initialNote }).returning()
+      : [];
 
     if (management) {
       await db.insert(notifications).values({
@@ -178,7 +182,7 @@ export async function POST(request: Request) {
 
     await recordActivity(db, currentUser, { action: "created", entityType: "task", entityId: inserted[0].id, entityLabel: inserted[0].title, projectCode: inserted[0].project, details: `Created by ${currentUser.displayName} · Assigned to ${inserted[0].employeeName}` });
 
-    return Response.json({ task: inserted[0], subtasks: createdSubtasks }, { status: 201 });
+    return Response.json({ task: inserted[0], subtasks: createdSubtasks, comments: createdComments }, { status: 201 });
   } catch (error) {
     const unauthorized = unauthorizedResponse(error);
     if (unauthorized) return unauthorized;
@@ -264,7 +268,7 @@ export async function PATCH(request: Request) {
     if (management && employeeEmail !== existing[0].employeeEmail && !(await assignableEmployee(db, currentUser, employeeEmail))) {
       return Response.json({ error: currentUser.role === "manager" ? "You can reassign tasks only within your discipline." : "Select an active employee account." }, { status: 403 });
     }
-    if ((management || canEditPrivateDetails) && !(await isProjectMember(db, project, employeeEmail))) {
+    if ((management || canEditPrivateDetails) && employeeEmail && !(await isProjectMember(db, project, employeeEmail))) {
       return Response.json({ error: "Select an employee assigned to this project." }, { status: 400 });
     }
     const updated = await db

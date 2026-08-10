@@ -4,6 +4,7 @@ import {
   activityLogs,
   issueAttachments,
   issueCategories,
+  issueComments,
   notifications,
   projectIssues,
   projectMembers,
@@ -21,7 +22,7 @@ import { recordActivity } from "@/lib/activity";
 export const dynamic = "force-dynamic";
 
 const APP_NAME = "HINDAZA Project Management";
-const SCHEMA_VERSION = 7;
+const SCHEMA_VERSION = 8;
 const MAX_BACKUP_BYTES = 20 * 1024 * 1024;
 const MAX_TABLE_ROWS = 100_000;
 const MAX_D1_BOUND_PARAMETERS = 100;
@@ -42,6 +43,7 @@ type BackupData = {
   projectIssues: Array<typeof projectIssues.$inferInsert>;
   issueAttachments: Array<typeof issueAttachments.$inferInsert>;
   issueCategories: Array<typeof issueCategories.$inferInsert>;
+  issueComments: Array<typeof issueComments.$inferInsert>;
   activityLogs: Array<typeof activityLogs.$inferInsert>;
 };
 
@@ -254,7 +256,7 @@ function validateBackup(value: unknown): BackupData {
   const restoredNotifications: BackupData["notifications"] = rows(data.notifications, "notifications").map((item) => ({
     id: positiveInteger(item, "id"),
     recipientEmail: emailField(item, "recipientEmail"),
-    type: enumField(item, "type", ["task_assigned", "review_updated", "private_task_submitted", "task_ready_for_review", "subtask_completed", "issue_created", "issue_updated"] as const),
+    type: enumField(item, "type", ["task_assigned", "review_updated", "private_task_submitted", "task_ready_for_review", "subtask_completed", "task_note_added", "issue_created", "issue_updated", "issue_note_added"] as const),
     taskId: nullablePositiveInteger(item, "taskId"),
     issueId: optionalNullablePositiveInteger(item, "issueId"),
     title: stringField(item, "title", 180, false),
@@ -302,6 +304,15 @@ function validateBackup(value: unknown): BackupData {
     createdBy: emailField(item, "createdBy"),
     createdAt: stringField(item, "createdAt", 50, false),
   }));
+  const restoredIssueComments: BackupData["issueComments"] = (Array.isArray(data.issueComments) ? rows(data.issueComments, "issueComments") : []).map((item) => ({
+    id: positiveInteger(item, "id"),
+    issueId: positiveInteger(item, "issueId"),
+    section: enumField(item, "section", ["internal", "client"] as const),
+    authorEmail: emailField(item, "authorEmail"),
+    authorName: stringField(item, "authorName", 120, false),
+    body: stringField(item, "body", 2_000, false),
+    createdAt: stringField(item, "createdAt", 50, false),
+  }));
   const restoredActivityLogs: BackupData["activityLogs"] = (Array.isArray(data.activityLogs) ? rows(data.activityLogs, "activityLogs") : []).map((item) => ({
     id: positiveInteger(item, "id"),
     actorEmail: emailField(item, "actorEmail"),
@@ -336,6 +347,7 @@ function validateBackup(value: unknown): BackupData {
   ensureUnique(restoredIssueAttachments, (attachment) => attachment.objectKey, "issue attachment object key");
   ensureUnique(restoredIssueCategories, (category) => category.id!, "issue category id");
   ensureUnique(restoredIssueCategories, (category) => category.name, "issue category name");
+  ensureUnique(restoredIssueComments, (comment) => comment.id!, "issue comment id");
   ensureUnique(restoredActivityLogs, (entry) => entry.id!, "activity log id");
   if (restoredProjectMembers.some((membership) => !projectIds.has(membership.projectId))) fail("Backup contains an invalid project membership.");
   if (restoredComments.some((comment) => !taskIds.has(comment.taskId))) fail("Backup contains a note for a missing task.");
@@ -347,6 +359,7 @@ function validateBackup(value: unknown): BackupData {
   if (restoredNotifications.some((notification) => notification.issueId && !issueIds.has(notification.issueId))) fail("Backup contains a notification for a missing project issue.");
   if (restoredIssues.some((issue) => issue.convertedTaskId && !taskIds.has(issue.convertedTaskId))) fail("Backup contains an issue linked to a missing task.");
   if (restoredIssueAttachments.some((attachment) => !issueIds.has(attachment.issueId))) fail("Backup contains an attachment for a missing project issue.");
+  if (restoredIssueComments.some((comment) => !issueIds.has(comment.issueId))) fail("Backup contains a note for a missing project issue.");
 
   return {
     users: restoredUsers,
@@ -361,6 +374,7 @@ function validateBackup(value: unknown): BackupData {
     projectIssues: restoredIssues,
     issueAttachments: restoredIssueAttachments,
     issueCategories: restoredIssueCategories,
+    issueComments: restoredIssueComments,
     activityLogs: restoredActivityLogs,
   };
 }
@@ -389,7 +403,7 @@ export async function GET(request: Request) {
     if (currentUser.role !== "owner") return Response.json({ error: "Owner access required." }, { status: 403 });
     const db = await getDb();
     await recordActivity(db, currentUser, { action: "downloaded", entityType: "backup", entityLabel: "Full system backup", details: "Owner downloaded a backup" });
-    const [userRows, projectRows, membershipRows, taskRows, commentRows, subtaskRows, taskAttachmentRows, timeRows, notificationRows, issueRows, issueAttachmentRows, issueCategoryRows, activityRows] = await Promise.all([
+    const [userRows, projectRows, membershipRows, taskRows, commentRows, subtaskRows, taskAttachmentRows, timeRows, notificationRows, issueRows, issueAttachmentRows, issueCategoryRows, issueCommentRows, activityRows] = await Promise.all([
       db.select().from(users).orderBy(asc(users.createdAt), asc(users.email)),
       db.select().from(projects).orderBy(asc(projects.id)),
       db.select().from(projectMembers).orderBy(asc(projectMembers.id)),
@@ -402,6 +416,7 @@ export async function GET(request: Request) {
       db.select().from(projectIssues).orderBy(asc(projectIssues.id)),
       db.select().from(issueAttachments).orderBy(asc(issueAttachments.id)),
       db.select().from(issueCategories).orderBy(asc(issueCategories.id)),
+      db.select().from(issueComments).orderBy(asc(issueComments.id)),
       db.select().from(activityLogs).orderBy(asc(activityLogs.id)),
     ]);
     const data: BackupData = {
@@ -417,6 +432,7 @@ export async function GET(request: Request) {
       projectIssues: issueRows,
       issueAttachments: issueAttachmentRows,
       issueCategories: issueCategoryRows,
+      issueComments: issueCommentRows,
       activityLogs: activityRows,
     };
     const recordCounts = Object.fromEntries(Object.entries(data).map(([key, value]) => [key, value.length])) as BackupPayload["recordCounts"];
@@ -468,6 +484,7 @@ export async function POST(request: Request) {
     const statements: D1PreparedStatement[] = [
       d1.prepare("DELETE FROM activity_logs"),
       d1.prepare("DELETE FROM issue_attachments"),
+      d1.prepare("DELETE FROM issue_comments"),
       d1.prepare("DELETE FROM issue_categories"),
       d1.prepare("DELETE FROM project_issues"),
       d1.prepare("DELETE FROM task_time_entries"),
@@ -492,6 +509,7 @@ export async function POST(request: Request) {
       ...insertStatements(d1, "project_issues", ["id", "issue_number", "sequence", "project_code", "status", "discipline", "description", "category", "priority", "assignee_email", "raised_by_email", "raised_by_name", "issue_date", "resolved_date", "comments", "client_reply", "converted_task_id", "created_at", "updated_at"], data.projectIssues, (issue) => [issue.id!, issue.issueNumber, issue.sequence, issue.projectCode, issue.status, issue.discipline, issue.description, issue.category, issue.priority, issue.assigneeEmail, issue.raisedByEmail, issue.raisedByName, issue.issueDate, issue.resolvedDate, issue.comments, issue.clientReply, issue.convertedTaskId ?? null, issue.createdAt, issue.updatedAt]),
       ...insertStatements(d1, "issue_attachments", ["id", "issue_id", "object_key", "file_name", "content_type", "size_bytes", "uploaded_by", "source", "created_at"], data.issueAttachments, (attachment) => [attachment.id!, attachment.issueId, attachment.objectKey, attachment.fileName, attachment.contentType, attachment.sizeBytes, attachment.uploadedBy, attachment.source, attachment.createdAt]),
       ...insertStatements(d1, "issue_categories", ["id", "name", "created_by", "created_at"], data.issueCategories, (category) => [category.id!, category.name, category.createdBy, category.createdAt]),
+      ...insertStatements(d1, "issue_comments", ["id", "issue_id", "section", "author_email", "author_name", "body", "created_at"], data.issueComments, (comment) => [comment.id!, comment.issueId, comment.section, comment.authorEmail, comment.authorName, comment.body, comment.createdAt]),
       ...insertStatements(d1, "activity_logs", ["id", "actor_email", "actor_name", "action", "entity_type", "entity_id", "entity_label", "project_code", "details", "created_at"], data.activityLogs, (entry) => [entry.id!, entry.actorEmail, entry.actorName, entry.action, entry.entityType, entry.entityId ?? null, entry.entityLabel, entry.projectCode, entry.details, entry.createdAt]),
     ];
     if (statements.length > MAX_RESTORE_BATCH_STATEMENTS) {

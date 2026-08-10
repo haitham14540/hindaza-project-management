@@ -117,7 +117,7 @@ export const notifications = sqliteTable(
   {
     id: integer("id").primaryKey({ autoIncrement: true }),
     recipientEmail: text("recipient_email").notNull(),
-    type: text("type", { enum: ["task_assigned", "review_updated", "private_task_submitted", "task_ready_for_review", "subtask_completed", "issue_created", "issue_updated"] }).notNull(),
+    type: text("type", { enum: ["task_assigned", "review_updated", "private_task_submitted", "task_ready_for_review", "subtask_completed", "task_note_added", "issue_created", "issue_updated", "issue_note_added"] }).notNull(),
     taskId: integer("task_id"),
     issueId: integer("issue_id"),
     title: text("title").notNull(),
@@ -251,6 +251,23 @@ export const issueCategories = sqliteTable(
     createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
   },
   (table) => [index("issue_categories_name_idx").on(table.name)],
+);
+
+export const issueComments = sqliteTable(
+  "issue_comments",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    issueId: integer("issue_id").notNull(),
+    section: text("section", { enum: ["internal", "client"] }).notNull().default("internal"),
+    authorEmail: text("author_email").notNull(),
+    authorName: text("author_name").notNull(),
+    body: text("body").notNull(),
+    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  },
+  (table) => [
+    index("issue_comments_issue_idx").on(table.issueId),
+    index("issue_comments_created_idx").on(table.createdAt),
+  ],
 );
 
 export const issueAttachments = sqliteTable(

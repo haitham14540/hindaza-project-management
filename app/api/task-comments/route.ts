@@ -1,6 +1,6 @@
 import { eq, sql } from "drizzle-orm";
 import { getDb } from "@/db";
-import { taskComments, tasks } from "@/db/schema";
+import { notifications, taskComments, tasks } from "@/db/schema";
 import { getCurrentUser, unauthorizedResponse } from "@/lib/auth";
 import { recordActivity } from "@/lib/activity";
 
@@ -33,6 +33,8 @@ export async function POST(request: Request) {
       createdBy: tasks.createdBy,
       visibility: tasks.visibility,
       submittedToManager: tasks.submittedToManager,
+      title: tasks.title,
+      project: tasks.project,
     }).from(tasks).where(eq(tasks.id, taskId)).limit(1);
     if (!task[0]) {
       return Response.json({ error: "Task not found." }, { status: 404 });
@@ -59,8 +61,18 @@ export async function POST(request: Request) {
       .returning();
 
     await db.update(tasks).set({ updatedAt: sql`CURRENT_TIMESTAMP` }).where(eq(tasks.id, taskId));
-    const [taskDetails] = await db.select({ title: tasks.title, project: tasks.project }).from(tasks).where(eq(tasks.id, taskId)).limit(1);
-    if (taskDetails) await recordActivity(db, currentUser, { action: "note_added", entityType: "task", entityId: taskId, entityLabel: taskDetails.title, projectCode: taskDetails.project, details: body });
+    const taskDetails = task[0];
+    const recipientEmail = currentUser.role === "member" ? taskDetails.createdBy : taskDetails.employeeEmail;
+    if (recipientEmail && recipientEmail.toLowerCase() !== currentUser.email.toLowerCase()) {
+      await db.insert(notifications).values({
+        recipientEmail,
+        type: "task_note_added",
+        taskId,
+        title: "Task note added",
+        message: `${taskDetails.title} · ${currentUser.displayName}`,
+      });
+    }
+    await recordActivity(db, currentUser, { action: "note_added", entityType: "task", entityId: taskId, entityLabel: taskDetails.title, projectCode: taskDetails.project, details: body });
     return Response.json({ comment: inserted[0] }, { status: 201 });
   } catch (error) {
     const unauthorized = unauthorizedResponse(error);
@@ -69,6 +81,27 @@ export async function POST(request: Request) {
       { error: error instanceof Error ? error.message : "Unable to post comment." },
       { status: 500 },
     );
+  }
+}
+
+export async function DELETE(request: Request) {
+  try {
+    const currentUser = await getCurrentUser(request);
+    if (currentUser.role !== "owner") return Response.json({ error: "Only the owner can delete task notes." }, { status: 403 });
+    const id = Number(new URL(request.url).searchParams.get("id"));
+    if (!Number.isInteger(id)) return Response.json({ error: "Invalid note id." }, { status: 400 });
+    const db = await getDb();
+    const [comment] = await db.select().from(taskComments).where(eq(taskComments.id, id)).limit(1);
+    if (!comment) return Response.json({ error: "Note not found." }, { status: 404 });
+    const [taskDetails] = await db.select({ title: tasks.title, project: tasks.project }).from(tasks).where(eq(tasks.id, comment.taskId)).limit(1);
+    await db.delete(taskComments).where(eq(taskComments.id, id));
+    await db.update(tasks).set({ updatedAt: sql`CURRENT_TIMESTAMP` }).where(eq(tasks.id, comment.taskId));
+    if (taskDetails) await recordActivity(db, currentUser, { action: "deleted", entityType: "task", entityId: comment.taskId, entityLabel: taskDetails.title, projectCode: taskDetails.project, details: `Note deleted: ${comment.body}` });
+    return Response.json({ ok: true });
+  } catch (error) {
+    const unauthorized = unauthorizedResponse(error);
+    if (unauthorized) return unauthorized;
+    return Response.json({ error: error instanceof Error ? error.message : "Unable to delete note." }, { status: 500 });
   }
 }
 
