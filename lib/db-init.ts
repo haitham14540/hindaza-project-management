@@ -80,6 +80,17 @@ export async function ensureDatabase() {
         )
       `),
       d1.prepare(`
+        CREATE TABLE IF NOT EXISTS issue_comments (
+          id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+          issue_id INTEGER NOT NULL,
+          section TEXT DEFAULT 'internal' NOT NULL,
+          author_email TEXT NOT NULL,
+          author_name TEXT NOT NULL,
+          body TEXT NOT NULL,
+          created_at TEXT DEFAULT CURRENT_TIMESTAMP NOT NULL
+        )
+      `),
+      d1.prepare(`
         CREATE TABLE IF NOT EXISTS task_subtasks (
           id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
           task_id INTEGER NOT NULL,
@@ -157,6 +168,8 @@ export async function ensureDatabase() {
       d1.prepare(
         "CREATE INDEX IF NOT EXISTS task_comments_created_idx ON task_comments (created_at)",
       ),
+      d1.prepare("CREATE INDEX IF NOT EXISTS issue_comments_issue_idx ON issue_comments (issue_id)"),
+      d1.prepare("CREATE INDEX IF NOT EXISTS issue_comments_created_idx ON issue_comments (created_at)"),
       d1.prepare("CREATE INDEX IF NOT EXISTS task_subtasks_task_idx ON task_subtasks (task_id)"),
       d1.prepare("CREATE INDEX IF NOT EXISTS task_subtasks_completed_idx ON task_subtasks (task_id, completed)"),
       d1.prepare("CREATE INDEX IF NOT EXISTS task_attachments_task_idx ON task_attachments (task_id)"),

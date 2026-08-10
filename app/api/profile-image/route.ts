@@ -16,9 +16,13 @@ const ALLOWED_TYPES = new Map([
 export async function GET(request: Request) {
   try {
     const currentUser = await getCurrentUser(request);
-    if (!currentUser.profileImageKey) return new Response(null, { status: 404 });
+    const requestedEmail = new URL(request.url).searchParams.get("email")?.trim().toLowerCase() || currentUser.email;
+    const db = await getDb();
+    const [targetUser] = await db.select({ profileImageKey: users.profileImageKey }).from(users)
+      .where(eq(users.email, requestedEmail)).limit(1);
+    if (!targetUser?.profileImageKey) return new Response(null, { status: 404 });
     const bucket = await getBucket();
-    const object = await bucket.get(currentUser.profileImageKey);
+    const object = await bucket.get(targetUser.profileImageKey);
     if (!object) return new Response(null, { status: 404 });
     const headers = new Headers();
     object.writeHttpMetadata(headers);

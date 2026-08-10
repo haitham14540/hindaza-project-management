@@ -18,6 +18,10 @@ function status(value: unknown) {
     : "active";
 }
 
+function invalidProjectDates(startDate: string, targetDate: string) {
+  return Boolean(startDate && targetDate && startDate >= targetDate);
+}
+
 function memberEmails(value: unknown) {
   if (!Array.isArray(value)) return [];
   return [...new Set(value.filter((item): item is string => typeof item === "string")
@@ -53,13 +57,16 @@ export async function POST(request: Request) {
     const code = text(payload.code, 30).toUpperCase();
     const name = text(payload.name, 180);
     if (!code || !name) return Response.json({ error: "Project code and name are required." }, { status: 400 });
+    const startDate = text(payload.startDate, 10);
+    const targetDate = text(payload.targetDate, 10);
+    if (invalidProjectDates(startDate, targetDate)) return Response.json({ error: "Project start date must be before the target date." }, { status: 400 });
     const db = await getDb();
     const requestedMembers = memberEmails(payload.memberEmails);
     const assignedMembers = await validMemberEmails(db, requestedMembers);
     const requestedProjectManagers = memberEmails(payload.projectManagerEmails);
     const assignedProjectManagers = requestedProjectManagers.filter((email) => assignedMembers.includes(email));
     if (assignedMembers.length !== requestedMembers.length) return Response.json({ error: "One or more project members are invalid." }, { status: 400 });
-    const inserted = await db.insert(projects).values({ code, name, client: text(payload.client), status: status(payload.status), startDate: text(payload.startDate, 10), targetDate: text(payload.targetDate, 10) }).returning();
+    const inserted = await db.insert(projects).values({ code, name, client: text(payload.client), status: status(payload.status), startDate, targetDate }).returning();
     if (assignedMembers.length) await db.insert(projectMembers).values(assignedMembers.map((employeeEmail) => ({ projectId: inserted[0].id, employeeEmail, isProjectManager: assignedProjectManagers.includes(employeeEmail) })));
     await recordActivity(db, currentUser, { action: "created", entityType: "project", entityId: inserted[0].id, entityLabel: `${code} · ${name}`, projectCode: code, details: `Project created with ${assignedMembers.length} team members` });
     return Response.json({ project: { ...inserted[0], memberEmails: assignedMembers, projectManagerEmails: assignedProjectManagers } }, { status: 201 });
@@ -108,13 +115,16 @@ export async function PATCH(request: Request) {
     if (blockedMembers.length) return Response.json({ code: "MEMBER_HAS_PROJECT_TASKS", error: "لا يمكن إزالة موظف لديه مهام على هذا المشروع. غيّر الموظف المسؤول عن المهام أولًا. · Cannot remove a project member with assigned tasks. Reassign the tasks first.", projectCode: existing.code, blockedMembers }, { status: 409 });
 
     const code = currentUser.role === "owner" ? text(payload.code, 30).toUpperCase() || existing.code : existing.code;
+    const startDate = currentUser.role === "owner" ? text(payload.startDate, 10) : existing.startDate;
+    const targetDate = currentUser.role === "owner" ? text(payload.targetDate, 10) : existing.targetDate;
+    if (invalidProjectDates(startDate, targetDate)) return Response.json({ error: "Project start date must be before the target date." }, { status: 400 });
     const updated = await db.update(projects).set({
       code,
       name: currentUser.role === "owner" ? text(payload.name, 180) || existing.name : existing.name,
       client: currentUser.role === "owner" ? text(payload.client) : existing.client,
       status: currentUser.role === "owner" ? status(payload.status) : existing.status,
-      startDate: currentUser.role === "owner" ? text(payload.startDate, 10) : existing.startDate,
-      targetDate: currentUser.role === "owner" ? text(payload.targetDate, 10) : existing.targetDate,
+      startDate,
+      targetDate,
     }).where(eq(projects.id, id)).returning();
     if (code !== existing.code) await db.update(tasks).set({ project: code, updatedAt: sql`CURRENT_TIMESTAMP` }).where(eq(tasks.project, existing.code));
     await db.delete(projectMembers).where(eq(projectMembers.projectId, id));

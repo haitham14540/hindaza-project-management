@@ -141,31 +141,39 @@ test("project issues use shared projects and users with attachments and linked t
   assert.match(issuesModule, /<input type="file" multiple onChange=/);
 });
 
-test("project issue client responses, closure dates, and single-save behavior are preserved", async () => {
-  const [issuesApi, attachmentsApi, issuesModule, dashboard, backupApi, migration] = await Promise.all([
+test("project issue client response notes, closure dates, and single-save behavior are preserved", async () => {
+  const [issuesApi, issueCommentsApi, attachmentsApi, issuesModule, dashboard, backupApi, migration, notesMigration] = await Promise.all([
     source("app/api/issues/route.ts"),
+    source("app/api/issue-comments/route.ts"),
     source("app/api/issue-attachments/route.ts"),
     source("app/issues-module.tsx"),
     source("app/task-dashboard.tsx"),
     source("app/api/backup/route.ts"),
     source("drizzle/0012_oval_jubilee.sql"),
+    source("drizzle/0015_short_pestilence.sql"),
   ]);
   assert.match(migration, /issue_attachments` ADD `source`/);
   assert.match(migration, /project_issues` ADD `client_reply`/);
-  assert.match(issuesApi, /clientReply: cleanText\(payload\.clientReply, 4_000\)/);
+  assert.match(issuesApi, /db\.select\(\)\.from\(issueComments\)/);
+  assert.match(issueCommentsApi, /section === "client"/);
+  assert.match(issueCommentsApi, /COMMENT_EDIT_WINDOW_MS = 15 \* 60 \* 1000/);
+  assert.match(issueCommentsApi, /Only the owner can delete issue notes/);
+  assert.match(notesMigration, /CREATE TABLE `issue_comments`/);
+  assert.match(notesMigration, /INSERT INTO `issue_comments`/);
   assert.match(issuesApi, /cleanText\(payload\.resolvedDate, 10\)/);
   assert.match(attachmentsApi, /form\.get\("source"\) === "client"/);
   assert.match(attachmentsApi, /source,/);
   assert.match(issuesModule, /<th>Resolved Date<\/th>/);
   assert.match(issuesModule, /Client Response/);
-  assert.match(issuesModule, /Client Reply/);
+  assert.match(issuesModule, /Client Response Notes/);
   assert.match(issuesModule, /client-attachment-indicator/);
   assert.match(issuesModule, /saveInFlightRef\.current/);
   assert.match(issuesModule, /current\.filter\(\(item\) => item\.id !== issue\.id\)/);
   assert.match(issuesModule, /setFiles\(\[\]\); setClientFiles\(\[\]\);/);
   assert.match(issuesModule, /if \(!selectedId\) setDrawerOpen\(false\)/);
   assert.match(dashboard, /Task Details & Update/);
-  assert.match(backupApi, /const SCHEMA_VERSION = 7/);
+  assert.match(backupApi, /const SCHEMA_VERSION = 8/);
+  assert.match(backupApi, /issueComments/);
   assert.match(backupApi, /item\.source === undefined \? "internal"/);
 });
 
@@ -239,10 +247,10 @@ test("task management uses an English left-to-right table and actions", async ()
     source("app/globals.css"),
   ]);
   assert.match(dashboard, /task-table-ltr/);
-  assert.match(dashboard, /<th>Task \/ Project<\/th>/);
+  assert.match(dashboard, /<th>Task<\/th>/);
   assert.match(dashboard, /<th>Created By<\/th>/);
   assert.match(dashboard, /<th>Created Date<\/th><th>Due Date<\/th>/);
-  assert.match(dashboard, /className="creator-cell"/);
+  assert.match(dashboard, /className="employee-cell creator-person-cell"/);
   assert.match(dashboard, /<ButtonLabel en="Delete Task" ar="حذف المهمة"/);
   assert.match(dashboard, /en=\{saving \? "Saving\.\.\." : selectedId \? "Save Changes" : "Create Task"\}/);
   assert.match(styles, /\.task-table-ltr \{[^}]*direction: ltr/);
@@ -266,7 +274,7 @@ test("project issues use persistent categories and discipline-specific raised-by
   assert.match(issuesModule, /Interior Design \(ID\)/);
   assert.match(issuesModule, /raisedByOptions/);
   assert.match(issuesModule, /Raised by · بواسطة/);
-  assert.match(issuesModule, /disabled=\{currentUser\.role === "member" \|\| issueClosed\}/);
+  assert.match(issuesModule, /disabled=\{currentUser\.role !== "owner" \|\| issueClosed\}/);
   assert.match(issuesModule, /Add Category/);
   assert.match(issuesModule, /normalizedDiscipline\(issue\.discipline\)/);
   assert.doesNotMatch(issuesModule, /select required disabled=\{Boolean\(selected\)\}/);
@@ -381,7 +389,8 @@ test("buttons use English-only labels, global tooltips, and unified report and n
   assert.match(styles, /label:has\(input:required, select:required, textarea:required\)[^}]*content: " \*";[^}]*color: #d71920/);
   assert.match(dashboard, /<input required type="datetime-local" value=\{startedAt\}/);
   assert.match(dashboard, /<input required type="datetime-local" value=\{endedAt\}/);
-  assert.match(issuesModule, /<select required value=\{convertEmployee\}/);
+  assert.match(issuesModule, /<select value=\{convertEmployee\}/);
+  assert.match(issuesModule, /Unassigned · تعيين لاحقًا/);
   assert.match(styles, /\.notification-bell \{[^}]*width: 43px; height: 43px/);
   assert.match(styles, /\.notification-popover \{[^}]*right: 6px;[^}]*left: auto;[^}]*width: min\(320px/);
   assert.match(styles, /\.issue-filters input, \.issue-filters select \{[^}]*height: 38px/);
@@ -906,11 +915,11 @@ test("managers see task disciplines and project team members open in a returning
   assert.match(styles, /\.project-member-settings/);
 });
 
-test("task completion and issue notes notify only the responsible creator and counterpart", async () => {
-  const [timerApi, subtasksApi, issuesApi, taskAccess, tasksApi, commentsApi, dashboard] = await Promise.all([
+test("task completion and notes notify only the responsible creator and counterpart", async () => {
+  const [timerApi, subtasksApi, issueCommentsApi, taskAccess, tasksApi, commentsApi, dashboard] = await Promise.all([
     source("app/api/task-timer/route.ts"),
     source("app/api/task-subtasks/route.ts"),
-    source("app/api/issues/route.ts"),
+    source("app/api/issue-comments/route.ts"),
     source("lib/task-access.ts"),
     source("app/api/tasks/route.ts"),
     source("app/api/task-comments/route.ts"),
@@ -923,12 +932,97 @@ test("task completion and issue notes notify only the responsible creator and co
   assert.match(subtasksApi, /recipientEmail: creator\.email/);
   assert.match(tasksApi, /task\.createdBy === currentUser\.email/);
   assert.match(commentsApi, /task\[0\]\.createdBy === currentUser\.email/);
+  assert.match(commentsApi, /type: "task_note_added"/);
+  assert.match(commentsApi, /currentUser\.role === "member" \? taskDetails\.createdBy : taskDetails\.employeeEmail/);
+  assert.match(commentsApi, /Only the owner can delete task notes/);
   assert.match(taskAccess, /export async function canCollaborateOnTask[\s\S]*?if \(task\.createdBy === currentUser\.email\) return true;[\s\S]*?return false;/);
   assert.match(dashboard, /currentUser\?\.role === "manager" && task && task\.createdBy !== currentUser\.email/);
   assert.match(dashboard, /\{canCollaborate && <div className="comment-composer">/);
-  assert.match(issuesApi, /notifyIssueNoteCounterpart/);
-  assert.match(issuesApi, /eq\(activityLogs\.action, "created"\)/);
-  assert.match(issuesApi, /recipientEmail = issue\.raisedByEmail/);
-  assert.match(issuesApi, /if \(comments !== existing\.comments\) await notifyIssueNoteCounterpart/);
-  assert.match(issuesApi, /if \(updated\[0\]\.comments !== existing\.comments\) await notifyIssueNoteCounterpart/);
+  assert.match(issueCommentsApi, /issueCreatorEmail/);
+  assert.match(issueCommentsApi, /eq\(activityLogs\.action, "created"\)/);
+  assert.match(issueCommentsApi, /recipientEmail = issue\.raisedByEmail/);
+  assert.match(issueCommentsApi, /type: "issue_note_added"/);
+  assert.match(issueCommentsApi, /currentUser\.email === issue\.raisedByEmail/);
+});
+
+test("V77 converts issues to optionally unassigned tasks and keeps them visible to their creator", async () => {
+  const [convertApi, issuesModule, tasksApi, bootstrapApi] = await Promise.all([
+    source("app/api/issues/convert/route.ts"),
+    source("app/issues-module.tsx"),
+    source("app/api/tasks/route.ts"),
+    source("app/api/bootstrap/route.ts"),
+  ]);
+  assert.match(convertApi, /employeeName: employee\?\.displayName \|\| "Unassigned"/);
+  assert.match(convertApi, /employeeEmail: employee\?\.email \|\| ""/);
+  assert.match(convertApi, /if \(employee\) \{[\s\S]*?type: "task_assigned"/);
+  assert.match(issuesModule, /Employee assignment is optional/);
+  assert.match(issuesModule, /disabled=\{saving\}/);
+  assert.match(tasksApi, /!task\.employeeEmail \|\| await managedEmployee/);
+  assert.match(bootstrapApi, /task\.createdBy === currentUser\.email/);
+});
+
+test("V78 adds compact project views, guarded dates, creation notes and attachments, raised-by roles, and profile images", async () => {
+  const [dashboard, styles, projectsApi, tasksApi, issuesApi, issuesModule, profileApi] = await Promise.all([
+    source("app/task-dashboard.tsx"),
+    source("app/globals.css"),
+    source("app/api/projects/route.ts"),
+    source("app/api/tasks/route.ts"),
+    source("app/api/issues/route.ts"),
+    source("app/issues-module.tsx"),
+    source("app/api/profile-image/route.ts"),
+  ]);
+  assert.match(dashboard, /projectView, setProjectView\] = useState<DirectoryView>\("table"\)/);
+  assert.match(dashboard, /projectView === "cards"/);
+  assert.match(styles, /\.project-management-table td \{ padding-top: 7px/);
+  assert.match(styles, /flex-direction: row-reverse/);
+  assert.match(projectsApi, /invalidProjectDates/);
+  assert.match(projectsApi, /start date must be before the target date/);
+  assert.match(tasksApi, /initialNote/);
+  assert.match(tasksApi, /createdComments/);
+  assert.match(dashboard, /draftTaskAttachments/);
+  assert.match(dashboard, /Add Attachments/);
+  assert.match(issuesApi, /if \(account\.role === "owner"\) return account/);
+  assert.match(issuesModule, /onOpenProjectSettings/);
+  assert.match(issuesModule, /IssueUserAvatar/);
+  assert.match(dashboard, /UserAvatar/);
+  assert.match(profileApi, /searchParams\.get\("email"\)/);
+});
+
+test("V79 fixes project settings placement, person cells, account email, titles, and issue numbering", async () => {
+  const [dashboard, issuesModule, issuesApi, styles] = await Promise.all([
+    source("app/task-dashboard.tsx"),
+    source("app/issues-module.tsx"),
+    source("app/api/issues/route.ts"),
+    source("app/globals.css"),
+  ]);
+  assert.match(dashboard, /employee-cell creator-person-cell/);
+  assert.match(dashboard, /<UserAvatar user=\{creator\} name=\{creatorName\}/);
+  assert.match(dashboard, /\{currentUser\?\.email\}/);
+  assert.match(dashboard, /<span>\{form\.name\}<\/span> Edit/);
+  assert.match(dashboard, /"Add new project"/);
+  assert.match(dashboard, /<span>\{form\.displayName\}<\/span> Edit/);
+  assert.match(dashboard, /"New Team"/);
+  assert.match(issuesModule, /task-project-label/);
+  assert.doesNotMatch(issuesModule, /<\/div>\{selectedProject && \(currentUser\.role === "owner"/);
+  assert.match(issuesModule, /<IssueUserAvatar user=\{raisedBy\}/);
+  assert.match(issuesApi, /replace\(\/\[\^A-Z0-9\]\/gi, ""\)\.slice\(0, 4\)\.toUpperCase\(\)/);
+  assert.match(issuesApi, /`\$\{projectPrefix\}-\$\{disciplineCodes\[discipline\]/);
+  assert.match(styles, /task-project-label > \.task-project-settings \{ position: absolute/);
+  assert.match(styles, /drawer-record-title span \{ color: #c92f35/);
+});
+
+test("V80 simplifies task and issue tables and normalizes legacy issue numbers", async () => {
+  const [dashboard, issuesModule, issuesApi] = await Promise.all([
+    source("app/task-dashboard.tsx"),
+    source("app/issues-module.tsx"),
+    source("app/api/issues/route.ts"),
+  ]);
+  assert.match(dashboard, /<th>Task<\/th>\{props\.showEmployeeFilter && <th>Employee<\/th>\}<th>Created By<\/th>/);
+  assert.doesNotMatch(dashboard, /<span className="project-code">\{task\.project\}<\/span>/);
+  assert.match(dashboard, /employee-cell creator-person-cell/);
+  assert.match(issuesModule, /<th>Issue Number<\/th><th>Description<\/th><th>Raised By<\/th><th>Discipline<\/th>/);
+  assert.doesNotMatch(issuesModule, /<span className="project-code">\{issue\.projectCode\}<\/span>/);
+  assert.doesNotMatch(issuesModule, /Raised by \{issue\.raisedByName\}/);
+  assert.match(issuesApi, /const normalizedNumber = issueNumber\(issue\.projectCode, issue\.discipline, issue\.sequence\)/);
+  assert.match(issuesApi, /issueNumber: normalizedNumber/);
 });

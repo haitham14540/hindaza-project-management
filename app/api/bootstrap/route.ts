@@ -148,7 +148,7 @@ export async function GET(request: Request) {
       ? allTaskRows.filter((task) => task.visibility === "team" || task.submittedToManager)
       : currentUser.role === "manager"
         ? allTaskRows.filter((task) =>
-          (task.employeeEmail === currentUser.email || ((task.visibility === "team" || task.submittedToManager) && (managerDisciplineEmails.has(task.employeeEmail) || managedProjectCodes.has(task.project)))) &&
+          (task.createdBy === currentUser.email || task.employeeEmail === currentUser.email || ((task.visibility === "team" || task.submittedToManager) && (managerDisciplineEmails.has(task.employeeEmail) || managedProjectCodes.has(task.project)))) &&
           (task.project === "PERSONAL" || assignedProjectCodes.has(task.project)),
         )
         : allTaskRows.filter((task) => task.employeeEmail === currentUser.email || (task.visibility === "private" && task.createdBy === currentUser.email) || ((task.visibility === "team" || task.submittedToManager) && managedProjectCodes.has(task.project)));
