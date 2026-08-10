@@ -142,7 +142,7 @@ test("project issues use shared projects and users with attachments and linked t
 });
 
 test("project issue client response notes, closure dates, and single-save behavior are preserved", async () => {
-  const [issuesApi, issueCommentsApi, attachmentsApi, issuesModule, dashboard, backupApi, migration, notesMigration] = await Promise.all([
+  const [issuesApi, issueCommentsApi, attachmentsApi, issuesModule, dashboard, backupApi, migration, notesMigration, repairMigration, storageRepair] = await Promise.all([
     source("app/api/issues/route.ts"),
     source("app/api/issue-comments/route.ts"),
     source("app/api/issue-attachments/route.ts"),
@@ -151,6 +151,8 @@ test("project issue client response notes, closure dates, and single-save behavi
     source("app/api/backup/route.ts"),
     source("drizzle/0012_oval_jubilee.sql"),
     source("drizzle/0015_short_pestilence.sql"),
+    source("drizzle/0016_repair_issue_comments.sql"),
+    source("lib/issue-comments-storage.ts"),
   ]);
   assert.match(migration, /issue_attachments` ADD `source`/);
   assert.match(migration, /project_issues` ADD `client_reply`/);
@@ -158,8 +160,14 @@ test("project issue client response notes, closure dates, and single-save behavi
   assert.match(issueCommentsApi, /section === "client"/);
   assert.match(issueCommentsApi, /COMMENT_EDIT_WINDOW_MS = 15 \* 60 \* 1000/);
   assert.match(issueCommentsApi, /Only the owner can delete issue notes/);
-  assert.match(notesMigration, /CREATE TABLE `issue_comments`/);
+  assert.match(notesMigration, /CREATE TABLE IF NOT EXISTS `issue_comments`/);
   assert.match(notesMigration, /INSERT INTO `issue_comments`/);
+  assert.match(repairMigration, /CREATE TABLE IF NOT EXISTS `issue_comments`/);
+  assert.match(repairMigration, /NOT EXISTS/);
+  assert.match(storageRepair, /SELECT name FROM sqlite_master/);
+  assert.match(storageRepair, /d1\.batch/);
+  assert.match(issuesApi, /ensureIssueCommentsStorage/);
+  assert.match(issueCommentsApi, /ensureIssueCommentsStorage/);
   assert.match(issuesApi, /cleanText\(payload\.resolvedDate, 10\)/);
   assert.match(attachmentsApi, /form\.get\("source"\) === "client"/);
   assert.match(attachmentsApi, /source,/);
@@ -299,7 +307,7 @@ test("issue notifications, shared notes, owner activity, and centered toasts are
   assert.match(dashboard, /notification\?\.issueId/);
   assert.match(dashboard, /Activity log/);
   assert.match(dashboard, /commentCounts\.get\(task\.id\)/);
-  assert.match(issuesModule, /Notes available/);
+  assert.match(issuesModule, /issue notes/);
   assert.match(issuesModule, /issue\.attachments\.length/);
   assert.match(activityApi, /Owner access required/);
   assert.match(styles, /\.toast \{[^}]*left: 50%/);
@@ -1025,4 +1033,75 @@ test("V80 simplifies task and issue tables and normalizes legacy issue numbers",
   assert.doesNotMatch(issuesModule, /Raised by \{issue\.raisedByName\}/);
   assert.match(issuesApi, /const normalizedNumber = issueNumber\(issue\.projectCode, issue\.discipline, issue\.sequence\)/);
   assert.match(issuesApi, /issueNumber: normalizedNumber/);
+});
+
+test("V82 shows a framed employee image in the editor and lets only the owner manage it", async () => {
+  const [dashboard, styles, profileApi] = await Promise.all([
+    source("app/task-dashboard.tsx"),
+    source("app/globals.css"),
+    source("app/api/profile-image/route.ts"),
+  ]);
+  assert.match(dashboard, /className="drawer-head user-drawer-head"/);
+  assert.match(dashboard, /className="user-drawer-heading"/);
+  assert.match(dashboard, /className="user-drawer-avatar"/);
+  assert.match(dashboard, /uploadProfileImageFile\(image, selectedEmail, setImageUploadProgress\)/);
+  assert.match(dashboard, /currentUser\?\.role === "owner"/);
+  assert.match(styles, /\.avatar\.user-drawer-avatar \{ width: 66px; height: 66px; border: 4px solid var\(--yellow\)/);
+  assert.match(styles, /\.user-drawer-heading \{ min-width: 0; display: flex; align-items: center; gap: 16px/);
+  assert.match(profileApi, /targetEmail !== currentUser\.email && currentUser\.role !== "owner"/);
+  assert.match(profileApi, /Only the owner can change another user's profile image/);
+  assert.match(profileApi, /Only the owner can remove another user's profile image/);
+  assert.match(profileApi, /uploadedBy: currentUser\.email/);
+});
+
+test("V83 makes owner image removal resilient and shows circular upload progress", async () => {
+  const [dashboard, styles, profileApi] = await Promise.all([
+    source("app/task-dashboard.tsx"),
+    source("app/globals.css"),
+    source("app/api/profile-image/route.ts"),
+  ]);
+  assert.match(dashboard, /setImageUploadProgress/);
+  assert.match(dashboard, /role="progressbar"/);
+  assert.match(dashboard, /user-photo-progress/);
+  assert.match(dashboard, /owner && selectedEmail && <button[^>]*user-photo-remove/);
+  assert.doesNotMatch(dashboard, /owner && selectedEmail && selectedUser\?\.profileImageKey && <button/);
+  assert.match(styles, /conic-gradient\(var\(--yellow\) var\(--profile-upload-progress\)/);
+  assert.match(styles, /user-photo-progress span/);
+  assert.match(profileApi, /await db\.update\(users\)\.set\(\{ profileImageKey: "" \}\)/);
+  assert.match(profileApi, /Profile image reference cleared; R2 cleanup will be retried later/);
+  assert.match(profileApi, /profileImageKey: ""/);
+});
+
+test("V84 chunks profile images below the gateway limit and removes them with an owner-authorized JSON action", async () => {
+  const [dashboard, profileApi] = await Promise.all([
+    source("app/task-dashboard.tsx"),
+    source("app/api/profile-image/route.ts"),
+  ]);
+  assert.match(profileApi, /const CHUNK_BYTES = 256 \* 1024/);
+  assert.match(profileApi, /action === "chunk"/);
+  assert.match(profileApi, /action === "complete" \|\| action === "abort"/);
+  assert.match(profileApi, /action === "remove"/);
+  assert.match(profileApi, /currentUser\.role !== "owner"/);
+  assert.match(profileApi, /await db\.update\(users\)\.set\(\{ profileImageKey: "" \}\)/);
+  assert.match(dashboard, /image\.slice\(startOffset, endOffset\)/);
+  assert.match(dashboard, /endOffset \/ image\.size/);
+  assert.match(dashboard, /\/api\/profile-image\?action=remove/);
+  assert.doesNotMatch(dashboard, /new XMLHttpRequest\(\)/);
+});
+
+test("V85 shows attachment and issue-note counts in the task and issue tables", async () => {
+  const [dashboard, issuesModule, styles] = await Promise.all([
+    source("app/task-dashboard.tsx"),
+    source("app/issues-module.tsx"),
+    source("app/globals.css"),
+  ]);
+  assert.match(dashboard, /attachments=\{taskAttachments\}/);
+  assert.match(dashboard, /const attachmentCount = props\.attachments\.filter\(\(attachment\) => attachment\.taskId === task\.id\)\.length/);
+  assert.match(dashboard, /task-attachment-indicator/);
+  assert.match(issuesModule, /const internalNoteCount = issue\.notes\.filter\(\(note\) => note\.section === "internal"\)\.length/);
+  assert.match(issuesModule, /const clientNoteCount = issue\.notes\.filter\(\(note\) => note\.section === "client"\)\.length/);
+  assert.match(issuesModule, /\{internalNoteCount\} issue notes/);
+  assert.match(issuesModule, /\{clientNoteCount\} client response notes/);
+  assert.match(styles, /task-tags \.task-attachment-indicator/);
+  assert.match(styles, /client-reply-indicator small/);
 });
