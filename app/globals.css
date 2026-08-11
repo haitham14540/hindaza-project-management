@@ -229,6 +229,8 @@ button { cursor: pointer; }
 .task-table tbody tr:last-child td { border-bottom: 0; }
 .employee-cell { display: flex; align-items: center; gap: 9px; color: var(--ink); white-space: nowrap; }
 .employee-cell strong { font-size: 11px; }
+.issue-raised-by-cell { min-width: 145px; }
+.issue-raised-by-cell strong { color: var(--ink); font-family: inherit; font-size: 11px; font-weight: 800; line-height: 1.25; }
 .task-discipline { display: inline-flex; align-items: center; min-height: 24px; padding: 4px 8px; border: 1px solid #ead579; border-radius: 999px; background: #fff9dc; color: #5f500d; font-size: 9px; font-weight: 850; white-space: nowrap; }
 .creator-cell { display: inline-block; min-width: 105px; max-width: 155px; overflow: hidden; color: var(--ink); font-size: 10px; font-weight: 800; text-overflow: ellipsis; white-space: nowrap; }
 .creator-person-cell { min-width: 125px; max-width: 180px; }
@@ -1033,6 +1035,16 @@ button.overview-kpi:hover { transform: translateY(-2px); border-color: #d8bc35; 
 .task-attachment-add input { display: none; }
 .task-attachment-toolbar.compact { display: inline-flex; }
 .task-attachment-toolbar.compact .task-attachment-add { width: 30px; min-height: 28px; height: 28px; padding: 2px; justify-content: center; border-style: solid; }
+.attachment-paste-zone { min-height: 58px; display: grid; place-items: center; margin-top: 10px; padding: 12px; border: 1px dashed #aebbc1; border-radius: 10px; background: #f8faf9; color: #66767d; font-size: 11px; text-align: center; cursor: text; }
+.attachment-paste-zone:focus { outline: 2px solid rgba(255, 210, 0, .55); border-color: #c5a600; background: #fffdf1; }
+.attachment-paste-zone span { pointer-events: none; }
+.employee-origin-tag { display: inline-flex; align-items: center; padding: 3px 7px; border-radius: 999px; background: #eef6ff; color: #245b8a; border: 1px solid #c7def2; font-size: 9px; font-weight: 800; }
+.employee-origin-banner { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin: 14px 18px 0; padding: 11px 13px; border: 1px solid #c7def2; border-radius: 10px; background: #eef6ff; color: #245b8a; font-size: 11px; }
+.private-convert-bar { display: flex; justify-content: flex-end; padding: 12px 18px 0; }
+.private-convert-bar button { border: 1px solid #d1b300; border-radius: 9px; background: #ffd200; padding: 9px 13px; color: #171717; font-size: 11px; font-weight: 800; cursor: pointer; }
+.session-employee { min-width: 130px; }
+.session-employee strong { color: #245b8a; }
+.project-review-counts { line-height: 1.45; }
 .task-attachments-table-wrap { margin-top: 10px; }
 .task-attachments-table { min-width: 460px; }
 .task-attachments-table-wrap.compact { display: inline-block; width: auto; max-width: 270px; margin: 6px 0 0; vertical-align: middle; }

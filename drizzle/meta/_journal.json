@@ -113,6 +113,13 @@
       "when": 1786372884378,
       "tag": "0015_short_pestilence",
       "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "6",
+      "when": 1786477596977,
+      "tag": "0016_tiny_paibok",
+      "breakpoints": true
     }
   ]
 }

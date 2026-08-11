@@ -1,6 +1,6 @@
 import { and, asc, eq, inArray, isNull } from "drizzle-orm";
 import { getDb } from "@/db";
-import { notifications, taskSubtasks, taskTimeEntries, tasks, users } from "@/db/schema";
+import { notifications, projectMembers, projects, taskSubtasks, taskTimeEntries, tasks, users } from "@/db/schema";
 import { getCurrentUser, unauthorizedResponse } from "@/lib/auth";
 import { recordActivity } from "@/lib/activity";
 
@@ -11,7 +11,14 @@ type TimerAction = "start" | "pause" | "finish";
 
 async function canAuditTask(db: Database, currentUser: Awaited<ReturnType<typeof getCurrentUser>>, task: typeof tasks.$inferSelect) {
   if (currentUser.role === "owner") return true;
-  return currentUser.role === "manager" && task.createdBy === currentUser.email;
+  if (currentUser.role !== "manager") return false;
+  if (task.createdBy === currentUser.email) return true;
+  const [employee] = await db.select({ discipline: users.discipline }).from(users).where(eq(users.email, task.employeeEmail)).limit(1);
+  if (!currentUser.discipline || employee?.discipline !== currentUser.discipline || task.project === "PERSONAL") return false;
+  const [membership] = await db.select({ isProjectManager: projectMembers.isProjectManager })
+    .from(projectMembers).innerJoin(projects, eq(projectMembers.projectId, projects.id))
+    .where(and(eq(projects.code, task.project), eq(projectMembers.employeeEmail, currentUser.email))).limit(1);
+  return Boolean(membership?.isProjectManager);
 }
 
 function validDate(value: unknown) {
@@ -68,7 +75,11 @@ async function closeActiveEntries(
   for (const entry of matches) {
     await db
       .update(taskTimeEntries)
-      .set({ endedAt: now, durationSeconds: durationSeconds(entry.startedAt, now) })
+      .set({
+        endedAt: now,
+        resumedAt: null,
+        durationSeconds: entry.durationSeconds + durationSeconds(entry.resumedAt || entry.startedAt, now),
+      })
       .where(eq(taskTimeEntries.id, entry.id));
     affected.add(entry.taskId);
   }
@@ -79,12 +90,55 @@ async function closeActiveEntries(
   return updatedTasks.filter(Boolean);
 }
 
+async function resumeCycleEntry(
+  db: Database,
+  task: typeof tasks.$inferSelect,
+  employeeEmail: string,
+  employeeName: string,
+  now: string,
+) {
+  const cycleEntries = await db
+    .select()
+    .from(taskTimeEntries)
+    .where(and(
+      eq(taskTimeEntries.taskId, task.id),
+      eq(taskTimeEntries.employeeEmail, employeeEmail),
+      eq(taskTimeEntries.workCycle, task.workCycle),
+    ))
+    .orderBy(asc(taskTimeEntries.startedAt), asc(taskTimeEntries.id));
+
+  if (!cycleEntries.length) {
+    await db.insert(taskTimeEntries).values({
+      taskId: task.id,
+      employeeEmail,
+      employeeName,
+      startedAt: now,
+      resumedAt: now,
+      workCycle: task.workCycle,
+    });
+    return;
+  }
+
+  // Older versions could leave more than one row for the same review cycle.
+  // Merge them before resuming so pauses and task switches remain one
+  // cumulative work-session record until the manager returns the task.
+  const [canonical, ...duplicates] = cycleEntries;
+  const accumulatedSeconds = cycleEntries.reduce((sum, entry) => sum + entry.durationSeconds, 0);
+  await db.update(taskTimeEntries).set({
+    employeeName,
+    startedAt: canonical.startedAt,
+    endedAt: null,
+    resumedAt: now,
+    durationSeconds: accumulatedSeconds,
+  }).where(eq(taskTimeEntries.id, canonical.id));
+  if (duplicates.length) {
+    await db.delete(taskTimeEntries).where(inArray(taskTimeEntries.id, duplicates.map((entry) => entry.id)));
+  }
+}
+
 export async function POST(request: Request) {
   try {
     const currentUser = await getCurrentUser(request);
-    if (currentUser.role === "owner") {
-      return Response.json({ error: "Employee access required." }, { status: 403 });
-    }
     const payload = (await request.json()) as Record<string, unknown>;
     const taskId = Number(payload.taskId);
     const action = payload.action as TimerAction;
@@ -114,19 +168,10 @@ export async function POST(request: Request) {
     const affectedTasks = [];
 
     if (action === "start") {
-      const activeOnTask = await db
-        .select({ id: taskTimeEntries.id })
-        .from(taskTimeEntries)
-        .where(and(
-          eq(taskTimeEntries.taskId, taskId),
-          eq(taskTimeEntries.employeeEmail, currentUser.email),
-          isNull(taskTimeEntries.endedAt),
-        ))
-        .limit(1);
-      if (!activeOnTask[0]) {
-        affectedTasks.push(...await closeActiveEntries(db, currentUser.email, now));
-        await db.insert(taskTimeEntries).values({ taskId, employeeEmail: currentUser.email, startedAt: now });
-      }
+      // Close whichever task is currently running, including this one, then
+      // resume the single cumulative record for the current review cycle.
+      affectedTasks.push(...await closeActiveEntries(db, currentUser.email, now));
+      await resumeCycleEntry(db, task, currentUser.email, currentUser.displayName, now);
       const started = await db
         .update(tasks)
         .set({
@@ -211,11 +256,8 @@ export async function PATCH(request: Request) {
     if (!entry.endedAt) return Response.json({ error: "Pause the active session before editing it." }, { status: 409 });
     const [task] = await db.select().from(tasks).where(eq(tasks.id, entry.taskId)).limit(1);
     if (!task) return Response.json({ error: "Task not found." }, { status: 404 });
-    if (task.managerCheck === "new" && !task.submittedToManager) {
-      return Response.json({ error: "Work sessions can be audited after the task is submitted for review." }, { status: 409 });
-    }
     if (!(await canAuditTask(db, currentUser, task))) return Response.json({ error: "Management access required for this work session." }, { status: 403 });
-    await db.update(taskTimeEntries).set({ startedAt, endedAt, durationSeconds: durationSeconds(startedAt, endedAt) }).where(eq(taskTimeEntries.id, entryId));
+    await db.update(taskTimeEntries).set({ startedAt, resumedAt: null, endedAt, durationSeconds: durationSeconds(startedAt, endedAt) }).where(eq(taskTimeEntries.id, entryId));
     const updatedTask = await refreshTaskTime(db, task.id);
     const entries = await db.select().from(taskTimeEntries).where(eq(taskTimeEntries.taskId, task.id)).orderBy(asc(taskTimeEntries.startedAt), asc(taskTimeEntries.id));
     await recordActivity(db, currentUser, { action: "timer_updated", entityType: "task", entityId: task.id, entityLabel: task.title, projectCode: task.project, details: `Work session ${entryId} corrected during review` });
@@ -239,9 +281,6 @@ export async function DELETE(request: Request) {
     if (!entry.endedAt) return Response.json({ error: "Pause the active session before deleting it." }, { status: 409 });
     const [task] = await db.select().from(tasks).where(eq(tasks.id, entry.taskId)).limit(1);
     if (!task) return Response.json({ error: "Task not found." }, { status: 404 });
-    if (task.managerCheck === "new" && !task.submittedToManager) {
-      return Response.json({ error: "Work sessions can be audited after the task is submitted for review." }, { status: 409 });
-    }
     if (!(await canAuditTask(db, currentUser, task))) return Response.json({ error: "Management access required for this work session." }, { status: 403 });
     await db.delete(taskTimeEntries).where(eq(taskTimeEntries.id, entryId));
     const updatedTask = await refreshTaskTime(db, task.id);

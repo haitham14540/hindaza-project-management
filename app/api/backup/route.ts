@@ -22,7 +22,7 @@ import { recordActivity } from "@/lib/activity";
 export const dynamic = "force-dynamic";
 
 const APP_NAME = "HINDAZA Project Management";
-const SCHEMA_VERSION = 8;
+const SCHEMA_VERSION = 9;
 const MAX_BACKUP_BYTES = 20 * 1024 * 1024;
 const MAX_TABLE_ROWS = 100_000;
 const MAX_D1_BOUND_PARAMETERS = 100;
@@ -146,7 +146,7 @@ function optionalNullablePositiveInteger(source: Record<string, unknown>, key: s
 
 function validateBackup(value: unknown): BackupData {
   const payload = record(value, "Backup");
-  if (payload.app !== APP_NAME || ![1, 2, 3, 4, 5, 6, 7].includes(Number(payload.schemaVersion))) {
+  if (payload.app !== APP_NAME || ![1, 2, 3, 4, 5, 6, 7, 8, 9].includes(Number(payload.schemaVersion))) {
     fail("This file is not a compatible HINDAZA backup.");
   }
   const data = record(payload.data, "data");
@@ -197,6 +197,11 @@ function validateBackup(value: unknown): BackupData {
     managerNote: stringField(item, "managerNote", 2_000),
     visibility: enumField(item, "visibility", ["team", "private"] as const),
     submittedToManager: booleanField(item, "submittedToManager"),
+    originatedByEmail: optionalStringField(item, "originatedByEmail", 180),
+    originatedByName: optionalStringField(item, "originatedByName", 120),
+    acceptedByEmail: optionalStringField(item, "acceptedByEmail", 180),
+    acceptedByName: optionalStringField(item, "acceptedByName", 120),
+    workCycle: item.workCycle === undefined ? 1 : positiveInteger(item, "workCycle"),
     createdBy: stringField(item, "createdBy", 180, false),
     createdAt: stringField(item, "createdAt", 50, false),
     updatedAt: stringField(item, "updatedAt", 50, false),
@@ -223,9 +228,12 @@ function validateBackup(value: unknown): BackupData {
     id: positiveInteger(item, "id"),
     taskId: positiveInteger(item, "taskId"),
     employeeEmail: emailField(item, "employeeEmail"),
+    employeeName: optionalStringField(item, "employeeName", 120),
     startedAt: stringField(item, "startedAt", 50, false),
+    resumedAt: item.resumedAt === undefined ? null : nullableString(item, "resumedAt", 50),
     endedAt: nullableString(item, "endedAt", 50),
     durationSeconds: nonNegativeInteger(item, "durationSeconds"),
+    workCycle: item.workCycle === undefined ? 1 : positiveInteger(item, "workCycle"),
     createdAt: stringField(item, "createdAt", 50, false),
   }));
 
@@ -499,12 +507,12 @@ export async function POST(request: Request) {
       d1.prepare("DELETE FROM users"),
       ...insertStatements(d1, "users", ["email", "display_name", "role", "discipline", "password_hash", "password_salt", "profile_image_key", "active", "created_at"], data.users, (user) => [user.email, user.displayName, user.role, user.discipline, user.passwordHash, user.passwordSalt, user.profileImageKey ?? "", user.active, user.createdAt]),
       ...insertStatements(d1, "projects", ["id", "code", "name", "client", "status", "start_date", "target_date", "created_at"], data.projects, (project) => [project.id!, project.code, project.name, project.client, project.status, project.startDate, project.targetDate, project.createdAt]),
-      ...insertStatements(d1, "tasks", ["id", "task_date", "employee_name", "employee_email", "project", "title", "expected_output", "priority", "planned_hours", "start_time", "end_time", "actual_hours", "status", "manager_check", "manager_note", "visibility", "submitted_to_manager", "created_by", "created_at", "updated_at"], data.tasks, (task) => [task.id!, task.taskDate, task.employeeName, task.employeeEmail, task.project, task.title, task.expectedOutput, task.priority, task.plannedHours, task.startTime, task.endTime, task.actualHours, task.status, task.managerCheck, task.managerNote, task.visibility, task.submittedToManager, task.createdBy, task.createdAt, task.updatedAt]),
+      ...insertStatements(d1, "tasks", ["id", "task_date", "employee_name", "employee_email", "project", "title", "expected_output", "priority", "planned_hours", "start_time", "end_time", "actual_hours", "status", "manager_check", "manager_note", "visibility", "submitted_to_manager", "originated_by_email", "originated_by_name", "accepted_by_email", "accepted_by_name", "work_cycle", "created_by", "created_at", "updated_at"], data.tasks, (task) => [task.id!, task.taskDate, task.employeeName, task.employeeEmail, task.project, task.title, task.expectedOutput, task.priority, task.plannedHours, task.startTime, task.endTime, task.actualHours, task.status, task.managerCheck, task.managerNote, task.visibility, task.submittedToManager, task.originatedByEmail ?? "", task.originatedByName ?? "", task.acceptedByEmail ?? "", task.acceptedByName ?? "", task.workCycle ?? 1, task.createdBy, task.createdAt, task.updatedAt]),
       ...insertStatements(d1, "project_members", ["id", "project_id", "employee_email", "is_project_manager", "created_at"], data.projectMembers, (membership) => [membership.id!, membership.projectId, membership.employeeEmail, membership.isProjectManager, membership.createdAt]),
       ...insertStatements(d1, "task_comments", ["id", "task_id", "author_email", "author_name", "body", "created_at"], data.taskComments, (comment) => [comment.id!, comment.taskId, comment.authorEmail, comment.authorName, comment.body, comment.createdAt]),
       ...insertStatements(d1, "task_subtasks", ["id", "task_id", "title", "completed", "completed_at", "completed_by", "created_by", "created_at", "updated_at"], data.taskSubtasks, (subtask) => [subtask.id!, subtask.taskId, subtask.title, subtask.completed, subtask.completedAt ?? null, subtask.completedBy, subtask.createdBy, subtask.createdAt, subtask.updatedAt]),
       ...insertStatements(d1, "task_attachments", ["id", "task_id", "subtask_id", "object_key", "file_name", "content_type", "size_bytes", "uploaded_by", "created_at"], data.taskAttachments, (attachment) => [attachment.id!, attachment.taskId, attachment.subtaskId ?? null, attachment.objectKey, attachment.fileName, attachment.contentType, attachment.sizeBytes, attachment.uploadedBy, attachment.createdAt]),
-      ...insertStatements(d1, "task_time_entries", ["id", "task_id", "employee_email", "started_at", "ended_at", "duration_seconds", "created_at"], data.taskTimeEntries, (entry) => [entry.id!, entry.taskId, entry.employeeEmail, entry.startedAt, entry.endedAt ?? null, entry.durationSeconds, entry.createdAt]),
+      ...insertStatements(d1, "task_time_entries", ["id", "task_id", "employee_email", "employee_name", "started_at", "resumed_at", "ended_at", "duration_seconds", "work_cycle", "created_at"], data.taskTimeEntries, (entry) => [entry.id!, entry.taskId, entry.employeeEmail, entry.employeeName ?? "", entry.startedAt, entry.resumedAt ?? null, entry.endedAt ?? null, entry.durationSeconds, entry.workCycle ?? 1, entry.createdAt]),
       ...insertStatements(d1, "notifications", ["id", "recipient_email", "type", "task_id", "issue_id", "title", "message", "read", "created_at"], data.notifications, (notification) => [notification.id!, notification.recipientEmail, notification.type, notification.taskId ?? null, notification.issueId ?? null, notification.title, notification.message, notification.read, notification.createdAt]),
       ...insertStatements(d1, "project_issues", ["id", "issue_number", "sequence", "project_code", "status", "discipline", "description", "category", "priority", "assignee_email", "raised_by_email", "raised_by_name", "issue_date", "resolved_date", "comments", "client_reply", "converted_task_id", "created_at", "updated_at"], data.projectIssues, (issue) => [issue.id!, issue.issueNumber, issue.sequence, issue.projectCode, issue.status, issue.discipline, issue.description, issue.category, issue.priority, issue.assigneeEmail, issue.raisedByEmail, issue.raisedByName, issue.issueDate, issue.resolvedDate, issue.comments, issue.clientReply, issue.convertedTaskId ?? null, issue.createdAt, issue.updatedAt]),
       ...insertStatements(d1, "issue_attachments", ["id", "issue_id", "object_key", "file_name", "content_type", "size_bytes", "uploaded_by", "source", "created_at"], data.issueAttachments, (attachment) => [attachment.id!, attachment.issueId, attachment.objectKey, attachment.fileName, attachment.contentType, attachment.sizeBytes, attachment.uploadedBy, attachment.source, attachment.createdAt]),
