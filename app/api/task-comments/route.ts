@@ -1,6 +1,6 @@
-import { eq, sql } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { getDb } from "@/db";
-import { notifications, taskComments, tasks } from "@/db/schema";
+import { notifications, projectMembers, projects, taskComments, tasks, users } from "@/db/schema";
 import { getCurrentUser, unauthorizedResponse } from "@/lib/auth";
 import { recordActivity } from "@/lib/activity";
 
@@ -39,7 +39,15 @@ export async function POST(request: Request) {
     if (!task[0]) {
       return Response.json({ error: "Task not found." }, { status: 404 });
     }
-    const managementAccess = currentUser.role === "owner" || (
+    let projectManagerAccess = false;
+    if (currentUser.role === "manager" && task[0].project !== "PERSONAL" && currentUser.discipline) {
+      const [employee] = await db.select({ discipline: users.discipline }).from(users).where(eq(users.email, task[0].employeeEmail)).limit(1);
+      const [membership] = await db.select({ isProjectManager: projectMembers.isProjectManager })
+        .from(projectMembers).innerJoin(projects, eq(projectMembers.projectId, projects.id))
+        .where(and(eq(projects.code, task[0].project), eq(projectMembers.employeeEmail, currentUser.email))).limit(1);
+      projectManagerAccess = employee?.discipline === currentUser.discipline && Boolean(membership?.isProjectManager);
+    }
+    const managementAccess = currentUser.role === "owner" || projectManagerAccess || (
       currentUser.role === "manager" &&
       task[0].createdBy === currentUser.email
     );

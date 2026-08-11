@@ -107,19 +107,30 @@ async function renumberAfter(db: Awaited<ReturnType<typeof getDb>>, projectCode:
 async function issueRows() {
   await ensureIssueCommentsStorage();
   const db = await getDb();
-  const [issues, attachments, notes, createdActivities] = await Promise.all([
-    db.select().from(projectIssues).orderBy(asc(projectIssues.projectCode), asc(projectIssues.discipline), asc(projectIssues.sequence), asc(projectIssues.id)),
+  // Keep D1 reads in bounded batches. The categories request runs alongside
+  // this function, so adding every issue dependency to one Promise.all can
+  // exhaust the Worker's concurrent subrequest allowance and leave the client
+  // waiting indefinitely.
+  const issues = await db.select().from(projectIssues)
+    .orderBy(asc(projectIssues.projectCode), asc(projectIssues.discipline), asc(projectIssues.sequence), asc(projectIssues.id));
+  const [attachments, notes, createdActivities] = await Promise.all([
     db.select().from(issueAttachments).orderBy(asc(issueAttachments.createdAt), asc(issueAttachments.id)),
     db.select().from(issueComments).orderBy(asc(issueComments.createdAt), asc(issueComments.id)),
     db.select({ issueId: activityLogs.entityId, actorEmail: activityLogs.actorEmail }).from(activityLogs)
       .where(and(eq(activityLogs.entityType, "issue"), eq(activityLogs.action, "created"))).orderBy(asc(activityLogs.id)),
   ]);
+  const raisedByEmails = Array.from(new Set(issues.map((issue) => issue.raisedByEmail.toLowerCase()).filter(Boolean)));
+  const raisedByAccounts = raisedByEmails.length
+    ? await db.select({ email: users.email, displayName: users.displayName, profileImageKey: users.profileImageKey })
+      .from(users).where(inArray(users.email, raisedByEmails))
+    : [];
   const byIssue = new Map<number, typeof attachments>();
   for (const attachment of attachments) byIssue.set(attachment.issueId, [...(byIssue.get(attachment.issueId) || []), attachment]);
   const notesByIssue = new Map<number, typeof notes>();
   for (const note of notes) notesByIssue.set(note.issueId, [...(notesByIssue.get(note.issueId) || []), note]);
   const creatorByIssue = new Map<number, string>();
   for (const activity of createdActivities) if (activity.issueId && !creatorByIssue.has(activity.issueId)) creatorByIssue.set(activity.issueId, activity.actorEmail);
+  const raisedByAccount = new Map(raisedByAccounts.map((account) => [account.email.toLowerCase(), account]));
   const normalizedIssues = [];
   for (const issue of issues) {
     const normalizedNumber = issueNumber(issue.projectCode, issue.discipline, issue.sequence);
@@ -128,7 +139,17 @@ async function issueRows() {
     }
     normalizedIssues.push({ ...issue, issueNumber: normalizedNumber });
   }
-  return normalizedIssues.map((issue) => ({ ...issue, createdByEmail: creatorByIssue.get(issue.id) || "", attachments: byIssue.get(issue.id) || [], notes: notesByIssue.get(issue.id) || [] }));
+  return normalizedIssues.map((issue) => {
+    const account = raisedByAccount.get(issue.raisedByEmail.toLowerCase());
+    return {
+      ...issue,
+      raisedByName: account?.displayName || issue.raisedByName,
+      raisedByProfileImageKey: account?.profileImageKey || "",
+      createdByEmail: creatorByIssue.get(issue.id) || "",
+      attachments: byIssue.get(issue.id) || [],
+      notes: notesByIssue.get(issue.id) || [],
+    };
+  });
 }
 
 export async function GET(request: Request) {

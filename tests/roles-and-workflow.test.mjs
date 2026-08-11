@@ -180,7 +180,7 @@ test("project issue client response notes, closure dates, and single-save behavi
   assert.match(issuesModule, /setFiles\(\[\]\); setClientFiles\(\[\]\);/);
   assert.match(issuesModule, /if \(!selectedId\) setDrawerOpen\(false\)/);
   assert.match(dashboard, /Task Details & Update/);
-  assert.match(backupApi, /const SCHEMA_VERSION = 8/);
+  assert.match(backupApi, /const SCHEMA_VERSION = 9/);
   assert.match(backupApi, /issueComments/);
   assert.match(backupApi, /item\.source === undefined \? "internal"/);
 });
@@ -567,7 +567,7 @@ test("management can audit submitted work sessions and directories use the reque
   ]);
   assert.match(timerApi, /export async function PATCH/);
   assert.match(timerApi, /export async function DELETE/);
-  assert.match(timerApi, /Work sessions can be audited after the task is submitted for review/);
+  assert.match(timerApi, /membership\?\.isProjectManager/);
   assert.match(timerApi, /canAuditTask/);
   assert.match(dashboard, /updateWorkSession/);
   assert.match(dashboard, /deleteWorkSession/);
@@ -761,7 +761,7 @@ test("project managers have project-wide visibility and modern project navigatio
   assert.match(styles, /\.project-directory-back/);
 });
 
-test("project managers see employee assignments but every manager is read-only on other creators' tasks", async () => {
+test("project managers see assignments while submitted employee tasks can be accepted", async () => {
   const [dashboard, tasksApi, taskAccess, timerApi, styles] = await Promise.all([
     source("app/task-dashboard.tsx"),
     source("app/api/tasks/route.ts"),
@@ -777,7 +777,8 @@ test("project managers see employee assignments but every manager is read-only o
   assert.match(tasksApi, /canManageExistingTask/);
   assert.match(tasksApi, /Managers can edit or delete only tasks they created/);
   assert.match(taskAccess, /if \(task\.createdBy === currentUser\.email\) return true;[\s\S]*?return false;/);
-  assert.match(timerApi, /currentUser\.role === "manager" && task\.createdBy === currentUser\.email/);
+  assert.match(timerApi, /if \(task\.createdBy === currentUser\.email\) return true/);
+  assert.match(tasksApi, /canAdoptSubmittedTask/);
   assert.match(dashboard, /className="project-settings-topbar"/);
   assert.match(dashboard, /aria-label="Project settings" title="Project settings"/);
   assert.match(styles, /\.project-directory-back \{ height: 43px; min-height: 43px;/);
@@ -844,7 +845,7 @@ test("task creation drafts subtasks while uploads report progress and private ac
   assert.match(dashboard, /team: "TEAM"/);
   assert.match(dashboard, /className="subtask-number">\{index \+ 1\}/);
   assert.match(dashboard, /className=\{`assignment-time-grid/);
-  assert.match(dashboard, /\{management && <label className="assignment-employee"/);
+  assert.match(dashboard, /\{management && \(form\.visibility !== "private" \|\| acceptingEmployeeTask\) && <label className="assignment-employee"/);
   assert.match(dashboard, /<option key=\{user\.email\} value=\{user\.email\}>\{user\.displayName\}\{user\.discipline/);
   assert.match(styles, /assignment-time-grid\.management \{ grid-template-columns: minmax\(0, 1\.35fr\)/);
   assert.match(dashboard, /setTaskAttachmentProgress/);
@@ -945,7 +946,7 @@ test("task completion and notes notify only the responsible creator and counterp
   assert.match(commentsApi, /Only the owner can delete task notes/);
   assert.match(taskAccess, /export async function canCollaborateOnTask[\s\S]*?if \(task\.createdBy === currentUser\.email\) return true;[\s\S]*?return false;/);
   assert.match(dashboard, /currentUser\?\.role === "manager" && task && task\.createdBy !== currentUser\.email/);
-  assert.match(dashboard, /\{canCollaborate && <div className="comment-composer">/);
+  assert.match(dashboard, /\{canComment && <div className="comment-composer">/);
   assert.match(issueCommentsApi, /issueCreatorEmail/);
   assert.match(issueCommentsApi, /eq\(activityLogs\.action, "created"\)/);
   assert.match(issueCommentsApi, /recipientEmail = issue\.raisedByEmail/);
@@ -1104,4 +1105,54 @@ test("V85 shows attachment and issue-note counts in the task and issue tables", 
   assert.match(issuesModule, /\{clientNoteCount\} client response notes/);
   assert.match(styles, /task-tags \.task-attachment-indicator/);
   assert.match(styles, /client-reply-indicator small/);
+});
+
+test("V87 keeps private tasks on the open project and unlocks reassignment only after review submission", async () => {
+  const [dashboard, tasksApi] = await Promise.all([
+    source("app/task-dashboard.tsx"),
+    source("app/api/tasks/route.ts"),
+  ]);
+  assert.match(tasksApi, /!requestedPrivate && !\(await isProjectMember/);
+  assert.match(tasksApi, /const privateSelfEdit = management/);
+  assert.match(tasksApi, /reassignmentAfterSubmission = existing\[0\]\.submittedToManager \|\| existing\[0\]\.managerCheck === "pending"/);
+  assert.match(tasksApi, /employeeChanged \|\| convertingPrivate/);
+  assert.match(dashboard, /managementPrivateProjectLocked/);
+  assert.match(dashboard, /task\.project !== "PERSONAL" \? task\.project/);
+  assert.match(dashboard, /Convert to Employee Task · تحويل إلى مهمة موظف/);
+  assert.match(dashboard, /const assignmentLocked = timeEntries\.length > 0 && !canReassignAfterWork/);
+  assert.match(dashboard, /title=\{assignmentLocked \? assignmentLockHint : undefined\}/);
+  assert.match(dashboard, /form\.visibility !== "private" \|\| acceptingEmployeeTask/);
+});
+
+test("V88 keeps one cumulative timer row per review cycle and stabilizes Raised By identity cells", async () => {
+  const [timerApi, issuesApi, issuesModule, styles] = await Promise.all([
+    source("app/api/task-timer/route.ts"),
+    source("app/api/issues/route.ts"),
+    source("app/issues-module.tsx"),
+    source("app/globals.css"),
+  ]);
+  assert.match(timerApi, /async function resumeCycleEntry/);
+  assert.match(timerApi, /const accumulatedSeconds = cycleEntries\.reduce/);
+  assert.match(timerApi, /db\.delete\(taskTimeEntries\)\.where\(inArray\(taskTimeEntries\.id/);
+  assert.match(timerApi, /await closeActiveEntries\(db, currentUser\.email, now\)/);
+  assert.match(timerApi, /await resumeCycleEntry\(db, task, currentUser\.email, currentUser\.displayName, now\)/);
+  assert.match(issuesApi, /raisedByProfileImageKey: account\?\.profileImageKey \|\| ""/);
+  assert.match(issuesModule, /email\.toLowerCase\(\) === issue\.raisedByEmail\.toLowerCase\(\)/);
+  assert.match(issuesModule, /employee-cell issue-raised-by-cell/);
+  assert.match(styles, /\.issue-raised-by-cell strong/);
+});
+
+test("V89 bounds issue loading and keeps D1 reads below the concurrent subrequest limit", async () => {
+  const [issuesApi, issuesModule] = await Promise.all([
+    source("app/api/issues/route.ts"),
+    source("app/issues-module.tsx"),
+  ]);
+  assert.match(issuesApi, /const issues = await db\.select\(\)\.from\(projectIssues\)/);
+  assert.match(issuesApi, /const \[attachments, notes, createdActivities\] = await Promise\.all/);
+  assert.match(issuesApi, /raisedByEmails\.length\s*\? await db\.select/);
+  assert.doesNotMatch(issuesApi, /\[issues, attachments, notes, createdActivities, raisedByAccounts\] = await Promise\.all/);
+  assert.match(issuesModule, /const ISSUE_LOAD_TIMEOUT_MS = 15_000/);
+  assert.match(issuesModule, /signal: controller\.signal/);
+  assert.match(issuesModule, /void load\(\);\s*\n\s*\}, \[load\]\)/);
+  assert.match(issuesModule, /Retry · إعادة المحاولة/);
 });

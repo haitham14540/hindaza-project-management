@@ -52,6 +52,11 @@ export async function ensureDatabase() {
           manager_note TEXT DEFAULT '' NOT NULL,
           visibility TEXT DEFAULT 'team' NOT NULL,
           submitted_to_manager INTEGER DEFAULT 0 NOT NULL,
+          originated_by_email TEXT DEFAULT '' NOT NULL,
+          originated_by_name TEXT DEFAULT '' NOT NULL,
+          accepted_by_email TEXT DEFAULT '' NOT NULL,
+          accepted_by_name TEXT DEFAULT '' NOT NULL,
+          work_cycle INTEGER DEFAULT 1 NOT NULL,
           created_by TEXT NOT NULL,
           created_at TEXT DEFAULT CURRENT_TIMESTAMP NOT NULL,
           updated_at TEXT DEFAULT CURRENT_TIMESTAMP NOT NULL
@@ -141,9 +146,12 @@ export async function ensureDatabase() {
           id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
           task_id INTEGER NOT NULL,
           employee_email TEXT NOT NULL,
+          employee_name TEXT DEFAULT '' NOT NULL,
           started_at TEXT NOT NULL,
+          resumed_at TEXT,
           ended_at TEXT,
           duration_seconds INTEGER DEFAULT 0 NOT NULL,
+          work_cycle INTEGER DEFAULT 1 NOT NULL,
           created_at TEXT DEFAULT CURRENT_TIMESTAMP NOT NULL
         )
       `),
