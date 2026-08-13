@@ -137,7 +137,7 @@ test("project issues use shared projects and users with attachments and linked t
   assert.match(convertApi, /Source Issue:/);
   assert.match(convertApi, /Select an employee assigned to this project/);
   assert.match(dashboard, /<IssuesModule/);
-  assert.match(issuesModule, /Modified to task/);
+  assert.match(issuesModule, /Converted to Task/);
   assert.match(issuesModule, /<input type="file" multiple onChange=/);
 });
 
@@ -686,7 +686,7 @@ test("page headings and overview titles are English-only while typography matche
   assert.match(dashboard, /<span>Active Projects<\/span>/);
   const overview = dashboard.slice(dashboard.indexOf("function ProjectOverviewDashboard"), dashboard.indexOf("function TaskTable"));
   assert.doesNotMatch(overview, /[\u0600-\u06ff]/);
-  assert.match(styles, /--font-ui: Arial, "Segoe UI", Tahoma, sans-serif/);
+  assert.match(styles, /--font-ui: "HINDAZA Arabic", Arial, "Segoe UI", Tahoma, sans-serif/);
   assert.match(styles, /button, input, select, textarea, table, th, td \{ font-family: var\(--font-ui\); \}/);
   assert.match(styles, /\.issue-table th \{ padding-block: 13px; color: #5e6c75; font-size: 11px;/);
   assert.match(styles, /\.issue-table td \{ font-size: 10px; \}/);
@@ -717,7 +717,7 @@ test("project navigation scopes tasks and issues without changing reports", asyn
   assert.match(dashboard, /value=\{projectSearch\}/);
   assert.match(dashboard, /aria-label="Clear all project filters"/);
   assert.match(dashboard, /setProjectSearch\(""\); setProjectStatusFilter\("all"\)/);
-  assert.match(dashboard, /className="project-table-identity"><strong>\{project\.name\}<\/strong><small className="project-code">\{project\.code\}<\/small>/);
+  assert.match(dashboard, /className="project-table-identity"><span className="project-name-live"><strong>\{project\.name\}<\/strong>\{projectLiveIndicators\(project\.code\)\}<\/span><small className="project-code">\{project\.code\}<\/small>/);
   assert.doesNotMatch(dashboard, /<small>Tasks in this project<\/small>/);
   assert.doesNotMatch(dashboard, /project-workspace-header panel/);
   assert.match(dashboard, /lockedProjectCode=\{selectedProject\.code\}/);
@@ -879,8 +879,10 @@ test("project tabs are compact, task notes edit for fifteen minutes, and due dat
   assert.match(dashboard, /aria-label="Filter by due date"/);
   assert.match(dashboard, /!dueDateFilter \|\| task\.taskDate === dueDateFilter/);
   assert.match(dashboard, /setDueDateFilter\(""\)/);
-  assert.match(dashboard, /label: "Overdue · متجاوزة الوقت"/);
-  assert.doesNotMatch(dashboard, /label: "Overtime/);
+  assert.match(dashboard, /task\.status === "done" && task\.managerCheck === "approved"[\s\S]*?label: "OK"/);
+  assert.match(dashboard, /task\.status === "done"[\s\S]*?label: "Wait"/);
+  assert.match(dashboard, /task\.taskDate && task\.taskDate < localToday\(\)[\s\S]*?label: "Late"/);
+  assert.match(dashboard, /label: "NA"/);
   assert.match(dashboard, /canEditComment\(comment, currentUser, clock\)/);
   assert.match(dashboard, /className="comment-edit-button"/);
   assert.match(dashboard, /fetch\("\/api\/task-comments"[\s\S]*?method: "PATCH"/);
@@ -983,7 +985,7 @@ test("V78 adds compact project views, guarded dates, creation notes and attachme
   assert.match(dashboard, /projectView, setProjectView\] = useState<DirectoryView>\("table"\)/);
   assert.match(dashboard, /projectView === "cards"/);
   assert.match(styles, /\.project-management-table td \{ padding-top: 7px/);
-  assert.match(styles, /flex-direction: row-reverse/);
+  assert.match(styles, /\.project-table-identity \{ display: grid; justify-items: start;/);
   assert.match(projectsApi, /invalidProjectDates/);
   assert.match(projectsApi, /start date must be before the target date/);
   assert.match(tasksApi, /initialNote/);
@@ -1112,7 +1114,7 @@ test("V87 keeps private tasks on the open project and unlocks reassignment only 
     source("app/task-dashboard.tsx"),
     source("app/api/tasks/route.ts"),
   ]);
-  assert.match(tasksApi, /!requestedPrivate && !\(await isProjectMember/);
+  assert.match(tasksApi, /!requestedPrivate && !selfAssigned && !\(await isProjectMember/);
   assert.match(tasksApi, /const privateSelfEdit = management/);
   assert.match(tasksApi, /reassignmentAfterSubmission = existing\[0\]\.submittedToManager \|\| existing\[0\]\.managerCheck === "pending"/);
   assert.match(tasksApi, /employeeChanged \|\| convertingPrivate/);
@@ -1155,4 +1157,213 @@ test("V89 bounds issue loading and keeps D1 reads below the concurrent subreques
   assert.match(issuesModule, /signal: controller\.signal/);
   assert.match(issuesModule, /void load\(\);\s*\n\s*\}, \[load\]\)/);
   assert.match(issuesModule, /Retry · إعادة المحاولة/);
+});
+
+test("V90 adds automatic field direction, guarded subtask title editing, aligned task dates, and code-sorted projects", async () => {
+  const [dashboard, subtasksApi, styles, directionController, layout] = await Promise.all([
+    source("app/task-dashboard.tsx"),
+    source("app/api/task-subtasks/route.ts"),
+    source("app/globals.css"),
+    source("app/automatic-text-direction.tsx"),
+    source("app/layout.tsx"),
+  ]);
+  assert.match(directionController, /function applyAutomaticTextDirection/);
+  assert.match(directionController, /document\.addEventListener\("input", syncDirection, true\)/);
+  assert.match(directionController, /target\.style\.direction = direction/);
+  assert.match(layout, /<AutomaticTextDirection \/>/);
+  assert.match(dashboard, /function EditableSubtaskTitle/);
+  assert.match(dashboard, /const canEditSubtaskTitles = Boolean/);
+  assert.match(dashboard, /updateSubtaskTitle\(subtask, title\)/);
+  assert.match(subtasksApi, /function canEditSubtaskTitle/);
+  assert.match(subtasksApi, /currentUser\.role === "owner" \|\| \(currentUser\.role === "manager" && task\.createdBy === currentUser\.email\)/);
+  assert.match(dashboard, /a\.code\.localeCompare\(b\.code, undefined, \{ numeric: true, sensitivity: "base" \}\)/);
+  assert.match(styles, /\.project-table-identity \{ display: grid; justify-items: start;/);
+  assert.match(styles, /\.task-project-date-grid select, \.task-project-date-grid input\[type="date"\] \{ height: 39px;/);
+});
+
+test("V91 adds password visibility, employee settings controls, and grouped employee task review", async () => {
+  const [dashboard, login, passwordInput, styles] = await Promise.all([
+    source("app/task-dashboard.tsx"),
+    source("app/login/page.tsx"),
+    source("app/password-input.tsx"),
+    source("app/globals.css"),
+  ]);
+  assert.match(dashboard, /Name · الاسم/);
+  assert.match(dashboard, /Discipline · التخصص/);
+  assert.doesNotMatch(dashboard, /<h3>بيانات الموظف/);
+  assert.match(login, /<PasswordInput required/);
+  assert.match(dashboard, /<PasswordInput required minLength=\{10\}/);
+  assert.match(passwordInput, /aria-label=\{visible \? "Hide password" : "Show password"\}/);
+  assert.match(dashboard, /className="project-settings-button team-settings-button"/);
+  assert.match(dashboard, /function EmployeeTasksDialog/);
+  assert.match(dashboard, /task\.managerCheck !== "approved"/);
+  assert.match(dashboard, /a\.localeCompare\(b, undefined, \{ numeric: true, sensitivity: "base" \}\)/);
+  assert.match(dashboard, /aria-expanded=\{!collapsed\}/);
+  assert.match(dashboard, /Right-click to open it in a new tab/);
+  assert.match(dashboard, /&task=\$\{task\.id\}/);
+  assert.match(styles, /\.employee-tasks-dialog/);
+});
+
+test("V93 keeps employee task navigation in history and uses a centered 80 percent dialog", async () => {
+  const [dashboard, styles] = await Promise.all([
+    source("app/task-dashboard.tsx"),
+    source("app/globals.css"),
+  ]);
+  assert.match(dashboard, /hindazaEmployeeTasks/);
+  assert.match(dashboard, /window\.history\.pushState\([^;]*hindazaTask: task\.id/);
+  assert.match(dashboard, /event\.stopPropagation\(\); openUser\(row\)/);
+  assert.match(styles, /\.employee-tasks-dialog \{[^}]*top: 50%; left: 50%;/);
+  assert.match(styles, /\.employee-tasks-dialog \{[^}]*width: 74vw; height: 90vh;/);
+});
+
+test("V94 lets management assign a new task to themselves inside the standard New Task flow", async () => {
+  const [dashboard, tasksApi] = await Promise.all([
+    source("app/task-dashboard.tsx"),
+    source("app/api/tasks/route.ts"),
+  ]);
+  assert.doesNotMatch(dashboard, /Task for Me/);
+  assert.doesNotMatch(dashboard, /selfAssigned: selfTaskDraft/);
+  assert.match(tasksApi, /const requestedEmployeeEmail = management && !requestedPrivate/);
+  assert.match(tasksApi, /const selfAssigned = management && !requestedPrivate && requestedEmployeeEmail === currentUser\.email/);
+  assert.match(tasksApi, /const employeeEmail = selfAssigned \? currentUser\.email/);
+  assert.match(tasksApi, /!selfAssigned && !\(await isProjectMember/);
+  assert.match(tasksApi, /const managementSelfTask = management && existing\[0\]\.createdBy === currentUser\.email/);
+});
+
+test("V94 closes the employee task dialog back to the team table without reopening a task", async () => {
+  const dashboard = await source("app/task-dashboard.tsx");
+  assert.match(dashboard, /window\.history\.replaceState\(\{ \.\.\.window\.history\.state, hindazaEmployeeTasks: null, hindazaTask: null \}/);
+  assert.match(dashboard, /url\.searchParams\.delete\("task"\);[\s\S]*setTaskDrawerOpen\(false\);[\s\S]*setSelectedTaskId\(null\);/);
+  assert.doesNotMatch(dashboard, /stateEmail\) \{\s*window\.history\.back\(\)/);
+});
+
+test("V97 uses the mouse wheel for the window and limits each project to four visible task rows", async () => {
+  const [dashboard, styles] = await Promise.all([
+    source("app/task-dashboard.tsx"),
+    source("app/globals.css"),
+  ]);
+  assert.match(dashboard, /className="employee-dialog-avatar"/);
+  assert.match(dashboard, /className="employee-dialog-meta"/);
+  assert.doesNotMatch(dashboard, /employee-tasks-scroll-hint/);
+  assert.match(dashboard, /projectTasks\.length > 4 \? " has-more-tasks"/);
+  assert.match(dashboard, /scroll for more tasks/);
+  assert.match(styles, /\.employee-tasks-dialog \{[^}]*top: 50%; left: 50%;[^}]*transform: translate\(-50%, -50%\)/);
+  assert.match(styles, /\.avatar\.employee-dialog-avatar \{[^}]*width: 58px; height: 58px;[^}]*display: grid; place-items: center;/);
+  assert.match(styles, /\.employee-project-groups \{[^}]*min-height: 0;[^}]*flex: 1 1 0;[^}]*overflow-y: scroll;/);
+  assert.match(styles, /\.employee-project-groups-content \{[^}]*display: flex; flex-direction: column;/);
+  assert.match(styles, /\.employee-project-group \{[^}]*flex: 0 0 auto;/);
+  assert.match(styles, /\.employee-task-table-wrap\.has-more-tasks \{[^}]*max-height: 225px; overflow-y: scroll;/);
+  assert.match(styles, /\.employee-task-table tbody tr \{ height: 49px;/);
+});
+
+test("V98 routes mouse-wheel scrolling and prints every filtered employee task with the report logo", async () => {
+  const [dashboard, styles] = await Promise.all([
+    source("app/task-dashboard.tsx"),
+    source("app/globals.css"),
+  ]);
+  assert.match(dashboard, /const handleDialogWheel = \(event: React\.WheelEvent<HTMLDivElement>\)/);
+  assert.match(dashboard, /projectScroller\.scrollTop \+= Math\.sign\(event\.deltaY\) \* consumed/);
+  assert.match(dashboard, /remainingDelta = Math\.sign\(event\.deltaY\) \* \(Math\.abs\(event\.deltaY\) - consumed\)/);
+  assert.match(dashboard, /if \(remainingDelta\) outer\.scrollTop \+= remainingDelta/);
+  assert.match(dashboard, /ref=\{projectGroupsRef\} onWheel=\{handleDialogWheel\}/);
+  assert.match(dashboard, /className="employee-tasks-print"/);
+  assert.match(dashboard, /Print employee tasks as PDF/);
+  assert.match(dashboard, /<img class="logo" src="\/report-logo\.png"/);
+  assert.match(dashboard, /projectTasks\.map\(\(task\) =>/);
+  assert.match(dashboard, /window\.onload=\(\)=>\{window\.print\(\);\}/);
+  assert.match(styles, /\.employee-tasks-header-actions \{[^}]*display: flex;/);
+  assert.match(styles, /\.employee-project-groups \{[^}]*touch-action: pan-y;/);
+  assert.match(styles, /\.employee-tasks-print \{[^}]*background: var\(--yellow\);[^}]*color: #171717;/);
+  assert.match(dashboard, /className="employee-tasks-print"[^>]*><svg viewBox="0 0 24 24"/);
+  assert.match(styles, /\.employee-tasks-print svg \{[^}]*width: 24px; height: 24px;[^}]*stroke-width: 2\.35;/);
+});
+
+test("V101 shows active employee work globally and one live project pulse per working employee", async () => {
+  const [dashboard, styles] = await Promise.all([
+    source("app/task-dashboard.tsx"),
+    source("app/globals.css"),
+  ]);
+  assert.match(dashboard, /timeEntries\.filter\(\(entry\) => !entry\.endedAt\)/);
+  assert.match(dashboard, /task\.status === "in_progress" \|\| activeEntryByTask\.has\(task\.id\)/);
+  assert.match(dashboard, /const activeEmployeeWork = currentUser/);
+  assert.match(dashboard, /className="employee-active-work-banner"/);
+  assert.match(dashboard, /onClick=\{\(\) => openEmployeeTask\(activeEmployeeWork\.task\)\}/);
+  assert.match(dashboard, /className="project-live-workers"/);
+  assert.match(dashboard, /workers\.map\(\(\{ employeeEmail, employeeName, task \}\) => <i/);
+  assert.match(dashboard, /projectLiveIndicators\(project\.code\)/);
+  assert.match(styles, /\.active-work-pulse \{[^}]*animation: activeWorkPulse/);
+  assert.match(styles, /\.project-live-workers i \{[^}]*animation: activeWorkPulse/);
+});
+
+test("V103 links converted issues dynamically and expands the English employee task table", async () => {
+  const [dashboard, bootstrap, issuesModule, styles] = await Promise.all([
+    source("app/task-dashboard.tsx"),
+    source("app/api/bootstrap/route.ts"),
+    source("app/issues-module.tsx"),
+    source("app/globals.css"),
+  ]);
+  assert.match(bootstrap, /taskIssueLinks: linkedIssueRows/);
+  assert.match(bootstrap, /convertedTaskId: projectIssues\.convertedTaskId/);
+  assert.match(dashboard, /<th>Issue Link<\/th>/);
+  assert.match(dashboard, /record-link-button/);
+  assert.match(dashboard, /props\.openIssue\(issueLink\)/);
+  assert.match(dashboard, /openProjectWorkspace\(link\.projectCode, "issues"\)/);
+  assert.match(issuesModule, /onIssueChanged\(data\.issue\)/);
+  assert.match(dashboard, /className="employee-task-live-pulse"/);
+  assert.match(dashboard, /<th>Task<\/th><th>Created By<\/th><th>Created Date<\/th><th>Due Date<\/th>/);
+  assert.match(dashboard, /<th>Hours<\/th><th>Indicator<\/th>/);
+  assert.match(dashboard, /tableStatusLabel\[task\.status\]/);
+  assert.match(dashboard, /tableCheckLabel\[task\.managerCheck\]/);
+  assert.match(styles, /\.employee-task-live-pulse \{[^}]*animation: activeWorkPulse/);
+});
+
+test("V104 converts tasks to linked issues and color-codes the originating record", async () => {
+  const [dashboard, issueModule, issueApi, convertApi, styles] = await Promise.all([
+    source("app/task-dashboard.tsx"),
+    source("app/issues-module.tsx"),
+    source("app/api/issues/route.ts"),
+    source("app/api/tasks/convert-to-issue/route.ts"),
+    source("app/globals.css"),
+  ]);
+  assert.match(dashboard, /<th>Indicator<\/th><th>Issue Link<\/th>/);
+  assert.match(dashboard, /className="form-section task-to-issue-section"/);
+  assert.match(dashboard, /fetch\("\/api\/tasks\/convert-to-issue"/);
+  assert.match(convertApi, /convertedTaskId: task\.id/);
+  assert.match(convertApi, /issueNumber\(task\.project, discipline, sequence\)/);
+  assert.match(convertApi, /Only the owner or a manager can convert a task to an issue/);
+  assert.match(issueApi, /linkedTaskCreatedAt/);
+  assert.match(issueModule, /Task #\{issue\.convertedTaskId\}/);
+  assert.match(issueModule, /issueFirst \? "issue-first" : "task-first"/);
+  assert.match(dashboard, /task\.createdAt <= issueLink\.createdAt \? "task-first" : "issue-first"/);
+  assert.match(styles, /\.record-link-button\.issue-first/);
+  assert.match(styles, /\.record-link-button\.task-first/);
+});
+
+test("V105 labels both conversion directions and places the full-width task conversion area after notes", async () => {
+  const [dashboard, issuesModule, styles] = await Promise.all([
+    source("app/task-dashboard.tsx"),
+    source("app/issues-module.tsx"),
+    source("app/globals.css"),
+  ]);
+  assert.match(dashboard, /"Converted to Issue" : "Converted from Issue"/);
+  assert.match(issuesModule, /selectedIssueFirst \? "Converted to Task" : "Converted from Task"/);
+  assert.ok(dashboard.indexOf('className="form-section comments-section"') < dashboard.indexOf('className="form-section task-to-issue-section"'));
+  assert.match(styles, /\.task-to-issue-section \{[^}]*width: 100%;[^}]*background: #f7f2ff;[^}]*border: 0;[^}]*box-shadow:/);
+  assert.doesNotMatch(styles, /\.task-to-issue-section \{[^}]*border-left:/);
+  assert.match(dashboard, /setTaskDrawerOpen\(false\); setSelectedTaskId\(null\); window\.setTimeout\(\(\) => openLinkedIssue\(link\), 0\)/);
+});
+
+test("V106 unifies Arabic typography, bilingual task toasts, and narrows the employee task dialog", async () => {
+  const [dashboard, styles] = await Promise.all([
+    source("app/task-dashboard.tsx"),
+    source("app/globals.css"),
+  ]);
+  assert.match(styles, /font-family: "HINDAZA Arabic"/);
+  assert.match(styles, /unicode-range: U\+0600-06FF/);
+  assert.match(styles, /--font-ui: "HINDAZA Arabic", Arial/);
+  assert.match(styles, /\.employee-tasks-dialog \{[^}]*width: 74vw; height: 90vh; max-width: 1408px;/);
+  assert.match(dashboard, /Task updated successfully · تم تحديث المهمة بنجاح/);
+  assert.match(dashboard, /Task note added successfully · تمت إضافة الملاحظة إلى سجل المهمة/);
+  assert.match(dashboard, /Task timer started · بدأ تسجيل وقت المهمة/);
+  assert.doesNotMatch(dashboard, /setToast\("تم/);
 });

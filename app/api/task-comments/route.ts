@@ -76,8 +76,8 @@ export async function POST(request: Request) {
         recipientEmail,
         type: "task_note_added",
         taskId,
-        title: "Task note added",
-        message: `${taskDetails.title} · ${currentUser.displayName}`,
+        title: "Task note added · تمت إضافة ملاحظة على المهمة",
+        message: `${taskDetails.title} · ${currentUser.displayName} · ملاحظة جديدة`,
       });
     }
     await recordActivity(db, currentUser, { action: "note_added", entityType: "task", entityId: taskId, entityLabel: taskDetails.title, projectCode: taskDetails.project, details: body });

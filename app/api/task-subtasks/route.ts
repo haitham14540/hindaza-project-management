@@ -11,6 +11,11 @@ function title(value: unknown) {
   return typeof value === "string" ? value.trim().slice(0, 240) : "";
 }
 
+function canEditSubtaskTitle(currentUser: Awaited<ReturnType<typeof getCurrentUser>>, task: typeof tasks.$inferSelect) {
+  if (task.visibility === "private") return task.createdBy === currentUser.email;
+  return currentUser.role === "owner" || (currentUser.role === "manager" && task.createdBy === currentUser.email);
+}
+
 async function notifyCompletion(db: Awaited<ReturnType<typeof getDb>>, task: typeof tasks.$inferSelect, actor: Awaited<ReturnType<typeof getCurrentUser>>, subtaskTitle: string) {
   if (task.visibility === "private" && !task.submittedToManager) return false;
   const [creator] = await db.select({ email: users.email, role: users.role })
@@ -22,8 +27,8 @@ async function notifyCompletion(db: Awaited<ReturnType<typeof getDb>>, task: typ
     recipientEmail: creator.email,
     type: "subtask_completed" as const,
     taskId: task.id,
-    title: "Subtask completed",
-    message: `${subtaskTitle} · ${task.title} · ${actor.displayName}`,
+    title: "Subtask completed · اكتملت المهمة الفرعية",
+    message: `${subtaskTitle} · ${task.title} · ${actor.displayName} · اكتملت`,
   });
   return true;
 }
@@ -62,6 +67,9 @@ export async function PATCH(request: Request) {
     const completed = typeof payload.completed === "boolean" ? payload.completed : existing.completed;
     const nextTitle = payload.title === undefined ? existing.title : title(payload.title);
     if (!nextTitle) return Response.json({ error: "Enter a subtask title." }, { status: 400 });
+    if (payload.title !== undefined && nextTitle !== existing.title && !canEditSubtaskTitle(currentUser, task)) {
+      return Response.json({ error: "Only the owner or the manager who created the task can edit this subtask title." }, { status: 403 });
+    }
     const [subtask] = await db.update(taskSubtasks).set({
       title: nextTitle,
       completed,

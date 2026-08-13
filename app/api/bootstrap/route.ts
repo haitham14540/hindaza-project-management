@@ -1,6 +1,6 @@
 import { asc, count, desc, eq } from "drizzle-orm";
 import { getDb } from "@/db";
-import { notifications, projectMembers, projects, taskAttachments, taskComments, taskSubtasks, taskTimeEntries, tasks, users } from "@/db/schema";
+import { notifications, projectIssues, projectMembers, projects, taskAttachments, taskComments, taskSubtasks, taskTimeEntries, tasks, users } from "@/db/schema";
 import { getCurrentUser, isManagement, unauthorizedResponse } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
@@ -177,6 +177,15 @@ export async function GET(request: Request) {
     const timeRows = allTimeRows.filter((entry) => visibleTaskIds.has(entry.taskId));
     const subtaskRows = allSubtaskRows.filter((subtask) => visibleTaskIds.has(subtask.taskId));
     const taskAttachmentRows = allTaskAttachmentRows.filter((attachment) => visibleTaskIds.has(attachment.taskId));
+    // Keep the task-to-issue relationship sourced from project_issues so the
+    // displayed issue number always follows issue renumbering automatically.
+    const linkedIssueRows = (await db.select({
+      id: projectIssues.id,
+      issueNumber: projectIssues.issueNumber,
+      projectCode: projectIssues.projectCode,
+      convertedTaskId: projectIssues.convertedTaskId,
+      createdAt: projectIssues.createdAt,
+    }).from(projectIssues)).filter((issue) => issue.convertedTaskId && visibleTaskIds.has(issue.convertedTaskId));
 
     const visibleUsers = currentUser.role === "owner"
       ? userRows
@@ -193,6 +202,7 @@ export async function GET(request: Request) {
       timeEntries: timeRows,
       subtasks: subtaskRows,
       taskAttachments: taskAttachmentRows,
+      taskIssueLinks: linkedIssueRows,
       notifications: notificationRows,
     }, { headers: { "Cache-Control": "no-store, no-cache, must-revalidate" } });
   } catch (error) {

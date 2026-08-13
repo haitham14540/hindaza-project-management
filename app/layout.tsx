@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import ButtonTooltips from "./button-tooltips";
 import OverlayScrollLock from "./overlay-scroll-lock";
+import AutomaticTextDirection from "./automatic-text-direction";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -38,6 +39,7 @@ export default function RootLayout({
       >
         <ButtonTooltips />
         <OverlayScrollLock />
+        <AutomaticTextDirection />
         {children}
       </body>
     </html>

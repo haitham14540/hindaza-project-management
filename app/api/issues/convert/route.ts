@@ -60,8 +60,8 @@ export async function POST(request: Request) {
         recipientEmail: employee.email,
         type: "task_assigned",
         taskId: task[0].id,
-        title: "Issue converted to task",
-        message: `${issue.issueNumber} · ${issue.projectCode}`,
+        title: "Issue converted to task · تم تحويل المشكلة إلى مهمة",
+        message: `${issue.issueNumber} · ${issue.projectCode} · مهمة جديدة`,
       });
     }
     await recordActivity(db, currentUser, { action: "created", entityType: "task", entityId: task[0].id, entityLabel: task[0].title, projectCode: issue.projectCode, details: `Converted from ${issue.issueNumber}` });

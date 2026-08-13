@@ -119,8 +119,10 @@ export async function POST(request: Request) {
     }
 
     const management = isManagement(currentUser);
-    const employeeName = management && !requestedPrivate ? text(payload.employeeName, 120) : currentUser.displayName;
-    const employeeEmail = management && !requestedPrivate ? text(payload.employeeEmail, 180).toLowerCase() : currentUser.email;
+    const requestedEmployeeEmail = management && !requestedPrivate ? text(payload.employeeEmail, 180).toLowerCase() : currentUser.email;
+    const selfAssigned = management && !requestedPrivate && requestedEmployeeEmail === currentUser.email;
+    const employeeName = selfAssigned ? currentUser.displayName : management && !requestedPrivate ? text(payload.employeeName, 120) : currentUser.displayName;
+    const employeeEmail = selfAssigned ? currentUser.email : requestedEmployeeEmail;
     if (!employeeName || !employeeEmail) {
       return Response.json({ error: "Select an employee for this task." }, { status: 400 });
     }
@@ -131,10 +133,10 @@ export async function POST(request: Request) {
     if (currentUser.role === "manager" && !(await canManageProject(db, currentUser, project))) {
       return Response.json({ error: "Managers can create tasks only in projects they are assigned to." }, { status: 403 });
     }
-    if (management && !requestedPrivate && !(await assignableEmployee(db, currentUser, employeeEmail))) {
+    if (management && !requestedPrivate && !selfAssigned && !(await assignableEmployee(db, currentUser, employeeEmail))) {
       return Response.json({ error: currentUser.role === "manager" ? "You can assign tasks only to employees in your discipline." : "Select an active employee account." }, { status: 403 });
     }
-    if (!requestedPrivate && !(await isProjectMember(db, project, employeeEmail))) {
+    if (!requestedPrivate && !selfAssigned && !(await isProjectMember(db, project, employeeEmail))) {
       return Response.json({ error: "Select an employee assigned to this project." }, { status: 400 });
     }
     const inserted = await db
@@ -179,13 +181,13 @@ export async function POST(request: Request) {
       ? await db.insert(taskComments).values({ taskId: inserted[0].id, authorEmail: currentUser.email, authorName: currentUser.displayName, body: initialNote }).returning()
       : [];
 
-    if (management && !requestedPrivate) {
+    if (management && !requestedPrivate && employeeEmail !== currentUser.email) {
       await db.insert(notifications).values({
         recipientEmail: employeeEmail,
         type: "task_assigned",
         taskId: inserted[0].id,
-        title: "New task assigned",
-        message: `${title} · ${project}`,
+        title: "New task assigned · تم إسناد مهمة جديدة",
+        message: `${title} · ${project} · مهمة جديدة`,
       });
     }
 
@@ -241,8 +243,8 @@ export async function PATCH(request: Request) {
           recipientEmail: manager.email,
           type: "private_task_submitted" as const,
           taskId: id,
-          title: "Private task shared for assignment",
-          message: `${existing[0].title} · ${currentUser.displayName}`,
+          title: "Private task shared for assignment · تمت مشاركة مهمة خاصة للإسناد",
+          message: `${existing[0].title} · ${currentUser.displayName} · مرسلة من الموظف`,
         })));
       }
       await recordActivity(db, currentUser, { action: "updated", entityType: "task", entityId: id, entityLabel: submitted[0].title, projectCode: submitted[0].project, details: "Private task shared with management" });
@@ -292,7 +294,8 @@ export async function PATCH(request: Request) {
       return Response.json({ error: currentUser.role === "manager" ? "You can reassign tasks only within your discipline." : "Select an active employee account." }, { status: 403 });
     }
     const privateSelfEdit = management && existing[0].visibility === "private" && !convertingPrivate && employeeEmail === currentUser.email;
-    if ((management || canEditPrivateDetails) && !privateSelfEdit && employeeEmail && !(await isProjectMember(db, project, employeeEmail))) {
+    const managementSelfTask = management && existing[0].createdBy === currentUser.email && employeeEmail === currentUser.email;
+    if ((management || canEditPrivateDetails) && !privateSelfEdit && !managementSelfTask && employeeEmail && !(await isProjectMember(db, project, employeeEmail))) {
       return Response.json({ error: "Select an employee assigned to this project." }, { status: 400 });
     }
     const updated = await db
@@ -336,16 +339,16 @@ export async function PATCH(request: Request) {
           recipientEmail: employeeEmail,
           type: "task_assigned",
           taskId: id,
-          title: "Task assigned to you",
-          message: `${updated[0].title} · ${updated[0].project}`,
+          title: "Task assigned to you · تم إسناد مهمة إليك",
+          message: `${updated[0].title} · ${updated[0].project} · تم إسناد المهمة`,
         });
       } else if (employeeEmail && requestedCheck !== existing[0].managerCheck) {
-        const reviewLabels = { new: "New/WIP", pending: "Pending review", approved: "Approved", returned: "Returned" } as const;
+        const reviewLabels = { new: "New/WIP · جديدة/قيد العمل", pending: "Pending review · بانتظار المراجعة", approved: "Approved · معتمدة", returned: "Returned · مُعادة" } as const;
         await db.insert(notifications).values({
           recipientEmail: employeeEmail,
           type: "review_updated",
           taskId: id,
-          title: "Manager review updated",
+          title: "Manager review updated · تم تحديث مراجعة المسؤول",
           message: `${updated[0].title}: ${reviewLabels[requestedCheck]}`,
         });
       }

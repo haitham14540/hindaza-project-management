@@ -50,8 +50,8 @@ async function notifyCounterpart(
     recipientEmail,
     type: "issue_note_added",
     issueId: issue.id,
-    title: section === "client" ? "Client response note added" : "Project issue note added",
-    message: `${issue.issueNumber} · ${currentUser.displayName}`,
+    title: section === "client" ? "Client response note added · تمت إضافة ملاحظة رد العميل" : "Project issue note added · تمت إضافة ملاحظة على المشكلة",
+    message: `${issue.issueNumber} · ${currentUser.displayName} · ملاحظة جديدة`,
   });
 }
 
