@@ -1,6 +1,6 @@
 import { and, asc, desc, eq, gt, inArray, sql } from "drizzle-orm";
 import { getBucket, getDb } from "@/db";
-import { activityLogs, issueAttachments, issueCategories, issueComments, notifications, projectIssues, projectMembers, projects, users } from "@/db/schema";
+import { activityLogs, issueAttachments, issueCategories, issueComments, notifications, projectIssues, projectMembers, projects, tasks, users } from "@/db/schema";
 import { getCurrentUser, isManagement, unauthorizedResponse } from "@/lib/auth";
 import { recordActivity } from "@/lib/activity";
 import { ensureIssueCommentsStorage } from "@/lib/issue-comments-storage";
@@ -83,8 +83,8 @@ async function notifyDisciplineManagers(
     recipientEmail: recipient.email,
     type,
     issueId: issue.id,
-    title: type === "issue_created" ? "New project issue" : "Project issue updated",
-    message: `${issue.issueNumber} · ${actor.displayName}`,
+    title: type === "issue_created" ? "New project issue · مشكلة مشروع جديدة" : "Project issue updated · تم تحديث مشكلة المشروع",
+    message: `${issue.issueNumber} · ${actor.displayName} · ${type === "issue_created" ? "مشكلة جديدة" : "تم التحديث"}`,
   })));
 }
 
@@ -124,6 +124,8 @@ async function issueRows() {
     ? await db.select({ email: users.email, displayName: users.displayName, profileImageKey: users.profileImageKey })
       .from(users).where(inArray(users.email, raisedByEmails))
     : [];
+  const linkedTaskRows = await db.select({ id: tasks.id, createdAt: tasks.createdAt }).from(tasks);
+  const linkedTaskCreatedAt = new Map(linkedTaskRows.map((task) => [task.id, task.createdAt]));
   const byIssue = new Map<number, typeof attachments>();
   for (const attachment of attachments) byIssue.set(attachment.issueId, [...(byIssue.get(attachment.issueId) || []), attachment]);
   const notesByIssue = new Map<number, typeof notes>();
@@ -146,6 +148,7 @@ async function issueRows() {
       raisedByName: account?.displayName || issue.raisedByName,
       raisedByProfileImageKey: account?.profileImageKey || "",
       createdByEmail: creatorByIssue.get(issue.id) || "",
+      linkedTaskCreatedAt: issue.convertedTaskId ? linkedTaskCreatedAt.get(issue.convertedTaskId) || "" : "",
       attachments: byIssue.get(issue.id) || [],
       notes: notesByIssue.get(issue.id) || [],
     };

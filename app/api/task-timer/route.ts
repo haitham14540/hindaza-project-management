@@ -213,8 +213,8 @@ export async function POST(request: Request) {
             recipientEmail: creator.email,
             type: "task_ready_for_review" as const,
             taskId,
-            title: "Task ready for review",
-            message: `${task.title} · ${currentUser.displayName}`,
+            title: "Task ready for review · المهمة جاهزة للمراجعة",
+            message: `${task.title} · ${currentUser.displayName} · جاهزة للمراجعة`,
           });
         }
       }

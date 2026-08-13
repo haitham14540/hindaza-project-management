@@ -2,6 +2,7 @@
 "use client";
 
 import { FormEvent, useEffect, useState } from "react";
+import PasswordInput from "../password-input";
 
 const disciplines = ["Manager", "Architecture", "ID", "Structure", "Mechanical", "Electrical", "Infrastructure"];
 function ButtonLabel({ en }: { en: string; ar: string }) { return <span className="button-label"><strong>{en}</strong></span>; }
@@ -61,11 +62,11 @@ export default function LoginPage() {
             <span>{setup ? "Create the primary owner account to start using the system." : recovery ? "Use the Cloudflare setup key to create a compatible new password without changing your restored data." : "Sign in to manage your projects, tasks, and team."}</span>
           </div>
           {checking ? <div className="login-loading"><i /> Checking access…</div> : <>
-            {(setup || recovery) && <label><span>Setup key</span><input required type="password" value={form.setupKey} onChange={(event) => setForm({ ...form, setupKey: event.target.value })} autoComplete="off" placeholder="Enter the Cloudflare setup key" /></label>}
+            {(setup || recovery) && <label><span>Setup key</span><PasswordInput required value={form.setupKey} onChange={(event) => setForm({ ...form, setupKey: event.target.value })} autoComplete="off" placeholder="Enter the Cloudflare setup key" /></label>}
             {setup && <label><span>Full name</span><input required value={form.displayName} onChange={(event) => setForm({ ...form, displayName: event.target.value })} autoComplete="name" placeholder="Your full name" /></label>}
             <label><span>Work email</span><input required type="email" value={form.email} onChange={(event) => setForm({ ...form, email: event.target.value })} autoComplete="email" placeholder="name@eng-bim.com" /></label>
             {setup && <label><span>Discipline</span><select required value={form.discipline} onChange={(event) => setForm({ ...form, discipline: event.target.value })}><option value="" disabled>Select discipline</option>{disciplines.map((item) => <option key={item}>{item}</option>)}</select></label>}
-            <label><span>{recovery ? "New password" : "Password"}</span><input required minLength={setup || recovery ? 10 : undefined} type="password" value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} autoComplete={setup || recovery ? "new-password" : "current-password"} placeholder={setup || recovery ? "At least 10 characters" : "Enter your password"} /></label>
+            <label><span>{recovery ? "New password" : "Password"}</span><PasswordInput required minLength={setup || recovery ? 10 : undefined} value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} autoComplete={setup || recovery ? "new-password" : "current-password"} placeholder={setup || recovery ? "At least 10 characters" : "Enter your password"} /></label>
             {error && <div className="login-error" role="alert">{error}</div>}
             <button className="login-submit" disabled={saving}><ButtonLabel en={saving ? "Please wait…" : setup ? "Create owner account" : recovery ? "Set new password" : "Sign in"} ar={saving ? "يرجى الانتظار…" : setup ? "إنشاء حساب المالك" : recovery ? "تعيين كلمة مرور جديدة" : "تسجيل الدخول"} /><span className="login-arrow">→</span></button>
             {!setup && <button type="button" className="login-mode-link" onClick={() => { setRecovery(!recovery); setError(""); setForm({ ...form, setupKey: "", password: "" }); }}>
