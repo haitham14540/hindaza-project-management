@@ -40,6 +40,13 @@ function notificationUrl(environment: EmailRuntimeEnvironment, notification: Not
   return baseUrl;
 }
 
+function senderAddress(value: string) {
+  const normalized = value.trim();
+  const namedAddress = normalized.match(/^(.+?)\s*<([^<>\s]+@[^<>\s]+)>$/);
+  if (!namedAddress) return normalized;
+  return { address: namedAddress[2], name: namedAddress[1].trim().replace(/^"|"$/g, "") };
+}
+
 async function sendNotificationEmail(notification: NotificationPayload) {
   const environment = await runtimeEmailEnvironment();
   if (String(environment.EMAIL_NOTIFICATIONS_ENABLED || "").toLowerCase() !== "true") return;
@@ -55,7 +62,7 @@ async function sendNotificationEmail(notification: NotificationPayload) {
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      from: environment.EMAIL_FROM,
+      from: senderAddress(environment.EMAIL_FROM),
       to: [notification.recipientEmail],
       subject: notification.title,
       html: `<div style="font-family:Arial,Tahoma,sans-serif;max-width:620px;margin:auto;color:#202020"><div style="padding:18px 22px;background:#171717;color:#fff;border-bottom:5px solid #ffd200"><strong>HINDAZA Project Management</strong></div><div style="padding:24px;border:1px solid #e5e5df;border-top:0"><h2 style="margin:0 0 14px;font-size:20px">${escapeHtml(notification.title)}</h2><p style="margin:0;line-height:1.7">${escapeHtml(notification.message)}</p>${linkHtml}</div></div>`,

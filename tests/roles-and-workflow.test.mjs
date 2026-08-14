@@ -1661,3 +1661,10 @@ test("V123 sends notification email through Cloudflare without embedding credent
   assert.match(readme, /HINDAZA Projects <pm@hindaza\.com>/);
   assert.match(readme, /Account → Email Sending → Edit/);
 });
+
+test("V124 formats the Cloudflare sender display name as a named address", async () => {
+  const delivery = await source("lib/notification-delivery.ts");
+  assert.match(delivery, /function senderAddress\(value: string\)/);
+  assert.match(delivery, /return \{ address: namedAddress\[2\], name: namedAddress\[1\]/);
+  assert.match(delivery, /from: senderAddress\(environment\.EMAIL_FROM\)/);
+});
