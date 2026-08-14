@@ -1,9 +1,10 @@
 import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import { getDb } from "@/db";
-import { activityLogs, issueComments, notifications, projectIssues, users } from "@/db/schema";
+import { activityLogs, issueComments, projectIssues, users } from "@/db/schema";
 import { getCurrentUser, unauthorizedResponse } from "@/lib/auth";
 import { recordActivity } from "@/lib/activity";
 import { ensureIssueCommentsStorage } from "@/lib/issue-comments-storage";
+import { createNotifications } from "@/lib/notification-delivery";
 
 export const dynamic = "force-dynamic";
 const COMMENT_EDIT_WINDOW_MS = 15 * 60 * 1000;
@@ -46,7 +47,7 @@ async function notifyCounterpart(
     recipientEmail = issue.raisedByEmail;
   }
   if (!recipientEmail || recipientEmail.toLowerCase() === currentUser.email.toLowerCase()) return;
-  await db.insert(notifications).values({
+  await createNotifications(db, {
     recipientEmail,
     type: "issue_note_added",
     issueId: issue.id,

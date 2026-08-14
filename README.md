@@ -84,6 +84,27 @@ npm run deploy:cloudflare
 
 بعد ربط المستودع، أي تحديث جديد على فرع `main` سيُبنى ويُنشر تلقائيًا.
 
+## تفعيل إرسال التنبيهات بالبريد الإلكتروني
+
+يدعم التطبيق إرسال نسخة بريدية من التنبيهات الموجودة داخله عبر Cloudflare Email Sending. تبقى الميزة متوقفة افتراضيًا، ولا تتغير قواعد المستلمين أو الصلاحيات عند تفعيلها. يُحفظ التنبيه داخل D1 أولًا، لذلك لا يؤدي تعطل البريد إلى فقدان التنبيه أو فشل عملية المهمة أو المشكلة.
+
+1. فعّل نطاق الإرسال من `Cloudflare Dashboard → Compute → Email Service → Email Sending` وانتظر ظهور `Enabled` و`Configured`.
+2. أنشئ Cloudflare API Token مخصصًا بصلاحية `Account → Email Sending → Edit` للحساب المطلوب فقط، ولا تحفظه في GitHub.
+3. افتح `Cloudflare Dashboard → Workers & Pages → hindaza-project-management → Settings → Variables and Secrets`.
+4. أضف القيم التالية، واجعل `CLOUDFLARE_EMAIL_API_TOKEN` من نوع Secret:
+
+| الاسم | مثال القيمة |
+|---|---|
+| `EMAIL_NOTIFICATIONS_ENABLED` | `true` |
+| `CLOUDFLARE_ACCOUNT_ID` | معرّف حساب Cloudflare |
+| `CLOUDFLARE_EMAIL_API_TOKEN` | مفتاح Cloudflare السري بصلاحية Email Sending فقط |
+| `EMAIL_FROM` | `HINDAZA Projects <pm@hindaza.com>` |
+| `APP_BASE_URL` | `https://hindaza-team-tasks.hindaza-1983.chatgpt.site` |
+
+5. أعد نشر آخر إصدار بعد حفظ القيم، ثم أنشئ مهمة تجريبية لمستخدم يملك بريدًا صالحًا وتحقق من وصول الرسالة.
+
+لإيقاف البريد من دون حذف الإعدادات، غيّر `EMAIL_NOTIFICATIONS_ENABLED` إلى `false`. لا تضع Cloudflare API Token داخل `.env` مرفوع إلى GitHub أو داخل `wrangler.jsonc`.
+
 ## الأمان
 
 - لا ترفع `.env` أو `.dev.vars` أو API tokens إلى GitHub.

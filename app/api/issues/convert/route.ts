@@ -1,8 +1,9 @@
 import { and, eq, sql } from "drizzle-orm";
 import { getDb } from "@/db";
-import { notifications, projectIssues, projectMembers, projects, tasks, users } from "@/db/schema";
+import { projectIssues, projectMembers, projects, tasks, users } from "@/db/schema";
 import { getCurrentUser, isManagement, unauthorizedResponse } from "@/lib/auth";
 import { recordActivity } from "@/lib/activity";
+import { createNotifications } from "@/lib/notification-delivery";
 
 export const dynamic = "force-dynamic";
 
@@ -56,7 +57,7 @@ export async function POST(request: Request) {
     const updatedIssue = await db.update(projectIssues).set({ convertedTaskId: task[0].id, updatedAt: sql`CURRENT_TIMESTAMP` })
       .where(eq(projectIssues.id, issueId)).returning();
     if (employee) {
-      await db.insert(notifications).values({
+      await createNotifications(db, {
         recipientEmail: employee.email,
         type: "task_assigned",
         taskId: task[0].id,
