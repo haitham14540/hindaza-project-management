@@ -1,0 +1,1 @@
+ALTER TABLE `project_members` ADD `is_project_manager` integer DEFAULT false NOT NULL;

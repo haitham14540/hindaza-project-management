@@ -1,0 +1,125 @@
+{
+  "version": "7",
+  "dialect": "sqlite",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "6",
+      "when": 1785607158908,
+      "tag": "0000_common_squadron_supreme",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1785607694298,
+      "tag": "0001_short_luke_cage",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1785612322862,
+      "tag": "0002_elite_puma",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1785613821019,
+      "tag": "0003_great_wild_child",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1785617381289,
+      "tag": "0004_chubby_rick_jones",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1785625521655,
+      "tag": "0005_clammy_bushwacker",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1785700778322,
+      "tag": "0006_wandering_callisto",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "6",
+      "when": 1785705099472,
+      "tag": "0007_soft_shiver_man",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1785766979324,
+      "tag": "0008_strange_harry_osborn",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "6",
+      "when": 1785921982313,
+      "tag": "0009_dear_silver_surfer",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "6",
+      "when": 1785930631059,
+      "tag": "0010_legal_iceman",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "6",
+      "when": 1785956724647,
+      "tag": "0011_brave_radioactive_man",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "6",
+      "when": 1785965083074,
+      "tag": "0012_oval_jubilee",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "6",
+      "when": 1786193092070,
+      "tag": "0013_outstanding_lady_vermin",
+      "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "6",
+      "when": 1786306387276,
+      "tag": "0014_smooth_carlie_cooper",
+      "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "6",
+      "when": 1786372884378,
+      "tag": "0015_short_pestilence",
+      "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "6",
+      "when": 1786477596977,
+      "tag": "0016_tiny_paibok",
+      "breakpoints": true
+    }
+  ]
+}
