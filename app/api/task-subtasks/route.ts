@@ -1,8 +1,9 @@
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { getBucket, getDb } from "@/db";
-import { notifications, taskAttachments, taskSubtasks, tasks, users } from "@/db/schema";
+import { taskAttachments, taskSubtasks, tasks, users } from "@/db/schema";
 import { getCurrentUser, unauthorizedResponse } from "@/lib/auth";
 import { recordActivity } from "@/lib/activity";
+import { createNotifications } from "@/lib/notification-delivery";
 import { taskForCollaboration } from "@/lib/task-access";
 
 export const dynamic = "force-dynamic";
@@ -23,7 +24,7 @@ async function notifyCompletion(db: Awaited<ReturnType<typeof getDb>>, task: typ
     .where(and(eq(users.email, task.createdBy), inArray(users.role, ["owner", "manager"]), eq(users.active, true)))
     .limit(1);
   if (!creator || creator.email === actor.email) return false;
-  await db.insert(notifications).values({
+  await createNotifications(db, {
     recipientEmail: creator.email,
     type: "subtask_completed" as const,
     taskId: task.id,

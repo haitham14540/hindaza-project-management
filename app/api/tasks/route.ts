@@ -3,6 +3,7 @@ import { getBucket, getDb } from "@/db";
 import { notifications, projectMembers, projects, taskAttachments, taskComments, taskSubtasks, taskTimeEntries, tasks, users } from "@/db/schema";
 import { getCurrentUser, isManagement, unauthorizedResponse } from "@/lib/auth";
 import { recordActivity } from "@/lib/activity";
+import { createNotifications } from "@/lib/notification-delivery";
 
 export const dynamic = "force-dynamic";
 
@@ -182,7 +183,7 @@ export async function POST(request: Request) {
       : [];
 
     if (management && !requestedPrivate && employeeEmail !== currentUser.email) {
-      await db.insert(notifications).values({
+      await createNotifications(db, {
         recipientEmail: employeeEmail,
         type: "task_assigned",
         taskId: inserted[0].id,
@@ -239,7 +240,7 @@ export async function PATCH(request: Request) {
         .returning();
       const managers = await relevantReviewers(db, existing[0].employeeEmail, existing[0].project);
       if (managers.length) {
-        await db.insert(notifications).values(managers.map((manager) => ({
+        await createNotifications(db, managers.map((manager) => ({
           recipientEmail: manager.email,
           type: "private_task_submitted" as const,
           taskId: id,
@@ -335,7 +336,7 @@ export async function PATCH(request: Request) {
 
     if (management) {
       if (employeeEmail && (employeeChanged || convertingPrivate)) {
-        await db.insert(notifications).values({
+        await createNotifications(db, {
           recipientEmail: employeeEmail,
           type: "task_assigned",
           taskId: id,
@@ -344,7 +345,7 @@ export async function PATCH(request: Request) {
         });
       } else if (employeeEmail && requestedCheck !== existing[0].managerCheck) {
         const reviewLabels = { new: "New/WIP · جديدة/قيد العمل", pending: "Pending review · بانتظار المراجعة", approved: "Approved · معتمدة", returned: "Returned · مُعادة" } as const;
-        await db.insert(notifications).values({
+        await createNotifications(db, {
           recipientEmail: employeeEmail,
           type: "review_updated",
           taskId: id,

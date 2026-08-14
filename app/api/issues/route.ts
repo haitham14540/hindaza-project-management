@@ -4,6 +4,7 @@ import { activityLogs, issueAttachments, issueCategories, issueComments, notific
 import { getCurrentUser, isManagement, unauthorizedResponse } from "@/lib/auth";
 import { recordActivity } from "@/lib/activity";
 import { ensureIssueCommentsStorage } from "@/lib/issue-comments-storage";
+import { createNotifications } from "@/lib/notification-delivery";
 
 export const dynamic = "force-dynamic";
 
@@ -79,7 +80,7 @@ async function notifyDisciplineManagers(
     .where(and(inArray(users.role, ["owner", "manager"]), eq(users.active, true)));
   const recipients = reviewers.filter((reviewer) => reviewer.role === "owner" || (projectHasDiscipline && reviewer.discipline === issue.discipline && projectEmails.includes(reviewer.email)));
   if (!recipients.length) return;
-  await db.insert(notifications).values(recipients.map((recipient) => ({
+  await createNotifications(db, recipients.map((recipient) => ({
     recipientEmail: recipient.email,
     type,
     issueId: issue.id,

@@ -1,8 +1,9 @@
 import { and, eq, sql } from "drizzle-orm";
 import { getDb } from "@/db";
-import { notifications, projectMembers, projects, taskComments, tasks, users } from "@/db/schema";
+import { projectMembers, projects, taskComments, tasks, users } from "@/db/schema";
 import { getCurrentUser, unauthorizedResponse } from "@/lib/auth";
 import { recordActivity } from "@/lib/activity";
+import { createNotifications } from "@/lib/notification-delivery";
 
 export const dynamic = "force-dynamic";
 const COMMENT_EDIT_WINDOW_MS = 15 * 60 * 1000;
@@ -72,7 +73,7 @@ export async function POST(request: Request) {
     const taskDetails = task[0];
     const recipientEmail = currentUser.role === "member" ? taskDetails.createdBy : taskDetails.employeeEmail;
     if (recipientEmail && recipientEmail.toLowerCase() !== currentUser.email.toLowerCase()) {
-      await db.insert(notifications).values({
+      await createNotifications(db, {
         recipientEmail,
         type: "task_note_added",
         taskId,

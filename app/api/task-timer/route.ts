@@ -1,8 +1,9 @@
 import { and, asc, eq, inArray, isNull } from "drizzle-orm";
 import { getDb } from "@/db";
-import { notifications, projectMembers, projects, taskSubtasks, taskTimeEntries, tasks, users } from "@/db/schema";
+import { projectMembers, projects, taskSubtasks, taskTimeEntries, tasks, users } from "@/db/schema";
 import { getCurrentUser, unauthorizedResponse } from "@/lib/auth";
 import { recordActivity } from "@/lib/activity";
+import { createNotifications } from "@/lib/notification-delivery";
 
 export const dynamic = "force-dynamic";
 
@@ -209,7 +210,7 @@ export async function POST(request: Request) {
           .where(and(eq(users.email, task.createdBy), inArray(users.role, ["owner", "manager"]), eq(users.active, true)))
           .limit(1);
         if (creator && creator.email !== currentUser.email) {
-          await db.insert(notifications).values({
+          await createNotifications(db, {
             recipientEmail: creator.email,
             type: "task_ready_for_review" as const,
             taskId,

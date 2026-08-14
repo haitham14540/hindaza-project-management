@@ -1627,3 +1627,37 @@ test("V121 allows same-day custom reports and warns only when To precedes From",
   assert.match(dashboard, /To date must be the same as or after From date\./);
   assert.match(styles, /\.report-date-warning/);
 });
+
+test("V122 sends email best-effort after preserving every in-app notification", async () => {
+  const [delivery, tasksApi, taskComments, taskSubtasks, taskTimer, issuesApi, issueComments, issueConvert] = await Promise.all([
+    source("lib/notification-delivery.ts"),
+    source("app/api/tasks/route.ts"),
+    source("app/api/task-comments/route.ts"),
+    source("app/api/task-subtasks/route.ts"),
+    source("app/api/task-timer/route.ts"),
+    source("app/api/issues/route.ts"),
+    source("app/api/issue-comments/route.ts"),
+    source("app/api/issues/convert/route.ts"),
+  ]);
+  assert.match(delivery, /EMAIL_NOTIFICATIONS_ENABLED/);
+  assert.match(delivery, /await db\.insert\(notifications\)\.values\(payloads\)/);
+  assert.match(delivery, /Email delivery failed; the in-app notification was preserved/);
+  for (const route of [tasksApi, taskComments, taskSubtasks, taskTimer, issuesApi, issueComments, issueConvert]) {
+    assert.match(route, /createNotifications/);
+  }
+});
+
+test("V123 sends notification email through Cloudflare without embedding credentials", async () => {
+  const [delivery, readme] = await Promise.all([
+    source("lib/notification-delivery.ts"),
+    source("README.md"),
+  ]);
+  assert.match(delivery, /CLOUDFLARE_ACCOUNT_ID/);
+  assert.match(delivery, /CLOUDFLARE_EMAIL_API_TOKEN/);
+  assert.match(delivery, /api\.cloudflare\.com\/client\/v4\/accounts/);
+  assert.match(delivery, /email\/sending\/send/);
+  assert.match(delivery, /result\?\.success === false/);
+  assert.doesNotMatch(delivery, /0cd81fe600d9478279869856357fd9af/);
+  assert.match(readme, /HINDAZA Projects <pm@hindaza\.com>/);
+  assert.match(readme, /Account → Email Sending → Edit/);
+});
