@@ -171,10 +171,9 @@ export async function PATCH(request: Request) {
     const editableProjectManagers = requestedProjectManagers.filter((email) => assignedMembers.includes(email));
     const assignedProjectManagers = currentUser.role === "owner"
       ? editableProjectManagers
-      : [...new Set([
-        ...currentRows.filter((row) => row.isProjectManager && row.employeeEmail !== currentUser.email).map((row) => row.employeeEmail),
-        ...editableProjectManagers.filter((email) => email === currentUser.email || assignedMembers.includes(email)),
-      ])].filter((email) => assignedMembers.includes(email));
+      : currentRows
+        .filter((row) => row.isProjectManager && assignedMembers.includes(row.employeeEmail))
+        .map((row) => row.employeeEmail);
     if (assignedMembers.length) await db.insert(projectMembers).values(assignedMembers.map((employeeEmail) => ({ projectId: id, employeeEmail, isProjectManager: assignedProjectManagers.includes(employeeEmail) })));
     await recordActivity(db, currentUser, { action: "updated", entityType: "project", entityId: id, entityLabel: `${code} · ${updated[0].name}`, projectCode: code, details: `${currentUser.role === "manager" ? "Discipline membership" : "Project details and membership"} updated; ${assignedMembers.length} team members` });
     const addedMembers = assignedMembers.filter((email) => !currentMembers.includes(email));

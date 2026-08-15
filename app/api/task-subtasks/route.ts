@@ -30,6 +30,7 @@ async function notifyCompletion(db: Awaited<ReturnType<typeof getDb>>, task: typ
     taskId: task.id,
     title: "Subtask completed · اكتملت المهمة الفرعية",
     message: `${subtaskTitle} · ${task.title} · ${actor.displayName} · اكتملت`,
+    actorName: actor.displayName,
   });
   return true;
 }

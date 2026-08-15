@@ -6,6 +6,7 @@ type Database = Awaited<ReturnType<typeof getDb>>;
 type EmailDetail = { label: string; value: string };
 export type NotificationPayload = Pick<typeof notifications.$inferInsert, "recipientEmail" | "type" | "taskId" | "issueId" | "title" | "message"> & {
   emailDetails?: EmailDetail[];
+  actorName?: string;
 };
 
 type EmailRuntimeEnvironment = {
@@ -56,20 +57,21 @@ function englishNotificationTitle(value: string) {
 }
 
 async function emailRecordDetails(db: Database, notification: NotificationPayload) {
-  if (notification.emailDetails?.length) return notification.emailDetails;
+  let details: EmailDetail[] | null = notification.emailDetails?.length ? [...notification.emailDetails] : null;
   if (notification.taskId) {
     const [task] = await db.select({ title: tasks.title, projectCode: tasks.project }).from(tasks).where(eq(tasks.id, notification.taskId)).limit(1);
     if (!task) return null;
     const [project] = await db.select({ name: projects.name }).from(projects).where(eq(projects.code, task.projectCode)).limit(1);
-    return [{ label: "Task", value: task.title }, { label: "Project", value: project?.name || task.projectCode }];
+    details = [{ label: "Task", value: task.title }, { label: "Project", value: project?.name || task.projectCode }];
   }
-  if (notification.issueId) {
+  if (!details && notification.issueId) {
     const [issue] = await db.select({ issueNumber: projectIssues.issueNumber, projectCode: projectIssues.projectCode }).from(projectIssues).where(eq(projectIssues.id, notification.issueId)).limit(1);
     if (!issue) return null;
     const [project] = await db.select({ name: projects.name }).from(projects).where(eq(projects.code, issue.projectCode)).limit(1);
-    return [{ label: "Issue", value: issue.issueNumber }, { label: "Project", value: project?.name || issue.projectCode }];
+    details = [{ label: "Issue", value: issue.issueNumber }, { label: "Project", value: project?.name || issue.projectCode }];
   }
-  return null;
+  if (notification.actorName) details = [...(details || []), { label: "Action By", value: notification.actorName }];
+  return details;
 }
 
 async function sendNotificationEmail(db: Database, notification: NotificationPayload) {

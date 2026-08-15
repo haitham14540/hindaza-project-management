@@ -162,10 +162,9 @@ export async function GET(request: Request) {
       employeeDiscipline: disciplineByEmail.get(task.employeeEmail.toLowerCase()) || "",
     }));
     const visibleTaskIds = new Set(taskRows.map((task) => task.id));
-    const taskProjectCodes = new Set(taskRows.map((task) => task.project));
     const visibleProjects = currentUser.role === "owner"
       ? allProjectRows
-      : allProjectRows.filter((project) => assignedProjectIds.has(project.id) || taskProjectCodes.has(project.code));
+      : allProjectRows.filter((project) => assignedProjectIds.has(project.id));
     const projectRows = visibleProjects.map((project) => ({
       ...project,
       memberEmails: membershipRows
@@ -189,11 +188,21 @@ export async function GET(request: Request) {
       createdAt: projectIssues.createdAt,
     }).from(projectIssues)).filter((issue) => issue.convertedTaskId && visibleTaskIds.has(issue.convertedTaskId));
 
+    const assignedProjectMemberEmails = new Set(
+      membershipRows
+        .filter((membership) => assignedProjectIds.has(membership.projectId))
+        .map((membership) => membership.employeeEmail),
+    );
+    const managedProjectMemberEmails = new Set(
+      membershipRows
+        .filter((membership) => managedProjectIds.has(membership.projectId))
+        .map((membership) => membership.employeeEmail),
+    );
     const visibleUsers = currentUser.role === "owner"
       ? userRows
       : currentUser.role === "manager"
-        ? userRows.filter((user) => user.discipline === currentUser.discipline && (user.role === "member" || user.role === "manager"))
-        : userRows;
+        ? userRows.filter((user) => user.email === currentUser.email || assignedProjectMemberEmails.has(user.email))
+        : userRows.filter((user) => user.email === currentUser.email || managedProjectMemberEmails.has(user.email));
 
     return Response.json({
       currentUser,

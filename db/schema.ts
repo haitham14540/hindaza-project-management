@@ -71,6 +71,8 @@ export const tasks = sqliteTable(
     startTime: text("start_time").notNull().default(""),
     endTime: text("end_time").notNull().default(""),
     actualHours: real("actual_hours").notNull().default(0),
+    completionPercent: integer("completion_percent").notNull().default(0),
+    completionBeforeReview: integer("completion_before_review").notNull().default(0),
     status: text("status", {
       enum: ["not_started", "in_progress", "paused", "blocked", "needs_revision", "done"],
     })

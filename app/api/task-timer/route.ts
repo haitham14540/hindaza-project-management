@@ -150,9 +150,10 @@ export async function POST(request: Request) {
     const db = await getDb();
     const taskRows = await db.select().from(tasks).where(eq(tasks.id, taskId)).limit(1);
     const task = taskRows[0];
-    if (!task || task.employeeEmail !== currentUser.email) {
-      return Response.json({ error: "This task is not assigned to you." }, { status: 403 });
-    }
+    if (!task) return Response.json({ error: "Task not found." }, { status: 404 });
+    const assignedUserAction = task.employeeEmail.toLowerCase() === currentUser.email.toLowerCase();
+    const managementPause = action === "pause" && !assignedUserAction && await canAuditTask(db, currentUser, task);
+    if (!assignedUserAction && !managementPause) return Response.json({ error: "This task is not assigned to you." }, { status: 403 });
     const submitForReview = task.visibility === "team" || task.submittedToManager;
     if (action === "start" && task.managerCheck === "approved") {
       return Response.json({ error: "An approved task must be reopened by the manager before work can resume." }, { status: 409 });
@@ -188,7 +189,10 @@ export async function POST(request: Request) {
     }
 
     if (action === "pause") {
-      affectedTasks.push(...await closeActiveEntries(db, currentUser.email, now, taskId));
+      affectedTasks.push(...await closeActiveEntries(db, task.employeeEmail, now, taskId));
+      if (managementPause && !affectedTasks.length) {
+        return Response.json({ error: "This employee timer is not currently running." }, { status: 409 });
+      }
       if (!affectedTasks.length) {
         const paused = await db.update(tasks).set({ status: "paused", updatedAt: now }).where(eq(tasks.id, taskId)).returning();
         affectedTasks.push(paused[0]);
@@ -200,7 +204,12 @@ export async function POST(request: Request) {
       const finished = await refreshTaskTime(db, taskId, "done");
       const reviewed = await db
         .update(tasks)
-        .set({ managerCheck: submitForReview ? "pending" : "new", updatedAt: now })
+        .set({
+          managerCheck: submitForReview ? "pending" : "new",
+          completionBeforeReview: submitForReview ? task.completionPercent : task.completionBeforeReview,
+          completionPercent: 100,
+          updatedAt: now,
+        })
         .where(eq(tasks.id, taskId))
         .returning();
       affectedTasks.push(reviewed[0] || finished);
@@ -216,6 +225,7 @@ export async function POST(request: Request) {
             taskId,
             title: "Task ready for review · المهمة جاهزة للمراجعة",
             message: `${task.title} · ${currentUser.displayName} · جاهزة للمراجعة`,
+            actorName: currentUser.displayName,
           });
         }
       }

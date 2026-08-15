@@ -1561,7 +1561,7 @@ test("V117 returns from report settings and adds project controls and issue stat
   assert.match(dashboard, /hindazaReportEmployeeEdit: user\.email/);
   assert.match(dashboard, /projectDrawerReturnToReport/);
   assert.match(dashboard, /userDrawerReturnToReport/);
-  assert.match(dashboard, /if \(!open && projectDrawerReturnToReport\) \{ window\.history\.back\(\); return; \}/);
+  assert.match(dashboard, /if \(!open && \(projectDrawerReturnToReport \|\| projectDrawerReturnToUserEmail\)\) \{ window\.history\.back\(\); return; \}/);
   assert.match(dashboard, /userDrawerReturnToEmployeeTasks \|\| userDrawerReturnToReport/);
   assert.match(issues, /onProjectSettings: \(project: IssueProject\) => void/);
   assert.match(issues, /title="Project settings">⚙<\/button>/);
@@ -1677,4 +1677,116 @@ test("V130 links the header company logo to the application home", async () => {
   assert.match(dashboard, /<a className="brand-block" href="https:\/\/pm\.hindaza\.com\/"/);
   assert.match(dashboard, /aria-label="Go to HINDAZA Project Management home"/);
   assert.match(styles, /\.brand-block:focus-visible/);
+});
+
+test("V131 opens on overview and adds task progress, actor-aware email, project member email, and management timer pause", async () => {
+  const [dashboard, styles, schema, init, tasksApi, timerApi, delivery, migration, backfill] = await Promise.all([
+    source("app/task-dashboard.tsx"),
+    source("app/globals.css"),
+    source("db/schema.ts"),
+    source("lib/db-init.ts"),
+    source("app/api/tasks/route.ts"),
+    source("app/api/task-timer/route.ts"),
+    source("lib/notification-delivery.ts"),
+    source("drizzle/0017_colorful_misty_knight.sql"),
+    source("drizzle/0018_backfill_task_completion.sql"),
+  ]);
+  assert.match(dashboard, /return tabValues\.includes\(value as Tab\) \? value as Tab : "overview";/);
+  assert.match(dashboard, /className="project-member-email" dir="ltr">\{user\.email\}/);
+  assert.match(dashboard, /const taskCompletionOptions = \[0, 25, 50, 75, 100\] as const/);
+  assert.match(dashboard, /function TaskProgressControl/);
+  assert.match(dashboard, /<th>Task<\/th>/);
+  assert.match(dashboard, /canPauseEmployeeTimer/);
+  assert.match(dashboard, /Pause Employee Timer/);
+  assert.match(styles, /\.task-progress-circle/);
+  assert.match(schema, /completionPercent: integer\("completion_percent"\)\.notNull\(\)\.default\(0\)/);
+  assert.match(init, /ALTER TABLE tasks ADD COLUMN completion_percent INTEGER DEFAULT 0 NOT NULL/);
+  assert.match(migration, /ADD `completion_percent` integer DEFAULT 0 NOT NULL/);
+  assert.match(backfill, /WHERE `status` = 'done' AND `completion_percent` = 0/);
+  assert.match(tasksApi, /action === "update_completion"/);
+  assert.match(tasksApi, /\[0, 25, 50, 75, 100\]\.includes/);
+  assert.match(timerApi, /managementPause/);
+  assert.match(timerApi, /task\.employeeEmail/);
+  assert.match(delivery, /actorName\?: string/);
+  assert.match(delivery, /label: "Action By"/);
+});
+
+test("V132 moves progress into the task field and restores it when review is returned", async () => {
+  const [dashboard, styles, schema, init, tasksApi, timerApi, migration] = await Promise.all([
+    source("app/task-dashboard.tsx"),
+    source("app/globals.css"),
+    source("db/schema.ts"),
+    source("lib/db-init.ts"),
+    source("app/api/tasks/route.ts"),
+    source("app/api/task-timer/route.ts"),
+    source("drizzle/0019_quiet_mikhail_rasputin.sql"),
+  ]);
+  assert.match(dashboard, /<th>Task<\/th>\{props\.showEmployeeFilter && <th>Employee<\/th>\}<th>Created By<\/th>/);
+  assert.doesNotMatch(dashboard, /className="task-progress-value"/);
+  assert.match(dashboard, /className="wide task-title-field"/);
+  assert.match(dashboard, /task-title-drawer-progress/);
+  assert.match(dashboard, /<span>\{completionPercent\}%<\/span>/);
+  assert.match(dashboard, /hsl\(\$\{completionPercent \* 1\.2\} 68% 43%\)/);
+  assert.match(dashboard, /completingTask \? "POST" : "PATCH"/);
+  assert.match(dashboard, /\? \{ taskId, action: "finish" \}/);
+  assert.match(styles, /box-shadow: 0 0 0 2px var\(--task-progress-color\)/);
+  assert.match(schema, /completionBeforeReview: integer\("completion_before_review"\)\.notNull\(\)\.default\(0\)/);
+  assert.match(init, /ALTER TABLE tasks ADD COLUMN completion_before_review INTEGER DEFAULT 0 NOT NULL/);
+  assert.match(migration, /ADD `completion_before_review` integer DEFAULT 0 NOT NULL/);
+  assert.match(timerApi, /completionBeforeReview: submitForReview \? task\.completionPercent : task\.completionBeforeReview/);
+  assert.match(tasksApi, /requestedCheck === "returned" && existing\[0\]\.managerCheck === "pending"/);
+  assert.match(tasksApi, /\? existing\[0\]\.completionBeforeReview/);
+  assert.match(tasksApi, /Task completion is locked during or after manager review/);
+});
+
+test("V133 scopes reports, protects project manager assignment, and shows progress across task dialogs", async () => {
+  const [dashboard, styles, bootstrap, projectsApi] = await Promise.all([
+    source("app/task-dashboard.tsx"),
+    source("app/globals.css"),
+    source("app/api/bootstrap/route.ts"),
+    source("app/api/projects/route.ts"),
+  ]);
+  assert.match(dashboard, /className="task-title-input-row"/);
+  assert.match(styles, /\.task-title-input-row \{ display: grid; grid-template-columns: minmax\(0, 1fr\) 42px;/);
+  assert.match(dashboard, /function canEditTaskCompletion/);
+  assert.match(dashboard, /className="window-task-title-progress"/);
+  assert.match(dashboard, /hideEmployeeColumn=\{reportGroup === "employee"\}/);
+  assert.match(dashboard, /\{!hideEmployeeColumn && <th>Employee<\/th>\}/);
+  assert.match(dashboard, /\{!hideEmployeeColumn && <select value=\{employeeFilter\}/);
+  assert.match(dashboard, /className="assigned-project-settings"/);
+  assert.match(dashboard, /hindazaUserProjectEdit: project\.id/);
+  assert.match(dashboard, /projectDrawerReturnToUserEmail/);
+  assert.match(dashboard, /disabled=\{!owner \|\| !selected\}/);
+  assert.match(dashboard, /const reportEligibleTasks = useMemo\(\(\) => tasks\.filter\(\(task\) => reportProjectCodes\.has\(task\.project\)\)/);
+  assert.match(dashboard, /const reportEmployees = useMemo/);
+  assert.match(bootstrap, /assignedProjectMemberEmails/);
+  assert.match(bootstrap, /managedProjectMemberEmails/);
+  assert.match(bootstrap, /allProjectRows\.filter\(\(project\) => assignedProjectIds\.has\(project\.id\)\)/);
+  assert.match(projectsApi, /currentRows[\s\S]*?filter\(\(row\) => row\.isProjectManager && assignedMembers\.includes\(row\.employeeEmail\)\)/);
+});
+
+test("V134 separates task completion, defaults projects to unapproved, reorders review, and counts report employees", async () => {
+  const [dashboard, styles] = await Promise.all([
+    source("app/task-dashboard.tsx"),
+    source("app/globals.css"),
+  ]);
+  assert.match(dashboard, /reviewFilter === "unapproved" \? task\.managerCheck !== "approved"/);
+  assert.match(dashboard, /setReviewFilter\("unapproved"\)/);
+  assert.match(dashboard, /<option value="unapproved">Unapproved · غير معتمدة<\/option>/);
+  assert.match(dashboard, /const allProjectTasks = useMemo/);
+  assert.match(dashboard, /\["new", "pending", "returned", "approved"\] as const/);
+  assert.match(dashboard, /<div className="wide task-title-field"><label htmlFor="task-title-input">/);
+  assert.match(dashboard, /onPointerDown=\{\(event\) => event\.stopPropagation\(\)\}/);
+  assert.match(dashboard, /employeeCount: new Set/);
+  assert.match(dashboard, /row\.employeeCount} employees/);
+  assert.match(styles, /\.task-title-field > label/);
+});
+
+test("V135 restores the nearest populated task report period and places Approved last", async () => {
+  const dashboard = await source("app/task-dashboard.tsx");
+  assert.match(dashboard, /const reportAnchorAutoSelectedRef = useRef\(false\)/);
+  assert.match(dashboard, /reportEligibleTasks\.some\(\(task\) => task\.taskDate >= visibleRange\.start && task\.taskDate <= visibleRange\.end\)/);
+  assert.match(dashboard, /dates\.filter\(\(date\) => date <= localToday\(\)\)\.at\(-1\) \|\| dates\[0\]/);
+  assert.match(dashboard, /stat-card amber[\s\S]*?projectStats\.returned[\s\S]*?stat-card green[\s\S]*?projectStats\.approved/);
+  assert.match(dashboard, /stat-card amber[\s\S]*?stats\.returned[\s\S]*?stat-card green[\s\S]*?stats\.approved/);
 });

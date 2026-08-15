@@ -192,6 +192,8 @@ function validateBackup(value: unknown): BackupData {
     startTime: stringField(item, "startTime", 20),
     endTime: stringField(item, "endTime", 20),
     actualHours: nonNegativeNumber(item, "actualHours"),
+        completionPercent: item.completionPercent === undefined ? 0 : Math.min(100, nonNegativeNumber(item, "completionPercent")),
+        completionBeforeReview: item.completionBeforeReview === undefined ? 0 : Math.min(100, nonNegativeNumber(item, "completionBeforeReview")),
     status: enumField(item, "status", ["not_started", "in_progress", "paused", "blocked", "needs_revision", "done"] as const),
     managerCheck: enumField(item, "managerCheck", ["new", "pending", "approved", "returned"] as const),
     managerNote: stringField(item, "managerNote", 2_000),
