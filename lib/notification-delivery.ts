@@ -3,7 +3,10 @@ import { getDb } from "@/db";
 import { notifications, projectIssues, projects, tasks } from "@/db/schema";
 
 type Database = Awaited<ReturnType<typeof getDb>>;
-export type NotificationPayload = Pick<typeof notifications.$inferInsert, "recipientEmail" | "type" | "taskId" | "issueId" | "title" | "message">;
+type EmailDetail = { label: string; value: string };
+export type NotificationPayload = Pick<typeof notifications.$inferInsert, "recipientEmail" | "type" | "taskId" | "issueId" | "title" | "message"> & {
+  emailDetails?: EmailDetail[];
+};
 
 type EmailRuntimeEnvironment = {
   CLOUDFLARE_ACCOUNT_ID?: string;
@@ -53,17 +56,18 @@ function englishNotificationTitle(value: string) {
 }
 
 async function emailRecordDetails(db: Database, notification: NotificationPayload) {
+  if (notification.emailDetails?.length) return notification.emailDetails;
   if (notification.taskId) {
     const [task] = await db.select({ title: tasks.title, projectCode: tasks.project }).from(tasks).where(eq(tasks.id, notification.taskId)).limit(1);
     if (!task) return null;
     const [project] = await db.select({ name: projects.name }).from(projects).where(eq(projects.code, task.projectCode)).limit(1);
-    return { recordLabel: "Task", recordName: task.title, projectName: project?.name || task.projectCode };
+    return [{ label: "Task", value: task.title }, { label: "Project", value: project?.name || task.projectCode }];
   }
   if (notification.issueId) {
     const [issue] = await db.select({ issueNumber: projectIssues.issueNumber, projectCode: projectIssues.projectCode }).from(projectIssues).where(eq(projectIssues.id, notification.issueId)).limit(1);
     if (!issue) return null;
     const [project] = await db.select({ name: projects.name }).from(projects).where(eq(projects.code, issue.projectCode)).limit(1);
-    return { recordLabel: "Issue", recordName: issue.issueNumber, projectName: project?.name || issue.projectCode };
+    return [{ label: "Issue", value: issue.issueNumber }, { label: "Project", value: project?.name || issue.projectCode }];
   }
   return null;
 }
@@ -89,9 +93,9 @@ async function sendNotificationEmail(db: Database, notification: NotificationPay
   const details = await emailRecordDetails(db, notification);
   const emailTitle = englishNotificationTitle(notification.title);
   const detailsHtml = details
-    ? `<div style="margin:0 0 22px"><div style="padding:12px 14px;background:#f7f7f4;border-left:4px solid #ffd200"><div style="font-size:12px;color:#707070;text-transform:uppercase;letter-spacing:.6px">${details.recordLabel}</div><div style="margin-top:4px;font-size:16px;font-weight:700;color:#171717">${escapeHtml(details.recordName)}</div></div><div style="margin-top:10px;padding:12px 14px;background:#f7f7f4;border-left:4px solid #171717"><div style="font-size:12px;color:#707070;text-transform:uppercase;letter-spacing:.6px">Project</div><div style="margin-top:4px;font-size:16px;font-weight:700;color:#171717">${escapeHtml(details.projectName)}</div></div></div>`
+    ? `<div style="margin:0 0 22px">${details.map((detail, index) => `<div style="${index ? "margin-top:10px;" : ""}padding:12px 14px;background:#f7f7f4;border-left:4px solid ${index % 2 ? "#171717" : "#ffd200"}"><div style="font-size:12px;color:#707070;text-transform:uppercase;letter-spacing:.6px">${escapeHtml(detail.label)}</div><div style="margin-top:4px;font-size:16px;font-weight:700;color:#171717">${escapeHtml(detail.value)}</div></div>`).join("")}</div>`
     : "";
-  const detailsText = details ? `\n\n${details.recordLabel}: ${details.recordName}\nProject: ${details.projectName}` : "";
+  const detailsText = details ? `\n\n${details.map((detail) => `${detail.label}: ${detail.value}`).join("\n")}` : "";
   const logoUrl = String(environment.APP_BASE_URL || "").replace(/\/$/, "") + "/hindaza-logo.png";
   const logoHtml = environment.APP_BASE_URL
     ? `<img src="${escapeHtml(logoUrl)}" alt="HINDAZA Engineering BIM" width="190" style="display:block;width:190px;max-width:70%;height:auto;border:0;margin:0 auto 10px" />`
@@ -172,11 +176,19 @@ export async function sendNewEmployeeWelcomeEmail(input: {
 }
 
 export async function createNotifications(db: Database, input: NotificationPayload | NotificationPayload[]) {
-  const payloads = Array.isArray(input) ? input : [input];
-  if (!payloads.length) return;
+  const emailPayloads = Array.isArray(input) ? input : [input];
+  if (!emailPayloads.length) return;
 
+  const payloads = emailPayloads.map((payload) => ({
+    recipientEmail: payload.recipientEmail,
+    type: payload.type,
+    taskId: payload.taskId,
+    issueId: payload.issueId,
+    title: payload.title,
+    message: payload.message,
+  }));
   await db.insert(notifications).values(payloads);
-  for (const payload of payloads) {
+  for (const payload of emailPayloads) {
     try {
       await sendNotificationEmail(db, payload);
     } catch (error) {
