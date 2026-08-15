@@ -125,7 +125,7 @@ export const notifications = sqliteTable(
   {
     id: integer("id").primaryKey({ autoIncrement: true }),
     recipientEmail: text("recipient_email").notNull(),
-    type: text("type", { enum: ["task_assigned", "review_updated", "private_task_submitted", "task_ready_for_review", "subtask_completed", "task_note_added", "issue_created", "issue_updated", "issue_note_added"] }).notNull(),
+    type: text("type", { enum: ["task_assigned", "review_updated", "private_task_submitted", "task_ready_for_review", "subtask_completed", "task_note_added", "issue_created", "issue_updated", "issue_note_added", "project_member_added"] }).notNull(),
     taskId: integer("task_id"),
     issueId: integer("issue_id"),
     title: text("title").notNull(),
