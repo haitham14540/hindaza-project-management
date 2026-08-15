@@ -47,6 +47,8 @@ export async function ensureDatabase() {
           start_time TEXT DEFAULT '' NOT NULL,
           end_time TEXT DEFAULT '' NOT NULL,
           actual_hours REAL DEFAULT 0 NOT NULL,
+          completion_percent INTEGER DEFAULT 0 NOT NULL,
+          completion_before_review INTEGER DEFAULT 0 NOT NULL,
           status TEXT DEFAULT 'not_started' NOT NULL,
           manager_check TEXT DEFAULT 'new' NOT NULL,
           manager_note TEXT DEFAULT '' NOT NULL,
@@ -211,6 +213,13 @@ export async function ensureDatabase() {
       const columns = await d1.prepare("PRAGMA table_info(users)").all<{ name: string }>();
       if (!columns.results.some((column) => column.name === "profile_image_key")) {
         await d1.prepare("ALTER TABLE users ADD COLUMN profile_image_key TEXT DEFAULT '' NOT NULL").run();
+      }
+      const taskColumns = await d1.prepare("PRAGMA table_info(tasks)").all<{ name: string }>();
+      if (!taskColumns.results.some((column) => column.name === "completion_percent")) {
+        await d1.prepare("ALTER TABLE tasks ADD COLUMN completion_percent INTEGER DEFAULT 0 NOT NULL").run();
+      }
+      if (!taskColumns.results.some((column) => column.name === "completion_before_review")) {
+        await d1.prepare("ALTER TABLE tasks ADD COLUMN completion_before_review INTEGER DEFAULT 0 NOT NULL").run();
       }
       await d1.prepare(`
         UPDATE users SET role = 'owner'

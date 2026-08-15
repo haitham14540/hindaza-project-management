@@ -79,6 +79,7 @@ export async function POST(request: Request) {
         taskId,
         title: "Task note added · تمت إضافة ملاحظة على المهمة",
         message: `${taskDetails.title} · ${currentUser.displayName} · ملاحظة جديدة`,
+        actorName: currentUser.displayName,
       });
     }
     await recordActivity(db, currentUser, { action: "note_added", entityType: "task", entityId: taskId, entityLabel: taskDetails.title, projectCode: taskDetails.project, details: body });

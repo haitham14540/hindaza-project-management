@@ -566,8 +566,10 @@ button { cursor: pointer; }
 .issue-filters { display: grid; grid-template-columns: minmax(260px, 1.4fr) repeat(4, minmax(135px, .75fr)) auto auto; gap: 9px; padding: 13px 18px; border-bottom: 1px solid #edf1f2; background: #fbfcfc; direction: ltr; align-items: center; }
 .filter-count { white-space: nowrap; justify-self: end; }
 .assigned-project-list { display: grid; gap: 8px; }
-.assigned-project-list > div { display: grid; grid-template-columns: 90px 1fr; gap: 10px; align-items: center; padding: 10px 12px; border: 1px solid #e3eaec; border-radius: 10px; background: #fbfcfc; }
+.assigned-project-list > div { display: grid; grid-template-columns: 90px 1fr 34px; gap: 10px; align-items: center; padding: 10px 12px; border: 1px solid #e3eaec; border-radius: 10px; background: #fbfcfc; }
 .assigned-project-list strong { color: #8b6d00; }
+.assigned-project-settings { width: 32px; height: 32px; display: grid; place-items: center; border: 1px solid #d8b600; border-radius: 9px; background: #fff5ba; color: #171717; cursor: pointer; }
+.assigned-project-settings:hover { background: #ffd200; }
 .issue-filters input, .issue-filters select { width: 100%; height: 38px; min-height: 38px; border: 1px solid #d9e3e6; border-radius: 9px; background: white; color: var(--ink); padding: 0 11px; font: inherit; font-size: 11px; outline: none; }
 .issue-filters input:focus, .issue-filters select:focus { border-color: var(--yellow-dark); box-shadow: 0 0 0 3px rgba(255,210,0,.16); }
 .issue-table { min-width: 1260px; text-align: left; direction: ltr; }
@@ -873,6 +875,15 @@ button { cursor: pointer; }
 .report-tasks-dialog .employee-task-table th:nth-child(4), .report-tasks-dialog .employee-task-table th:nth-child(5) { width: 10%; }
 .report-tasks-dialog .employee-task-table th:nth-child(6), .report-tasks-dialog .employee-task-table th:nth-child(7) { width: 11%; }
 .report-tasks-dialog .employee-task-table th:nth-child(8), .report-tasks-dialog .employee-task-table th:nth-child(9) { width: 8%; }
+.report-tasks-dialog.employee-specific-report .employee-task-table { min-width: 1060px; }
+.report-tasks-dialog.employee-specific-report .employee-task-table th:nth-child(1) { width: 27%; }
+.report-tasks-dialog.employee-specific-report .employee-task-table th:nth-child(2) { width: 13%; }
+.report-tasks-dialog.employee-specific-report .employee-task-table th:nth-child(3),
+.report-tasks-dialog.employee-specific-report .employee-task-table th:nth-child(4) { width: 11%; }
+.report-tasks-dialog.employee-specific-report .employee-task-table th:nth-child(5),
+.report-tasks-dialog.employee-specific-report .employee-task-table th:nth-child(6) { width: 12%; }
+.report-tasks-dialog.employee-specific-report .employee-task-table th:nth-child(7),
+.report-tasks-dialog.employee-specific-report .employee-task-table th:nth-child(8) { width: 7%; }
 .report-tasks-dialog .employee-tasks-toolbar strong { color: #171717; font-size: 10px; }
 .employee-tasks-header-actions { display: flex; align-items: center; gap: 8px; }
 .employee-tasks-print, .employee-tasks-settings, .employee-tasks-close { width: 40px; height: 40px; display: grid; place-items: center; border: 1px solid rgba(255,255,255,.2); border-radius: 50%; background: rgba(255,255,255,.06); color: white; }
@@ -919,6 +930,11 @@ button { cursor: pointer; }
 .employee-task-table a strong, .employee-task-table a small { display: block; }
 .employee-task-table a strong { font-size: 10px; }
 .employee-task-table a small { margin-top: 4px; color: #8b9599; font-size: 8px; }
+.window-task-title-progress { display: flex; align-items: center; gap: 9px; min-width: 0; }
+.window-task-title-progress > a { flex: 1; min-width: 0; }
+.window-task-title-progress .task-progress-circle { width: 30px; height: 30px; flex-basis: 30px; font-size: 7px; }
+.window-task-title-progress .task-progress-circle::before { inset: 3px; }
+.window-task-title-progress .task-progress-menu { left: 0; right: auto; }
 .employee-task-title { display: inline-flex; align-items: center; gap: 7px; max-width: 100%; }
 .employee-task-live-pulse { width: 8px; height: 8px; flex: 0 0 8px; border-radius: 50%; background: #2f9b70; box-shadow: 0 0 0 0 rgba(47,155,112,.5); animation: activeWorkPulse 1.35s ease-out infinite; }
 .linked-issue-button { border: 1px solid #d5ab00; border-radius: 7px; background: #fff7cf; color: #5d4a00; padding: 5px 8px; font: inherit; font-weight: 800; white-space: nowrap; cursor: pointer; }
@@ -1272,6 +1288,30 @@ button.overview-kpi:hover { transform: translateY(-2px); border-color: #d8bc35; 
 .subtask-attachment-remove { width: 25px; height: 25px; border: 0; border-left: 1px solid #eceeef; background: transparent; color: #b42c36; cursor: pointer; }
 .subtask-number { width: 34px; color: #6d54a3; font-weight: 900; text-align: center; }
 .save-first-note { color: #8a9498 !important; font-style: italic; }
+.project-member-email { display: block; margin: 2px 0 1px; color: #748087; font-size: 8px; font-weight: 500; direction: ltr; }
+.task-title-progress { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.task-title-progress > strong { min-width: 0; overflow-wrap: anywhere; }
+.task-progress-control { position: relative; flex: 0 0 auto; }
+.task-progress-control > summary { list-style: none; cursor: pointer; }
+.task-progress-control > summary::-webkit-details-marker { display: none; }
+.task-progress-circle { --task-completion: 0deg; --task-progress-color: #d2474d; position: relative; display: grid; place-items: center; width: 38px; height: 38px; flex: 0 0 38px; border: 0; border-radius: 50%; background: conic-gradient(var(--task-progress-color) var(--task-completion), #e6eaeb 0); color: #171717; font-size: 8px; font-weight: 900; box-shadow: 0 0 0 2px var(--task-progress-color); }
+.task-progress-circle::before { content: ""; position: absolute; inset: 4px; border-radius: 50%; background: #fff; }
+.task-progress-circle > span { position: relative; z-index: 1; }
+.task-progress-circle.readonly { cursor: default; }
+.task-progress-menu { position: absolute; z-index: 40; top: calc(100% + 6px); left: 0; display: grid; grid-template-columns: repeat(5, 43px); gap: 4px; width: max-content; padding: 6px; border: 1px solid #dfe3e4; border-radius: 10px; background: #fff; box-shadow: 0 12px 30px rgba(16,24,28,.18); }
+.task-progress-menu button { min-height: 30px; border: 1px solid #e0e4e5; border-radius: 7px; background: #f8f9f9; color: #536169; font-size: 9px; font-weight: 800; cursor: pointer; }
+.task-progress-menu button:hover, .task-progress-menu button.active { border-color: #d1ad00; background: #ffd200; color: #171717; }
+.task-progress-menu button:disabled { opacity: .5; cursor: wait; }
+.task-title-field { position: relative; }
+.task-title-field > label { display: block; margin-bottom: 6px; color: #52646f; font-size: 10px; font-weight: 800; }
+.task-title-field > label::after { content: " *"; color: #d71920; font-size: 14px; font-weight: 900; line-height: 0; }
+.task-title-field.wide { margin-bottom: 13px; }
+.task-title-input-row { display: grid; grid-template-columns: minmax(0, 1fr) 42px; gap: 10px; align-items: center; }
+.task-title-input-row > input { width: 100%; }
+.task-title-drawer-progress { position: relative; z-index: 5; display: grid; place-items: center; }
+.task-title-drawer-progress .task-progress-menu { right: 0; left: auto; }
+.management-timer-section { border-color: #e6c100; background: #fffdf1; }
+.management-pause-button { min-width: 190px; }
 @media (max-width: 620px) {
   .assignment-time-grid.management { grid-template-columns: 1fr 1fr; }
   .assignment-time-grid.management .assignment-employee { grid-column: 1 / -1; }

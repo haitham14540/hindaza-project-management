@@ -120,6 +120,27 @@
       "when": 1786477596977,
       "tag": "0016_tiny_paibok",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "6",
+      "when": 1786803777541,
+      "tag": "0017_colorful_misty_knight",
+      "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "6",
+      "when": 1786804638723,
+      "tag": "0018_backfill_task_completion",
+      "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "6",
+      "when": 1786809447036,
+      "tag": "0019_quiet_mikhail_rasputin",
+      "breakpoints": true
     }
   ]
 }

@@ -63,6 +63,7 @@ export async function POST(request: Request) {
         taskId: task[0].id,
         title: "Issue converted to task · تم تحويل المشكلة إلى مهمة",
         message: `${issue.issueNumber} · ${issue.projectCode} · مهمة جديدة`,
+        actorName: currentUser.displayName,
       });
     }
     await recordActivity(db, currentUser, { action: "created", entityType: "task", entityId: task[0].id, entityLabel: task[0].title, projectCode: issue.projectCode, details: `Converted from ${issue.issueNumber}` });

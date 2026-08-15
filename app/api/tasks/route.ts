@@ -189,6 +189,7 @@ export async function POST(request: Request) {
         taskId: inserted[0].id,
         title: "New task assigned · تم إسناد مهمة جديدة",
         message: `${title} · ${project} · مهمة جديدة`,
+        actorName: currentUser.displayName,
       });
     }
 
@@ -219,6 +220,24 @@ export async function PATCH(request: Request) {
     if (!existing[0]) {
       return Response.json({ error: "Task not found." }, { status: 404 });
     }
+    if (payload.action === "update_completion") {
+      const completionPercent = Number(payload.completionPercent);
+      if (![0, 25, 50, 75, 100].includes(completionPercent)) {
+        return Response.json({ error: "Select a valid completion percentage." }, { status: 400 });
+      }
+      if (!existing[0].employeeEmail || existing[0].employeeEmail.toLowerCase() !== currentUser.email.toLowerCase()) {
+        return Response.json({ error: "Only the assigned user can update task completion." }, { status: 403 });
+      }
+      if (existing[0].managerCheck === "pending" || existing[0].managerCheck === "approved") {
+        return Response.json({ error: "Task completion is locked during or after manager review." }, { status: 409 });
+      }
+      if (completionPercent === 100) {
+        return Response.json({ error: "Complete the task through the review submission workflow." }, { status: 409 });
+      }
+      const [updatedTask] = await db.update(tasks).set({ completionPercent, updatedAt: sql`CURRENT_TIMESTAMP` }).where(eq(tasks.id, id)).returning();
+      await recordActivity(db, currentUser, { action: "updated", entityType: "task", entityId: id, entityLabel: updatedTask.title, projectCode: updatedTask.project, details: `Completion updated to ${completionPercent}%` });
+      return Response.json({ task: updatedTask });
+    }
     if (payload.action === "submit_to_manager") {
       const canSubmit = currentUser.role === "member"
         && existing[0].visibility === "private"
@@ -246,6 +265,7 @@ export async function PATCH(request: Request) {
           taskId: id,
           title: "Private task shared for assignment · تمت مشاركة مهمة خاصة للإسناد",
           message: `${existing[0].title} · ${currentUser.displayName} · مرسلة من الموظف`,
+          actorName: currentUser.displayName,
         })));
       }
       await recordActivity(db, currentUser, { action: "updated", entityType: "task", entityId: id, entityLabel: submitted[0].title, projectCode: submitted[0].project, details: "Private task shared with management" });
@@ -315,6 +335,10 @@ export async function PATCH(request: Request) {
         startTime: existing[0].startTime,
         endTime: existing[0].endTime,
         actualHours: existing[0].actualHours,
+        completionPercent:
+          management && requestedCheck === "returned" && existing[0].managerCheck === "pending"
+            ? existing[0].completionBeforeReview
+            : existing[0].completionPercent,
         status: employeeChanged && reassignmentAfterSubmission ? "not_started" : existing[0].status,
         managerCheck:
           management
@@ -342,6 +366,7 @@ export async function PATCH(request: Request) {
           taskId: id,
           title: "Task assigned to you · تم إسناد مهمة إليك",
           message: `${updated[0].title} · ${updated[0].project} · تم إسناد المهمة`,
+          actorName: currentUser.displayName,
         });
       } else if (employeeEmail && requestedCheck !== existing[0].managerCheck) {
         const reviewLabels = { new: "New/WIP · جديدة/قيد العمل", pending: "Pending review · بانتظار المراجعة", approved: "Approved · معتمدة", returned: "Returned · مُعادة" } as const;
@@ -351,6 +376,7 @@ export async function PATCH(request: Request) {
           taskId: id,
           title: "Manager review updated · تم تحديث مراجعة المسؤول",
           message: `${updated[0].title}: ${reviewLabels[requestedCheck]}`,
+          actorName: currentUser.displayName,
         });
       }
     }
