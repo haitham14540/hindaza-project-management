@@ -120,6 +120,57 @@ async function sendNotificationEmail(db: Database, notification: NotificationPay
   }
 }
 
+export async function sendNewEmployeeWelcomeEmail(input: {
+  recipientEmail: string;
+  displayName: string;
+  temporaryPassword: string;
+}) {
+  const environment = await runtimeEmailEnvironment();
+  if (String(environment.EMAIL_NOTIFICATIONS_ENABLED || "").toLowerCase() !== "true") {
+    console.warn("Welcome email skipped: EMAIL_NOTIFICATIONS_ENABLED is missing or not true");
+    return;
+  }
+  if (!environment.CLOUDFLARE_ACCOUNT_ID || !environment.CLOUDFLARE_EMAIL_API_TOKEN || !environment.EMAIL_FROM || !input.recipientEmail) {
+    const missing = [
+      !environment.CLOUDFLARE_ACCOUNT_ID && "CLOUDFLARE_ACCOUNT_ID",
+      !environment.CLOUDFLARE_EMAIL_API_TOKEN && "CLOUDFLARE_EMAIL_API_TOKEN",
+      !environment.EMAIL_FROM && "EMAIL_FROM",
+      !input.recipientEmail && "recipientEmail",
+    ].filter(Boolean).join(", ");
+    console.warn(`Welcome email skipped: missing runtime configuration: ${missing}`);
+    return;
+  }
+
+  const baseUrl = String(environment.APP_BASE_URL || "").replace(/\/$/, "");
+  const logoHtml = baseUrl
+    ? `<img src="${escapeHtml(baseUrl + "/hindaza-logo.png")}" alt="HINDAZA Engineering BIM" width="190" style="display:block;width:190px;max-width:70%;height:auto;border:0;margin:0 auto 10px" />`
+    : "";
+  const signInHtml = baseUrl
+    ? `<p style="margin:24px 0 0"><a href="${escapeHtml(baseUrl)}" style="display:inline-block;padding:11px 20px;border-radius:8px;background:#ffd200;color:#171717;text-decoration:none;font-weight:700">Sign in to your account</a></p>`
+    : "";
+  const subject = "Your HINDAZA Project Management account";
+  const response = await fetch(`https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(environment.CLOUDFLARE_ACCOUNT_ID)}/email/sending/send`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${environment.CLOUDFLARE_EMAIL_API_TOKEN}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      from: senderAddress(environment.EMAIL_FROM),
+      to: [input.recipientEmail],
+      subject,
+      html: `<div style="font-family:Arial,Tahoma,sans-serif;max-width:620px;margin:auto;color:#202020"><div style="padding:20px 22px 16px;background:#171717;color:#fff;text-align:center;border-bottom:5px solid #ffd200">${logoHtml}<strong style="display:block;font-size:14px;letter-spacing:.5px">PROJECT MANAGEMENT</strong></div><div style="padding:24px;border:1px solid #e5e5df;border-top:0"><h2 style="margin:0 0 10px;font-size:22px">Welcome, ${escapeHtml(input.displayName)}</h2><p style="margin:0 0 20px;line-height:1.7">Your HINDAZA Project Management account has been created.</p><div style="padding:12px 14px;background:#f7f7f4;border-left:4px solid #ffd200"><div style="font-size:12px;color:#707070;text-transform:uppercase;letter-spacing:.6px">Email</div><div style="margin-top:4px;font-size:16px;font-weight:700;color:#171717">${escapeHtml(input.recipientEmail)}</div></div><div style="margin-top:10px;padding:12px 14px;background:#f7f7f4;border-left:4px solid #171717"><div style="font-size:12px;color:#707070;text-transform:uppercase;letter-spacing:.6px">Temporary Password</div><div style="margin-top:4px;font-family:Consolas,Monaco,monospace;font-size:17px;font-weight:700;color:#171717">${escapeHtml(input.temporaryPassword)}</div></div><p style="margin:18px 0 0;color:#6a6a6a;font-size:13px;line-height:1.6">For your security, change this temporary password after signing in for the first time.</p>${signInHtml}</div></div>`,
+      text: `${subject}\n\nWelcome, ${input.displayName}\n\nEmail: ${input.recipientEmail}\nTemporary Password: ${input.temporaryPassword}\n\nFor your security, change this temporary password after signing in for the first time.${baseUrl ? `\n\n${baseUrl}` : ""}`,
+    }),
+  });
+
+  const result = await response.json().catch(() => null) as { success?: boolean; errors?: Array<{ message?: string }> } | null;
+  if (!response.ok || result?.success === false) {
+    const detail = result?.errors?.map((error) => error.message).filter(Boolean).join("; ");
+    throw new Error(`Cloudflare welcome email returned HTTP ${response.status}${detail ? `: ${detail}` : ""}`);
+  }
+}
+
 export async function createNotifications(db: Database, input: NotificationPayload | NotificationPayload[]) {
   const payloads = Array.isArray(input) ? input : [input];
   if (!payloads.length) return;
