@@ -49,8 +49,20 @@ function senderAddress(value: string) {
 
 async function sendNotificationEmail(notification: NotificationPayload) {
   const environment = await runtimeEmailEnvironment();
-  if (String(environment.EMAIL_NOTIFICATIONS_ENABLED || "").toLowerCase() !== "true") return;
-  if (!environment.CLOUDFLARE_ACCOUNT_ID || !environment.CLOUDFLARE_EMAIL_API_TOKEN || !environment.EMAIL_FROM || !notification.recipientEmail) return;
+  if (String(environment.EMAIL_NOTIFICATIONS_ENABLED || "").toLowerCase() !== "true") {
+    console.warn("Email notification skipped: EMAIL_NOTIFICATIONS_ENABLED is missing or not true");
+    return;
+  }
+  if (!environment.CLOUDFLARE_ACCOUNT_ID || !environment.CLOUDFLARE_EMAIL_API_TOKEN || !environment.EMAIL_FROM || !notification.recipientEmail) {
+    const missing = [
+      !environment.CLOUDFLARE_ACCOUNT_ID && "CLOUDFLARE_ACCOUNT_ID",
+      !environment.CLOUDFLARE_EMAIL_API_TOKEN && "CLOUDFLARE_EMAIL_API_TOKEN",
+      !environment.EMAIL_FROM && "EMAIL_FROM",
+      !notification.recipientEmail && "recipientEmail",
+    ].filter(Boolean).join(", ");
+    console.warn(`Email notification skipped: missing runtime configuration: ${missing}`);
+    return;
+  }
 
   const url = notificationUrl(environment, notification);
   const linkHtml = url ? `<p style="margin:24px 0 0"><a href="${escapeHtml(url)}" style="display:inline-block;padding:11px 18px;border-radius:8px;background:#ffd200;color:#171717;text-decoration:none;font-weight:700">Open HINDAZA Project Management</a></p>` : "";
