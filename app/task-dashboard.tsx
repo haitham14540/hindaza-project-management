@@ -2132,7 +2132,7 @@ export default function TaskDashboard() {
   return (
     <div className="app-shell">
       <aside className="sidebar" aria-label="التنقل الرئيسي">
-        <div className="brand-block"><img src="/hindaza-logo.png" alt="HINDAZA Engineering BIM" /><span>PROJECT MANAGEMENT</span></div>
+        <a className="brand-block" href="https://pm.hindaza.com/" aria-label="Go to HINDAZA Project Management home"><img src="/hindaza-logo.png" alt="HINDAZA Engineering BIM" /><span>PROJECT MANAGEMENT</span></a>
         <nav className="nav-list">
           <button className={tab === "overview" ? "active" : ""} onClick={() => setTab("overview")} aria-label="Open Overview"><span className="nav-icon">◫</span><span><strong>Overview</strong><small dir="rtl">نظرة عامة</small></span></button>
           <button className={tab === "projects" ? "active" : ""} onClick={openProjectDirectory} aria-label="Open Project Management"><span className="nav-icon has-image"><img src="/icons/projects-v2.png" alt="" aria-hidden="true" /></span><span><strong>Project</strong><small dir="rtl">المشاريع</small></span></button>
