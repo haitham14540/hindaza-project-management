@@ -3,6 +3,7 @@ import { getDb } from "@/db";
 import { projectMembers, tasks, users } from "@/db/schema";
 import { getCurrentUser, isManagement, isOwner, passwordRecord, unauthorizedResponse } from "@/lib/auth";
 import { recordActivity } from "@/lib/activity";
+import { sendNewEmployeeWelcomeEmail } from "@/lib/notification-delivery";
 
 export const dynamic = "force-dynamic";
 
@@ -66,6 +67,11 @@ export async function POST(request: Request) {
     const credentials = await passwordRecord(temporaryPassword);
     const inserted = await db.insert(users).values({ email, displayName, role: requestedRole, discipline: employeeDiscipline, ...credentials }).returning();
     await recordActivity(db, currentUser, { action: "created", entityType: "user", entityLabel: `${displayName} · ${email}`, details: `${requestedRole} · ${employeeDiscipline}` });
+    try {
+      await sendNewEmployeeWelcomeEmail({ recipientEmail: email, displayName, temporaryPassword });
+    } catch (emailError) {
+      console.error("Welcome email failed; the employee account was created", emailError instanceof Error ? emailError.message : "Unknown email error");
+    }
     return Response.json({ user: safeUser(inserted[0]) }, { status: 201 });
   } catch (error) {
     const unauthorized = unauthorizedResponse(error);
