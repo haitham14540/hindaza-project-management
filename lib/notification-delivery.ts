@@ -1,5 +1,6 @@
+import { eq } from "drizzle-orm";
 import { getDb } from "@/db";
-import { notifications } from "@/db/schema";
+import { notifications, projectIssues, projects, tasks } from "@/db/schema";
 
 type Database = Awaited<ReturnType<typeof getDb>>;
 export type NotificationPayload = Pick<typeof notifications.$inferInsert, "recipientEmail" | "type" | "taskId" | "issueId" | "title" | "message">;
@@ -47,7 +48,27 @@ function senderAddress(value: string) {
   return { address: namedAddress[2], name: namedAddress[1].trim().replace(/^"|"$/g, "") };
 }
 
-async function sendNotificationEmail(notification: NotificationPayload) {
+function englishNotificationTitle(value: string) {
+  return value.split("·")[0].trim();
+}
+
+async function emailRecordDetails(db: Database, notification: NotificationPayload) {
+  if (notification.taskId) {
+    const [task] = await db.select({ title: tasks.title, projectCode: tasks.project }).from(tasks).where(eq(tasks.id, notification.taskId)).limit(1);
+    if (!task) return null;
+    const [project] = await db.select({ name: projects.name }).from(projects).where(eq(projects.code, task.projectCode)).limit(1);
+    return { recordLabel: "Task", recordName: task.title, projectName: project?.name || task.projectCode };
+  }
+  if (notification.issueId) {
+    const [issue] = await db.select({ issueNumber: projectIssues.issueNumber, projectCode: projectIssues.projectCode }).from(projectIssues).where(eq(projectIssues.id, notification.issueId)).limit(1);
+    if (!issue) return null;
+    const [project] = await db.select({ name: projects.name }).from(projects).where(eq(projects.code, issue.projectCode)).limit(1);
+    return { recordLabel: "Issue", recordName: issue.issueNumber, projectName: project?.name || issue.projectCode };
+  }
+  return null;
+}
+
+async function sendNotificationEmail(db: Database, notification: NotificationPayload) {
   const environment = await runtimeEmailEnvironment();
   if (String(environment.EMAIL_NOTIFICATIONS_ENABLED || "").toLowerCase() !== "true") {
     console.warn("Email notification skipped: EMAIL_NOTIFICATIONS_ENABLED is missing or not true");
@@ -65,6 +86,12 @@ async function sendNotificationEmail(notification: NotificationPayload) {
   }
 
   const url = notificationUrl(environment, notification);
+  const details = await emailRecordDetails(db, notification);
+  const emailTitle = englishNotificationTitle(notification.title);
+  const detailsHtml = details
+    ? `<div style="margin:0 0 22px"><div style="padding:12px 14px;background:#f7f7f4;border-left:4px solid #ffd200"><div style="font-size:12px;color:#707070;text-transform:uppercase;letter-spacing:.6px">${details.recordLabel}</div><div style="margin-top:4px;font-size:16px;font-weight:700;color:#171717">${escapeHtml(details.recordName)}</div></div><div style="margin-top:10px;padding:12px 14px;background:#f7f7f4;border-left:4px solid #171717"><div style="font-size:12px;color:#707070;text-transform:uppercase;letter-spacing:.6px">Project</div><div style="margin-top:4px;font-size:16px;font-weight:700;color:#171717">${escapeHtml(details.projectName)}</div></div></div>`
+    : "";
+  const detailsText = details ? `\n\n${details.recordLabel}: ${details.recordName}\nProject: ${details.projectName}` : "";
   const logoUrl = String(environment.APP_BASE_URL || "").replace(/\/$/, "") + "/hindaza-logo.png";
   const logoHtml = environment.APP_BASE_URL
     ? `<img src="${escapeHtml(logoUrl)}" alt="HINDAZA Engineering BIM" width="190" style="display:block;width:190px;max-width:70%;height:auto;border:0;margin:0 auto 10px" />`
@@ -80,9 +107,9 @@ async function sendNotificationEmail(notification: NotificationPayload) {
     body: JSON.stringify({
       from: senderAddress(environment.EMAIL_FROM),
       to: [notification.recipientEmail],
-      subject: notification.title,
-      html: `<div style="font-family:Arial,Tahoma,sans-serif;max-width:620px;margin:auto;color:#202020"><div style="padding:20px 22px 16px;background:#171717;color:#fff;text-align:center;border-bottom:5px solid #ffd200">${logoHtml}<strong style="display:block;font-size:14px;letter-spacing:.5px">PROJECT MANAGEMENT</strong></div><div style="padding:24px;border:1px solid #e5e5df;border-top:0"><h2 style="margin:0 0 14px;font-size:20px">${escapeHtml(notification.title)}</h2><p style="margin:0;line-height:1.7">${escapeHtml(notification.message)}</p>${linkHtml}</div></div>`,
-      text: `${notification.title}\n\n${notification.message}${textLink}`,
+      subject: emailTitle,
+      html: `<div style="font-family:Arial,Tahoma,sans-serif;max-width:620px;margin:auto;color:#202020"><div style="padding:20px 22px 16px;background:#171717;color:#fff;text-align:center;border-bottom:5px solid #ffd200">${logoHtml}<strong style="display:block;font-size:14px;letter-spacing:.5px">PROJECT MANAGEMENT</strong></div><div style="padding:24px;border:1px solid #e5e5df;border-top:0"><h2 style="margin:0 0 18px;font-size:20px">${escapeHtml(emailTitle)}</h2>${detailsHtml}${linkHtml}</div></div>`,
+      text: `${emailTitle}${detailsText}${textLink}`,
     }),
   });
 
@@ -100,7 +127,7 @@ export async function createNotifications(db: Database, input: NotificationPaylo
   await db.insert(notifications).values(payloads);
   for (const payload of payloads) {
     try {
-      await sendNotificationEmail(payload);
+      await sendNotificationEmail(db, payload);
     } catch (error) {
       console.error("Email delivery failed; the in-app notification was preserved", error instanceof Error ? error.message : "Unknown email error");
     }
