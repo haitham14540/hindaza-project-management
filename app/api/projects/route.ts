@@ -3,6 +3,7 @@ import { getDb } from "@/db";
 import { projectIssues, projectMembers, projects, tasks, users } from "@/db/schema";
 import { getCurrentUser, isOwner, unauthorizedResponse } from "@/lib/auth";
 import { recordActivity } from "@/lib/activity";
+import { createNotifications } from "@/lib/notification-delivery";
 
 export const dynamic = "force-dynamic";
 
@@ -49,6 +50,44 @@ async function blockedTaskMembers(db: Database, projectCode: string, removedMemb
   return removedMembers.filter((email) => counts[email] > 0).map((email) => ({ email, taskCount: counts[email] }));
 }
 
+async function notifyAddedProjectMembers(
+  db: Database,
+  project: { code: string; name: string },
+  addedMembers: string[],
+  projectManagerEmails: string[],
+) {
+  if (!addedMembers.length) return;
+  const memberRows = await db.select({
+    email: users.email,
+    discipline: users.discipline,
+  }).from(users).where(inArray(users.email, addedMembers));
+
+  await createNotifications(db, memberRows.map((member) => {
+    const isProjectManager = projectManagerEmails.includes(member.email);
+    const projectRole = isProjectManager ? "Project Manager" : "Team Member";
+    const projectRoleArabic = isProjectManager ? "مدير مشروع" : "عضو فريق";
+    const permissions = isProjectManager
+      ? "Manage the project team and tasks within the permitted discipline"
+      : "View the project and work on assigned tasks";
+    const permissionsArabic = isProjectManager
+      ? "إدارة فريق المشروع والمهام ضمن التخصص المسموح"
+      : "عرض المشروع والعمل على المهام المسندة";
+    const discipline = member.discipline || "Not assigned";
+    return {
+      recipientEmail: member.email,
+      type: "project_member_added" as const,
+      title: "Added to project · تمت إضافتك إلى مشروع",
+      message: `You were added to ${project.name} as ${projectRole}. Discipline: ${discipline}. Permissions: ${permissions}. · تمت إضافتك إلى مشروع ${project.name} بصفة ${projectRoleArabic}. التخصص: ${discipline}. الصلاحيات: ${permissionsArabic}.`,
+      emailDetails: [
+        { label: "Project", value: `${project.name} (${project.code})` },
+        { label: "Project Role", value: projectRole },
+        { label: "Discipline", value: discipline },
+        { label: "Permissions", value: permissions },
+      ],
+    };
+  }));
+}
+
 export async function POST(request: Request) {
   try {
     const currentUser = await getCurrentUser(request);
@@ -69,6 +108,7 @@ export async function POST(request: Request) {
     const inserted = await db.insert(projects).values({ code, name, client: text(payload.client), status: status(payload.status), startDate, targetDate }).returning();
     if (assignedMembers.length) await db.insert(projectMembers).values(assignedMembers.map((employeeEmail) => ({ projectId: inserted[0].id, employeeEmail, isProjectManager: assignedProjectManagers.includes(employeeEmail) })));
     await recordActivity(db, currentUser, { action: "created", entityType: "project", entityId: inserted[0].id, entityLabel: `${code} · ${name}`, projectCode: code, details: `Project created with ${assignedMembers.length} team members` });
+    await notifyAddedProjectMembers(db, inserted[0], assignedMembers, assignedProjectManagers);
     return Response.json({ project: { ...inserted[0], memberEmails: assignedMembers, projectManagerEmails: assignedProjectManagers } }, { status: 201 });
   } catch (error) {
     const unauthorized = unauthorizedResponse(error);
@@ -137,6 +177,8 @@ export async function PATCH(request: Request) {
       ])].filter((email) => assignedMembers.includes(email));
     if (assignedMembers.length) await db.insert(projectMembers).values(assignedMembers.map((employeeEmail) => ({ projectId: id, employeeEmail, isProjectManager: assignedProjectManagers.includes(employeeEmail) })));
     await recordActivity(db, currentUser, { action: "updated", entityType: "project", entityId: id, entityLabel: `${code} · ${updated[0].name}`, projectCode: code, details: `${currentUser.role === "manager" ? "Discipline membership" : "Project details and membership"} updated; ${assignedMembers.length} team members` });
+    const addedMembers = assignedMembers.filter((email) => !currentMembers.includes(email));
+    await notifyAddedProjectMembers(db, updated[0], addedMembers, assignedProjectManagers);
     return Response.json({ project: { ...updated[0], memberEmails: assignedMembers, projectManagerEmails: assignedProjectManagers }, removedInvalidMembers: requestedMembers.length - validRequested.length });
   } catch (error) {
     const unauthorized = unauthorizedResponse(error);
