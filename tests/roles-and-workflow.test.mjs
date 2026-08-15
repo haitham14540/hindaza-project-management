@@ -1668,3 +1668,13 @@ test("V124 formats the Cloudflare sender display name as a named address", async
   assert.match(delivery, /return \{ address: namedAddress\[2\], name: namedAddress\[1\]/);
   assert.match(delivery, /from: senderAddress\(environment\.EMAIL_FROM\)/);
 });
+
+test("V130 links the header company logo to the application home", async () => {
+  const [dashboard, styles] = await Promise.all([
+    source("app/task-dashboard.tsx"),
+    source("app/globals.css"),
+  ]);
+  assert.match(dashboard, /<a className="brand-block" href="https:\/\/pm\.hindaza\.com\/"/);
+  assert.match(dashboard, /aria-label="Go to HINDAZA Project Management home"/);
+  assert.match(styles, /\.brand-block:focus-visible/);
+});
