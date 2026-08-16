@@ -160,7 +160,12 @@ button { cursor: pointer; }
 .project-switcher-button { width: 36px; height: 36px; display: grid; place-items: center; border: 1px solid #171717; border-radius: 11px; background: linear-gradient(145deg, #242424, #090909); color: var(--yellow); box-shadow: inset 0 0 0 2px rgba(255,207,0,.18), 0 6px 16px rgba(0,0,0,.14); transition: transform .16s ease, box-shadow .16s ease, border-color .16s ease; }
 .project-switcher-button svg { width: 19px; height: 19px; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
 .project-switcher-button:hover, .project-switcher-button[aria-expanded="true"] { transform: translateY(-1px); border-color: var(--yellow); box-shadow: inset 0 0 0 2px rgba(255,207,0,.25), 0 8px 20px rgba(0,0,0,.18); }
-.project-switcher-menu { position: absolute; z-index: 80; top: 43px; right: 0; width: min(290px, calc(100vw - 32px)); max-height: 310px; overflow-y: auto; padding: 6px; border: 1px solid #d9d9d2; border-radius: 12px; background: #fff; box-shadow: 0 18px 45px rgba(0,0,0,.18); }
+.project-switcher-menu { position: absolute; z-index: 80; top: 43px; right: 0; width: min(310px, calc(100vw - 32px)); max-height: 340px; overflow-y: auto; padding: 6px; border: 1px solid #d9d9d2; border-radius: 12px; background: #fff; box-shadow: 0 18px 45px rgba(0,0,0,.18); }
+.project-switcher-search { position: sticky; z-index: 1; top: -6px; display: block; padding: 6px 4px 8px; background: #fff; }
+.project-switcher-search span { position: absolute; left: 14px; top: 15px; color: #829096; font-size: 14px; }
+.project-switcher-search input { width: 100%; height: 35px; padding: 0 10px 0 31px; border: 1px solid #d7dfe1; border-radius: 8px; background: #fbfcfc; color: #26363d; font: inherit; font-size: 10px; outline: none; }
+.project-switcher-search input:focus { border-color: #d1aa00; box-shadow: 0 0 0 3px rgba(255,210,0,.16); }
+.project-switcher-empty { padding: 18px 10px; color: #7d898e; text-align: center; font-size: 9px; }
 .project-switcher-menu > button { width: 100%; padding: 10px 11px; border: 0; border-radius: 8px; background: transparent; color: #171717; display: grid; gap: 4px; text-align: left; }
 .project-switcher-menu > button:hover { background: #f5f5f1; }
 .project-switcher-menu > button.active { background: #fff7ca; }
@@ -317,6 +322,10 @@ button { cursor: pointer; }
 .directory-table-wrap { margin: 0; border-radius: 0; box-shadow: none; }
 .directory-table tbody tr { cursor: pointer; }
 .team-management-table tbody tr { cursor: pointer; }
+.team-management-table td { padding-top: 8px; padding-bottom: 8px; }
+.team-management-table .avatar { width: 30px; height: 30px; font-size: 10px; }
+.team-management-table .employee-cell strong { color: var(--navy); font-size: 13px; font-weight: 900; line-height: 1.2; }
+.team-management-table .employee-summary-trigger { min-height: 34px; }
 .team-management-table tbody tr:focus-visible { outline: 3px solid rgba(255,210,0,.45); outline-offset: -3px; }
 .team-settings-column { width: 70px; text-align: center !important; }
 .team-settings-button { width: 33px; height: 33px; font-size: 17px; }
@@ -935,7 +944,7 @@ button { cursor: pointer; }
 .window-task-title-progress .task-progress-circle { width: 30px; height: 30px; flex-basis: 30px; font-size: 7px; }
 .window-task-title-progress .task-progress-circle::before { inset: 3px; }
 .window-task-title-progress .task-progress-menu { left: 0; right: auto; }
-.employee-task-title { display: inline-flex; align-items: center; gap: 7px; max-width: 100%; }
+.employee-task-title { display: inline-flex; flex-direction: row; align-items: center; justify-content: flex-start; gap: 7px; max-width: 100%; direction: ltr; }
 .employee-task-live-pulse { width: 8px; height: 8px; flex: 0 0 8px; border-radius: 50%; background: #2f9b70; box-shadow: 0 0 0 0 rgba(47,155,112,.5); animation: activeWorkPulse 1.35s ease-out infinite; }
 .linked-issue-button { border: 1px solid #d5ab00; border-radius: 7px; background: #fff7cf; color: #5d4a00; padding: 5px 8px; font: inherit; font-weight: 800; white-space: nowrap; cursor: pointer; }
 .linked-issue-button:hover { background: #ffd200; color: #171717; }
@@ -1291,6 +1300,25 @@ button.overview-kpi:hover { transform: translateY(-2px); border-color: #d8bc35; 
 .project-member-email { display: block; margin: 2px 0 1px; color: #748087; font-size: 8px; font-weight: 500; direction: ltr; }
 .task-title-progress { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .task-title-progress > strong { min-width: 0; overflow-wrap: anywhere; }
+.task-title-progress::after {
+  width: 8px;
+  height: 8px;
+  flex: 0 0 8px;
+  border-radius: 50%;
+}
+.task-table tbody tr:has(.live-hours) .task-title-progress::after {
+  content: "";
+  display: inline-block;
+  margin-inline-start: 7px;
+  background: #2f9b70;
+  box-shadow: 0 0 0 0 rgba(47,155,112,.5);
+  animation: activeWorkPulse 1.35s ease-out infinite;
+  vertical-align: middle;
+}
+.task-progress-live-wrap { position: relative; display: inline-flex; align-items: center; gap: 5px; flex: 0 0 auto; }
+.task-progress-live-wrap > .employee-task-live-pulse { width: 7px; height: 7px; flex-basis: 7px; }
+.task-title-progress .task-progress-live-wrap > .employee-task-live-pulse,
+.window-task-title-progress .task-progress-live-wrap > .employee-task-live-pulse { display: none; }
 .task-progress-control { position: relative; flex: 0 0 auto; }
 .task-progress-control > summary { list-style: none; cursor: pointer; }
 .task-progress-control > summary::-webkit-details-marker { display: none; }

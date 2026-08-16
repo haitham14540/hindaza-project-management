@@ -195,7 +195,7 @@ export async function DELETE(request: Request) {
     const db = await getDb();
     const [project] = await db.select().from(projects).where(eq(projects.id, id)).limit(1);
     if (!project) return Response.json({ error: "Project not found." }, { status: 404 });
-    const [[taskCount], [issueCount], [teamCount]] = await Promise.all([
+    const [[taskCount], [issueCount], [teamCount]] = await db.batch([
       db.select({ total: count() }).from(tasks).where(eq(tasks.project, project.code)),
       db.select({ total: count() }).from(projectIssues).where(eq(projectIssues.projectCode, project.code)),
       db.select({ total: count() }).from(projectMembers).where(eq(projectMembers.projectId, id)),

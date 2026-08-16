@@ -7,6 +7,7 @@ type EmailDetail = { label: string; value: string };
 export type NotificationPayload = Pick<typeof notifications.$inferInsert, "recipientEmail" | "type" | "taskId" | "issueId" | "title" | "message"> & {
   emailDetails?: EmailDetail[];
   actorName?: string;
+  actorLabel?: string;
 };
 
 type EmailRuntimeEnvironment = {
@@ -70,7 +71,10 @@ async function emailRecordDetails(db: Database, notification: NotificationPayloa
     const [project] = await db.select({ name: projects.name }).from(projects).where(eq(projects.code, issue.projectCode)).limit(1);
     details = [{ label: "Issue", value: issue.issueNumber }, { label: "Project", value: project?.name || issue.projectCode }];
   }
-  if (notification.actorName) details = [...(details || []), { label: "Action By", value: notification.actorName }];
+  if (notification.actorName) {
+    const actorLabel = notification.actorLabel || (notification.type === "task_assigned" ? "Created By" : "Action By");
+    details = [...(details || []), { label: actorLabel, value: notification.actorName }];
+  }
   return details;
 }
 

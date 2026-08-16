@@ -190,6 +190,7 @@ export async function POST(request: Request) {
         title: "New task assigned · تم إسناد مهمة جديدة",
         message: `${title} · ${project} · مهمة جديدة`,
         actorName: currentUser.displayName,
+        actorLabel: "Created By",
       });
     }
 
@@ -199,8 +200,9 @@ export async function POST(request: Request) {
   } catch (error) {
     const unauthorized = unauthorizedResponse(error);
     if (unauthorized) return unauthorized;
+    console.error("Unable to create task", error);
     return Response.json(
-      { error: error instanceof Error ? error.message : "Unable to create task" },
+      { error: "Unable to create the task right now. Please retry. · تعذر إنشاء المهمة حاليًا، يرجى إعادة المحاولة." },
       { status: 500 },
     );
   }
@@ -305,6 +307,15 @@ export async function PATCH(request: Request) {
     const employeeName = management
       ? text(payload.employeeName, 120) || existing[0].employeeName
       : existing[0].employeeName;
+    const requestedCreatedBy = currentUser.role === "owner"
+      ? text(payload.createdBy, 180).toLowerCase() || existing[0].createdBy
+      : existing[0].createdBy;
+    if (currentUser.role === "owner" && requestedCreatedBy !== existing[0].createdBy) {
+      const [creatorAccount] = await db.select({ email: users.email }).from(users)
+        .where(and(eq(users.email, requestedCreatedBy), eq(users.active, true)))
+        .limit(1);
+      if (!creatorAccount) return Response.json({ error: "Select an active user as Created By." }, { status: 400 });
+    }
     const employeeChanged = management && employeeEmail !== existing[0].employeeEmail;
     const reassignmentAfterSubmission = existing[0].submittedToManager || existing[0].managerCheck === "pending";
     if (employeeChanged) {
@@ -351,7 +362,9 @@ export async function PATCH(request: Request) {
         originatedByName: adoptingSubmittedTask ? (existing[0].originatedByName || existing[0].employeeName) : existing[0].originatedByName,
         acceptedByEmail: adoptingSubmittedTask ? currentUser.email : existing[0].acceptedByEmail,
         acceptedByName: adoptingSubmittedTask ? currentUser.displayName : existing[0].acceptedByName,
-        createdBy: adoptingSubmittedTask ? currentUser.email : existing[0].createdBy,
+        createdBy: currentUser.role === "owner"
+          ? requestedCreatedBy
+          : adoptingSubmittedTask ? currentUser.email : existing[0].createdBy,
         workCycle: employeeChanged && reassignmentAfterSubmission ? existing[0].workCycle + 1 : management && requestedCheck === "returned" && existing[0].managerCheck !== "returned" ? existing[0].workCycle + 1 : existing[0].workCycle,
         updatedAt: sql`CURRENT_TIMESTAMP`,
       })
@@ -382,9 +395,13 @@ export async function PATCH(request: Request) {
     }
 
 
-    await recordActivity(db, currentUser, { action: "updated", entityType: "task", entityId: id, entityLabel: updated[0].title, projectCode: updated[0].project, details: management ? `Manager review: ${updated[0].managerCheck}` : "Task details updated" });
+    await recordActivity(db, currentUser, { action: "updated", entityType: "task", entityId: id, entityLabel: updated[0].title, projectCode: updated[0].project, details: currentUser.role === "owner" && requestedCreatedBy !== existing[0].createdBy ? `Created By changed from ${existing[0].createdBy} to ${requestedCreatedBy}` : management ? `Manager review: ${updated[0].managerCheck}` : "Task details updated" });
+    const [creatorDetails] = await db.select({ displayName: users.displayName, profileImageKey: users.profileImageKey })
+      .from(users)
+      .where(eq(users.email, updated[0].createdBy))
+      .limit(1);
 
-    return Response.json({ task: updated[0] });
+    return Response.json({ task: { ...updated[0], createdByName: creatorDetails?.displayName || "Unknown user", createdByProfileImageKey: creatorDetails?.profileImageKey || "" } });
   } catch (error) {
     const unauthorized = unauthorizedResponse(error);
     if (unauthorized) return unauthorized;

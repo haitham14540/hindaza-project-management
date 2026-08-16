@@ -3,14 +3,34 @@ import { getD1 } from "@/db";
 let initialization: Promise<unknown> | null = null;
 
 export async function ensureDatabase() {
-  // Hosted databases are provisioned and migrated during deployment. Running
-  // the full DDL batch from normal production requests creates write locks and
-  // can stall authenticated reads such as /api/bootstrap. Keep the fallback
-  // initializer for local development only.
-  if (process.env.NODE_ENV === "production") return true;
   const d1 = await getD1();
   if (!initialization) {
     initialization = (async () => {
+      // Normal hosted deployments apply migrations before serving traffic.
+      // GitHub/Cloudflare deployments can briefly run newer application code
+      // against an older D1 schema, so keep this production check deliberately
+      // narrow and additive instead of running the full local initializer.
+      if (process.env.NODE_ENV === "production") {
+        const taskColumns = await d1.prepare("PRAGMA table_info(tasks)").all<{ name: string }>();
+        if (!taskColumns.results.some((column) => column.name === "completion_percent")) {
+          try {
+            await d1.prepare("ALTER TABLE tasks ADD COLUMN completion_percent INTEGER DEFAULT 0 NOT NULL").run();
+          } catch (error) {
+            const refreshed = await d1.prepare("PRAGMA table_info(tasks)").all<{ name: string }>();
+            if (!refreshed.results.some((column) => column.name === "completion_percent")) throw error;
+          }
+          await d1.prepare("UPDATE tasks SET completion_percent = 100 WHERE status = 'done' AND completion_percent = 0").run();
+        }
+        if (!taskColumns.results.some((column) => column.name === "completion_before_review")) {
+          try {
+            await d1.prepare("ALTER TABLE tasks ADD COLUMN completion_before_review INTEGER DEFAULT 0 NOT NULL").run();
+          } catch (error) {
+            const refreshed = await d1.prepare("PRAGMA table_info(tasks)").all<{ name: string }>();
+            if (!refreshed.results.some((column) => column.name === "completion_before_review")) throw error;
+          }
+        }
+        return true;
+      }
       await d1.batch([
       d1.prepare(`
         CREATE TABLE IF NOT EXISTS users (

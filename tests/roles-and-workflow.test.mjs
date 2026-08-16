@@ -82,7 +82,8 @@ test("workspace data syncs automatically, notifications open fresh tasks, and ta
     source("app/api/notifications/route.ts"),
     source("app/api/profile-image/route.ts"),
   ]);
-  assert.match(dashboard, /setInterval\(refresh, 30_000\)/);
+  assert.match(dashboard, /setInterval\(refresh, 60_000\)/);
+  assert.match(dashboard, /Date\.now\(\) - lastWorkspaceSyncAtRef\.current < 20_000/);
   assert.match(dashboard, /fetchWorkspaceData/);
   assert.match(dashboard, /applyWorkspaceData\(data, initialize\)/);
   assert.match(dashboard, /freshData\?\.tasks\.find/);
@@ -108,9 +109,11 @@ test("workspace loading times out safely, prevents overlap, and can be retried",
   assert.match(dashboard, /<ButtonLabel en="Retry" ar="إعادة المحاولة"/);
   assert.match(bootstrapApi, /no-store, no-cache, must-revalidate/);
   assert.doesNotMatch(bootstrapApi, /selectDistinct\(\{ code: tasks\.project \}\)/);
-  assert.match(bootstrapApi, /const \[allTaskRows, userRows, allProjectRows, membershipRows\] = await Promise\.all/);
-  assert.match(bootstrapApi, /const \[allCommentRows, allTimeRows, allSubtaskRows, allTaskAttachmentRows, notificationRows\] = await Promise\.all/);
-  assert.match(databaseInit, /if \(process\.env\.NODE_ENV === "production"\) return true/);
+  assert.doesNotMatch(bootstrapApi, /const \[allTaskRows, userRows, allProjectRows, membershipRows\] = await Promise\.all/);
+  assert.doesNotMatch(bootstrapApi, /const \[allCommentRows, allTimeRows, allSubtaskRows, allTaskAttachmentRows, notificationRows\] = await Promise\.all/);
+  assert.match(databaseInit, /if \(process\.env\.NODE_ENV === "production"\) \{/);
+  assert.match(databaseInit, /PRAGMA table_info\(tasks\)/);
+  assert.doesNotMatch(databaseInit, /if \(process\.env\.NODE_ENV === "production"\) return true/);
 });
 
 test("project issues use shared projects and users with attachments and linked task conversion", async () => {
@@ -599,7 +602,7 @@ test("project overview is a detailed drill-down dashboard and Office attachments
   assert.match(dashboard, /Tasks needing attention/);
   assert.match(dashboard, /Issues needing attention/);
   assert.match(dashboard, /openIssueFromOverview/);
-  assert.match(dashboard, /fetchWorkspaceData\(timeoutMs = 25_000\)/);
+  assert.match(dashboard, /fetchWorkspaceData\(timeoutMs = 15_000\)/);
   assert.match(issuesModule, /function OfficePreview/);
   assert.match(issuesModule, /mammoth\/mammoth\.browser/);
   assert.match(issuesModule, /sheet_to_html/);
@@ -786,7 +789,7 @@ test("project managers see assignments while submitted employee tasks can be acc
 });
 
 test("projects archive cleanly and tasks support guarded subtasks with optional attachments", async () => {
-  const [dashboard, schema, projectsApi, subtasksApi, attachmentsApi, tasksApi, timerApi, bootstrapApi, styles, migration] = await Promise.all([
+  const [dashboard, schema, projectsApi, subtasksApi, attachmentsApi, tasksApi, timerApi, taskDetailsApi, styles, migration] = await Promise.all([
     source("app/task-dashboard.tsx"),
     source("db/schema.ts"),
     source("app/api/projects/route.ts"),
@@ -794,7 +797,7 @@ test("projects archive cleanly and tasks support guarded subtasks with optional 
     source("app/api/task-attachments/route.ts"),
     source("app/api/tasks/route.ts"),
     source("app/api/task-timer/route.ts"),
-    source("app/api/bootstrap/route.ts"),
+    source("app/api/task-details/route.ts"),
     source("app/globals.css"),
     source("drizzle/0013_outstanding_lady_vermin.sql"),
   ]);
@@ -813,8 +816,8 @@ test("projects archive cleanly and tasks support guarded subtasks with optional 
   assert.match(attachmentsApi, /subtaskId/);
   assert.doesNotMatch(tasksApi, /Complete all subtasks before sending this task/);
   assert.match(timerApi, /Complete all subtasks before \$\{submitForReview \? "submitting" : "finishing"\} this task/);
-  assert.match(bootstrapApi, /subtasks: subtaskRows/);
-  assert.match(bootstrapApi, /taskAttachments: taskAttachmentRows/);
+  assert.match(taskDetailsApi, /subtasks, taskAttachments: attachments/);
+  assert.match(taskDetailsApi, /taskForView/);
   assert.match(dashboard, /Task Attachments/);
   assert.match(dashboard, /Subtasks/);
   assert.match(dashboard, /className="subtask-indicator"/);
@@ -1034,8 +1037,7 @@ test("V80 simplifies task and issue tables and normalizes legacy issue numbers",
   assert.match(issuesModule, /<th>Issue Number<\/th><th>Description<\/th><th>Raised By<\/th><th>Discipline<\/th>/);
   assert.doesNotMatch(issuesModule, /<span className="project-code">\{issue\.projectCode\}<\/span>/);
   assert.doesNotMatch(issuesModule, /Raised by \{issue\.raisedByName\}/);
-  assert.match(issuesApi, /const normalizedNumber = issueNumber\(issue\.projectCode, issue\.discipline, issue\.sequence\)/);
-  assert.match(issuesApi, /issueNumber: normalizedNumber/);
+  assert.match(issuesApi, /issueNumber: issueNumber\(issue\.projectCode, issue\.discipline, issue\.sequence\)/);
 });
 
 test("V82 shows a framed employee image in the editor and lets only the owner manage it", async () => {
@@ -1099,7 +1101,8 @@ test("V85 shows attachment and issue-note counts in the task and issue tables", 
     source("app/globals.css"),
   ]);
   assert.match(dashboard, /attachments=\{taskAttachments\}/);
-  assert.match(dashboard, /const attachmentCount = props\.attachments\.filter\(\(attachment\) => attachment\.taskId === task\.id\)\.length/);
+  assert.match(dashboard, /const attachmentsByTaskId = useMemo\(\(\) => rowsByTaskId\(props\.attachments\)/);
+  assert.match(dashboard, /const attachmentCount = detailsLoaded \? attachmentsByTaskId\.get\(task\.id\)\?\.length \|\| 0 : task\.attachmentCount \|\| 0/);
   assert.match(dashboard, /task-attachment-indicator/);
   assert.match(issuesModule, /const internalNoteCount = issue\.notes\.filter\(\(note\) => note\.section === "internal"\)\.length/);
   assert.match(issuesModule, /const clientNoteCount = issue\.notes\.filter\(\(note\) => note\.section === "client"\)\.length/);
@@ -1150,8 +1153,9 @@ test("V89 bounds issue loading and keeps D1 reads below the concurrent subreques
     source("app/issues-module.tsx"),
   ]);
   assert.match(issuesApi, /const issues = await db\.select\(\)\.from\(projectIssues\)/);
-  assert.match(issuesApi, /const \[attachments, notes, createdActivities\] = await Promise\.all/);
-  assert.match(issuesApi, /raisedByEmails\.length\s*\? await db\.select/);
+  assert.match(issuesApi, /const \[chunkAttachments, chunkNotes, chunkActivities\] = await db\.batch/);
+  assert.match(issuesApi, /ISSUE_QUERY_CHUNK_SIZE = 85/);
+  assert.match(issuesApi, /inArray\(issueAttachments\.issueId, issueIds\)/);
   assert.doesNotMatch(issuesApi, /\[issues, attachments, notes, createdActivities, raisedByAccounts\] = await Promise\.all/);
   assert.match(issuesModule, /const ISSUE_LOAD_TIMEOUT_MS = 15_000/);
   assert.match(issuesModule, /signal: controller\.signal/);
@@ -1544,7 +1548,7 @@ test("V116 restores report period navigation and refines task and issue dialogs"
   assert.match(dashboard, /event\.key === "Escape"/);
   assert.match(issues, /ref=\{issueGroupsRef\} onWheel=\{handleIssueWheel\}/);
   assert.match(issues, /\{projectCode && <th>Attachments<\/th>\}/);
-  assert.match(issues, /\{issue\.attachments\.length\}/);
+  assert.match(issues, /issue\.attachmentCount \?\? issue\.attachments\.length/);
   assert.doesNotMatch(issues, /Issue totals and status by project/);
   assert.match(styles, /\.report-project-count \{ display: block;/);
   assert.match(styles, /\.issue-report-track \{ direction: ltr;[^}]*display: flex;/);
@@ -1708,7 +1712,7 @@ test("V131 opens on overview and adds task progress, actor-aware email, project 
   assert.match(timerApi, /managementPause/);
   assert.match(timerApi, /task\.employeeEmail/);
   assert.match(delivery, /actorName\?: string/);
-  assert.match(delivery, /label: "Action By"/);
+  assert.match(delivery, /\? "Created By" : "Action By"/);
 });
 
 test("V132 moves progress into the task field and restores it when review is returned", async () => {
@@ -1789,4 +1793,137 @@ test("V135 restores the nearest populated task report period and places Approved
   assert.match(dashboard, /dates\.filter\(\(date\) => date <= localToday\(\)\)\.at\(-1\) \|\| dates\[0\]/);
   assert.match(dashboard, /stat-card amber[\s\S]*?projectStats\.returned[\s\S]*?stat-card green[\s\S]*?projectStats\.approved/);
   assert.match(dashboard, /stat-card amber[\s\S]*?stats\.returned[\s\S]*?stat-card green[\s\S]*?stats\.approved/);
+});
+
+test("V136 repairs missing task progress columns safely in production", async () => {
+  const [init, tasksApi] = await Promise.all([
+    source("lib/db-init.ts"),
+    source("app/api/tasks/route.ts"),
+  ]);
+  assert.doesNotMatch(init, /if \(process\.env\.NODE_ENV === "production"\) return true/);
+  assert.match(init, /if \(process\.env\.NODE_ENV === "production"\) \{/);
+  assert.match(init, /PRAGMA table_info\(tasks\)/);
+  assert.match(init, /ALTER TABLE tasks ADD COLUMN completion_percent INTEGER DEFAULT 0 NOT NULL/);
+  assert.match(init, /ALTER TABLE tasks ADD COLUMN completion_before_review INTEGER DEFAULT 0 NOT NULL/);
+  assert.match(init, /UPDATE tasks SET completion_percent = 100 WHERE status = 'done'/);
+  assert.match(tasksApi, /console\.error\("Unable to create task", error\)/);
+  assert.match(tasksApi, /Unable to create the task right now\. Please retry\./);
+  assert.doesNotMatch(tasksApi, /\{ error: error instanceof Error \? error\.message : "Unable to create task" \}/);
+});
+
+test("V137 names the task creator explicitly in assignment emails", async () => {
+  const [tasksApi, delivery] = await Promise.all([
+    source("app/api/tasks/route.ts"),
+    source("lib/notification-delivery.ts"),
+  ]);
+  assert.match(tasksApi, /type: "task_assigned"[\s\S]*?actorName: currentUser\.displayName/);
+  assert.match(delivery, /notification\.type === "task_assigned" \? "Created By" : "Action By"/);
+  assert.match(delivery, /\{ label: actorLabel, value: notification\.actorName \}/);
+});
+
+test("V138 sends an explicit Created By label with every new task assignment", async () => {
+  const [tasksApi, delivery] = await Promise.all([
+    source("app/api/tasks/route.ts"),
+    source("lib/notification-delivery.ts"),
+  ]);
+  assert.match(tasksApi, /type: "task_assigned"[\s\S]*?actorName: currentUser\.displayName,[\s\S]*?actorLabel: "Created By"/);
+  assert.match(delivery, /actorLabel\?: string/);
+  assert.match(delivery, /notification\.actorLabel \|\| \(notification\.type === "task_assigned" \? "Created By" : "Action By"\)/);
+});
+
+test("V139 keeps owner private tasks, expands live indicators, and improves navigation, team, and exports", async () => {
+  const [bootstrap, tasksApi, dashboard, styles] = await Promise.all([
+    source("app/api/bootstrap/route.ts"),
+    source("app/api/tasks/route.ts"),
+    source("app/task-dashboard.tsx"),
+    source("app/globals.css"),
+  ]);
+  assert.match(bootstrap, /currentUser\.role === "owner"[\s\S]*?task\.visibility === "team"[\s\S]*?task\.submittedToManager[\s\S]*?task\.createdBy === currentUser\.email[\s\S]*?task\.employeeEmail === currentUser\.email/);
+  assert.match(dashboard, /createdBy: task\.createdBy/);
+  assert.match(dashboard, /currentUser\?\.role === "owner"[\s\S]*?assignment-created-by[\s\S]*?updateForm\("createdBy"/);
+  assert.match(tasksApi, /const requestedCreatedBy = currentUser\.role === "owner"/);
+  assert.match(tasksApi, /Created By changed from/);
+  assert.match(dashboard, /projectSwitcherSearch/);
+  assert.match(dashboard, /placeholder="Search project\.\.\."/);
+  assert.match(styles, /\.project-switcher-search/);
+  assert.match(dashboard, /a\.displayName\.localeCompare\(b\.displayName/);
+  assert.match(styles, /\.team-management-table td \{ padding-top: 8px; padding-bottom: 8px;/);
+  assert.match(dashboard, /className="task-progress-live-wrap"/);
+  assert.match(dashboard, /report-detail-table/);
+  assert.match(dashboard, /\$\{reportTable\}<div class="footer">/);
+  assert.doesNotMatch(dashboard, /<table className="report-detail-table"/);
+});
+
+test("V143 scopes production reads so workspace loading stays responsive", async () => {
+  const [bootstrap, issuesApi, dashboard, schema, migration] = await Promise.all([
+    readFile("app/api/bootstrap/route.ts", "utf8"),
+    readFile("app/api/issues/route.ts", "utf8"),
+    readFile("app/task-dashboard.tsx", "utf8"),
+    readFile("db/schema.ts", "utf8"),
+    readFile("drizzle/0020_tired_miracleman.sql", "utf8"),
+  ]);
+  assert.doesNotMatch(bootstrap, /allCommentRows|allSubtaskRows|allTaskAttachmentRows/);
+  assert.match(bootstrap, /timeEntriesMode: "active"/);
+  assert.match(bootstrap, /TASK_QUERY_CHUNK_SIZE = 90/);
+  assert.match(bootstrap, /isNull\(taskTimeEntries\.endedAt\)/);
+  assert.match(bootstrap, /inArray\(projectIssues\.convertedTaskId, taskIds\)/);
+  assert.match(bootstrap, /\.limit\(200\)/);
+  assert.match(bootstrap, /process\.env\.NODE_ENV !== "production" && isManagement\(currentUser\)/);
+  assert.match(issuesApi, /summaryOnly = url\.searchParams\.get\("summary"\) === "1"/);
+  assert.match(issuesApi, /requestedProject \? eq\(projectIssues\.projectCode, requestedProject\) : undefined/);
+  assert.match(dashboard, /fetch\("\/api\/issues\?summary=1"/);
+  assert.match(dashboard, /setInterval\(refresh, 60_000\)/);
+  assert.match(schema, /project_issues_converted_task_idx/);
+  assert.match(migration, /CREATE INDEX `tasks_project_created_idx`/);
+});
+
+test("V142 places live pulses after task names and keeps newly invited discipline members visible to managers", async () => {
+  const [bootstrap, dashboard, css] = await Promise.all([
+    readFile("app/api/bootstrap/route.ts", "utf8"),
+    readFile("app/task-dashboard.tsx", "utf8"),
+    readFile("app/globals.css", "utf8"),
+  ]);
+  assert.match(bootstrap, /user\.role === "member" && user\.discipline === currentUser\.discipline/);
+  assert.match(dashboard, /const livePulse = task\.status === "in_progress"/);
+  assert.match(css, /\.task-title-progress \.task-progress-live-wrap > \.employee-task-live-pulse/);
+  assert.match(css, /\.task-table tbody tr:has\(\.live-hours\) \.task-title-progress::after/);
+  assert.match(dashboard, /<span className="employee-task-title"><strong dir="auto">\{task\.title\}<\/strong>\{active && <i className="employee-task-live-pulse"/);
+  assert.match(css, /\.employee-task-title \{[^}]*flex-direction: row;[^}]*direction: ltr;/);
+});
+
+test("V144 keeps report pulses on the task right and removes hidden high-volume bottlenecks", async () => {
+  const [dashboard, issuesModule, issuesApi, backupApi, projectsApi, timerApi] = await Promise.all([
+    source("app/task-dashboard.tsx"),
+    source("app/issues-module.tsx"),
+    source("app/api/issues/route.ts"),
+    source("app/api/backup/route.ts"),
+    source("app/api/projects/route.ts"),
+    source("app/api/task-timer/route.ts"),
+  ]);
+  assert.match(dashboard, /const timeEntriesByTaskId = useMemo\(\(\) => rowsByTaskId\(timeEntries\)/);
+  assert.match(dashboard, /const activeTaskIds = useMemo/);
+  assert.match(dashboard, /<span className="employee-task-title"><strong dir="auto">\{task\.title\}<\/strong>\{active && <i className="employee-task-live-pulse"/);
+  assert.match(issuesModule, /fetchIssues\("", true\)/);
+  assert.match(issuesModule, /Unable to load issue report/);
+  assert.match(issuesApi, /reportOnly = url\.searchParams\.get\("report"\) === "1"/);
+  assert.match(issuesApi, /issues: await issueRows\(existing\.projectCode\)/);
+  assert.match(backupApi, /await db\.batch\(\[/);
+  assert.match(projectsApi, /const \[\[taskCount\], \[issueCount\], \[teamCount\]\] = await db\.batch/);
+  assert.match(timerApi, /const \[taskRows, entryRows\] = await db\.batch/);
+});
+
+test("V145 renders the workspace before loading task history and fetches task details on demand", async () => {
+  const [bootstrap, taskDetails, dashboard] = await Promise.all([
+    source("app/api/bootstrap/route.ts"),
+    source("app/api/task-details/route.ts"),
+    source("app/task-dashboard.tsx"),
+  ]);
+  assert.doesNotMatch(bootstrap, /from\(taskComments\)|from\(taskSubtasks\)|from\(taskAttachments\)/);
+  assert.match(bootstrap, /isNull\(taskTimeEntries\.endedAt\)/);
+  assert.match(bootstrap, /timeEntriesMode: "active"/);
+  assert.match(taskDetails, /taskForView\(db, currentUser, taskId\)/);
+  assert.match(taskDetails, /await Promise\.all\(\[/);
+  assert.match(dashboard, /fetchTaskDetails\(taskId/);
+  assert.match(dashboard, /taskDetailsLoaderRef\.current\(task\.id\)/);
+  assert.match(dashboard, /current\.filter\(\(row\) => row\.taskId !== taskId\)/);
 });

@@ -9,6 +9,13 @@ export const dynamic = "force-dynamic";
 
 type Database = Awaited<ReturnType<typeof getDb>>;
 type TimerAction = "start" | "pause" | "finish";
+const TIMER_QUERY_CHUNK_SIZE = 90;
+
+function chunks<T>(values: T[], size = TIMER_QUERY_CHUNK_SIZE) {
+  const result: T[][] = [];
+  for (let index = 0; index < values.length; index += size) result.push(values.slice(index, index + size));
+  return result;
+}
 
 async function canAuditTask(db: Database, currentUser: Awaited<ReturnType<typeof getCurrentUser>>, task: typeof tasks.$inferSelect) {
   if (currentUser.role === "owner") return true;
@@ -232,12 +239,15 @@ export async function POST(request: Request) {
     }
 
     const uniqueTaskIds = [...new Set(affectedTasks.filter(Boolean).map((item) => item.id))];
-    const freshTasks = [];
-    const entries = [];
-    for (const id of uniqueTaskIds) {
-      const row = await db.select().from(tasks).where(eq(tasks.id, id)).limit(1);
-      if (row[0]) freshTasks.push(row[0]);
-      entries.push(...await db.select().from(taskTimeEntries).where(eq(taskTimeEntries.taskId, id)).orderBy(asc(taskTimeEntries.startedAt), asc(taskTimeEntries.id)));
+    const freshTasks: (typeof tasks.$inferSelect)[] = [];
+    const entries: (typeof taskTimeEntries.$inferSelect)[] = [];
+    for (const taskIds of chunks(uniqueTaskIds)) {
+      const [taskRows, entryRows] = await db.batch([
+        db.select().from(tasks).where(inArray(tasks.id, taskIds)),
+        db.select().from(taskTimeEntries).where(inArray(taskTimeEntries.taskId, taskIds)).orderBy(asc(taskTimeEntries.startedAt), asc(taskTimeEntries.id)),
+      ]);
+      freshTasks.push(...taskRows);
+      entries.push(...entryRows);
     }
     await recordActivity(db, currentUser, { action: "timer_updated", entityType: "task", entityId: taskId, entityLabel: task.title, projectCode: task.project, details: `Timer action: ${action}` });
     return Response.json({ tasks: freshTasks, timeEntries: entries, submittedForReview: action === "finish" && submitForReview });
