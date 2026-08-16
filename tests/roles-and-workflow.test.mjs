@@ -51,7 +51,7 @@ test("manager scope follows discipline while owner keeps full access", async () 
   ]);
   assert.match(usersApi, /Managers can add team members only within their own discipline/);
   assert.match(tasksApi, /assignableEmployee/);
-  assert.match(tasksApi, /managedEmployee/);
+  assert.match(tasksApi, /canManageTask/);
   assert.match(bootstrapApi, /managerDisciplineEmails/);
   assert.match(projectsApi, /Owner access required/);
   assert.match(dashboard, /managerLimited/);
@@ -111,9 +111,8 @@ test("workspace loading times out safely, prevents overlap, and can be retried",
   assert.doesNotMatch(bootstrapApi, /selectDistinct\(\{ code: tasks\.project \}\)/);
   assert.doesNotMatch(bootstrapApi, /const \[allTaskRows, userRows, allProjectRows, membershipRows\] = await Promise\.all/);
   assert.doesNotMatch(bootstrapApi, /const \[allCommentRows, allTimeRows, allSubtaskRows, allTaskAttachmentRows, notificationRows\] = await Promise\.all/);
-  assert.match(databaseInit, /if \(process\.env\.NODE_ENV === "production"\) \{/);
+  assert.match(databaseInit, /if \(process\.env\.NODE_ENV === "production"\) return true/);
   assert.match(databaseInit, /PRAGMA table_info\(tasks\)/);
-  assert.doesNotMatch(databaseInit, /if \(process\.env\.NODE_ENV === "production"\) return true/);
 });
 
 test("project issues use shared projects and users with attachments and linked task conversion", async () => {
@@ -774,12 +773,12 @@ test("project managers see assignments while submitted employee tasks can be acc
   ]);
   assert.match(dashboard, /currentUserIsProjectManager/);
   assert.match(dashboard, /showEmployeeFilter=\{currentUser\?\.role !== "member" \|\| currentUserIsProjectManager\}/);
-  assert.match(dashboard, /managerCreatorReadOnly/);
-  assert.match(dashboard, /task\.createdBy !== currentUser\.email/);
+  assert.match(dashboard, /const managerTaskAccess = Boolean/);
+  assert.match(dashboard, /task\.createdBy\.toLowerCase\(\) === currentUser\.email\.toLowerCase\(\)/);
   assert.match(dashboard, /readOnly=\{!canCollaborate\}/);
   assert.match(tasksApi, /canManageExistingTask/);
   assert.match(tasksApi, /Managers can edit or delete only tasks they created/);
-  assert.match(taskAccess, /if \(task\.createdBy === currentUser\.email\) return true;[\s\S]*?return false;/);
+  assert.match(taskAccess, /if \(task\.createdBy === currentUser\.email\) return true;[\s\S]*?Boolean\(membership\.isProjectManager\)/);
   assert.match(timerApi, /if \(task\.createdBy === currentUser\.email\) return true/);
   assert.match(tasksApi, /canAdoptSubmittedTask/);
   assert.match(dashboard, /className="project-settings-topbar"/);
@@ -944,13 +943,13 @@ test("task completion and notes notify only the responsible creator and counterp
   assert.doesNotMatch(timerApi, /managers\.map/);
   assert.match(subtasksApi, /eq\(users\.email, task\.createdBy\)/);
   assert.match(subtasksApi, /recipientEmail: creator\.email/);
-  assert.match(tasksApi, /task\.createdBy === currentUser\.email/);
+  assert.match(tasksApi, /canManageTask/);
   assert.match(commentsApi, /task\[0\]\.createdBy === currentUser\.email/);
   assert.match(commentsApi, /type: "task_note_added"/);
   assert.match(commentsApi, /currentUser\.role === "member" \? taskDetails\.createdBy : taskDetails\.employeeEmail/);
   assert.match(commentsApi, /Only the owner can delete task notes/);
-  assert.match(taskAccess, /export async function canCollaborateOnTask[\s\S]*?if \(task\.createdBy === currentUser\.email\) return true;[\s\S]*?return false;/);
-  assert.match(dashboard, /currentUser\?\.role === "manager" && task && task\.createdBy !== currentUser\.email/);
+  assert.match(taskAccess, /export async function canCollaborateOnTask[\s\S]*?if \(task\.createdBy === currentUser\.email\) return true;[\s\S]*?return canManageTask/);
+  assert.match(dashboard, /const managerTaskAccess = Boolean/);
   assert.match(dashboard, /\{canComment && <div className="comment-composer">/);
   assert.match(issueCommentsApi, /issueCreatorEmail/);
   assert.match(issueCommentsApi, /eq\(activityLogs\.action, "created"\)/);
@@ -971,7 +970,7 @@ test("V77 converts issues to optionally unassigned tasks and keeps them visible 
   assert.match(convertApi, /if \(employee\) \{[\s\S]*?type: "task_assigned"/);
   assert.match(issuesModule, /Employee assignment is optional/);
   assert.match(issuesModule, /disabled=\{saving\}/);
-  assert.match(tasksApi, /!task\.employeeEmail \|\| await managedEmployee/);
+  assert.match(tasksApi, /canManageTask/);
   assert.match(bootstrapApi, /task\.createdBy === currentUser\.email/);
 });
 
@@ -1124,7 +1123,7 @@ test("V87 keeps private tasks on the open project and unlocks reassignment only 
   assert.match(dashboard, /managementPrivateProjectLocked/);
   assert.match(dashboard, /task\.project !== "PERSONAL" \? task\.project/);
   assert.match(dashboard, /Convert to Employee Task · تحويل إلى مهمة موظف/);
-  assert.match(dashboard, /const assignmentLocked = timeEntries\.length > 0 && !canReassignAfterWork/);
+  assert.match(dashboard, /const assignmentLocked = Boolean\(activeEntry\) \|\| \(timeEntries\.length > 0 && !canReassignAfterWork && !convertingPrivateInForm\)/);
   assert.match(dashboard, /title=\{assignmentLocked \? assignmentLockHint : undefined\}/);
   assert.match(dashboard, /form\.visibility !== "private" \|\| acceptingEmployeeTask/);
 });
@@ -1179,7 +1178,7 @@ test("V90 adds automatic field direction, guarded subtask title editing, aligned
   assert.match(dashboard, /const canEditSubtaskTitles = Boolean/);
   assert.match(dashboard, /updateSubtaskTitle\(subtask, title\)/);
   assert.match(subtasksApi, /function canEditSubtaskTitle/);
-  assert.match(subtasksApi, /currentUser\.role === "owner" \|\| \(currentUser\.role === "manager" && task\.createdBy === currentUser\.email\)/);
+  assert.match(subtasksApi, /return canManageTask\(db, currentUser, task\)/);
   assert.match(dashboard, /a\.code\.localeCompare\(b\.code, undefined, \{ numeric: true, sensitivity: "base" \}\)/);
   assert.match(styles, /\.project-table-identity \{ display: grid; justify-items: start;/);
   assert.match(styles, /\.task-project-date-grid select, \.task-project-date-grid input\[type="date"\] \{ height: 39px;/);
@@ -1738,7 +1737,7 @@ test("V132 moves progress into the task field and restores it when review is ret
   assert.match(init, /ALTER TABLE tasks ADD COLUMN completion_before_review INTEGER DEFAULT 0 NOT NULL/);
   assert.match(migration, /ADD `completion_before_review` integer DEFAULT 0 NOT NULL/);
   assert.match(timerApi, /completionBeforeReview: submitForReview \? task\.completionPercent : task\.completionBeforeReview/);
-  assert.match(tasksApi, /requestedCheck === "returned" && existing\[0\]\.managerCheck === "pending"/);
+  assert.match(tasksApi, /requestedCheck === "returned" && \["pending", "approved"\]\.includes\(existing\[0\]\.managerCheck\)/);
   assert.match(tasksApi, /\? existing\[0\]\.completionBeforeReview/);
   assert.match(tasksApi, /Task completion is locked during or after manager review/);
 });
@@ -1795,17 +1794,14 @@ test("V135 restores the nearest populated task report period and places Approved
   assert.match(dashboard, /stat-card amber[\s\S]*?stats\.returned[\s\S]*?stat-card green[\s\S]*?stats\.approved/);
 });
 
-test("V136 repairs missing task progress columns safely in production", async () => {
+test("V136 keeps task progress migrations explicit and returns safe task errors", async () => {
   const [init, tasksApi] = await Promise.all([
     source("lib/db-init.ts"),
     source("app/api/tasks/route.ts"),
   ]);
-  assert.doesNotMatch(init, /if \(process\.env\.NODE_ENV === "production"\) return true/);
-  assert.match(init, /if \(process\.env\.NODE_ENV === "production"\) \{/);
-  assert.match(init, /PRAGMA table_info\(tasks\)/);
+  assert.match(init, /if \(process\.env\.NODE_ENV === "production"\) return true/);
   assert.match(init, /ALTER TABLE tasks ADD COLUMN completion_percent INTEGER DEFAULT 0 NOT NULL/);
   assert.match(init, /ALTER TABLE tasks ADD COLUMN completion_before_review INTEGER DEFAULT 0 NOT NULL/);
-  assert.match(init, /UPDATE tasks SET completion_percent = 100 WHERE status = 'done'/);
   assert.match(tasksApi, /console\.error\("Unable to create task", error\)/);
   assert.match(tasksApi, /Unable to create the task right now\. Please retry\./);
   assert.doesNotMatch(tasksApi, /\{ error: error instanceof Error \? error\.message : "Unable to create task" \}/);
@@ -1855,8 +1851,9 @@ test("V139 keeps owner private tasks, expands live indicators, and improves navi
 });
 
 test("V143 scopes production reads so workspace loading stays responsive", async () => {
-  const [bootstrap, issuesApi, dashboard, schema, migration] = await Promise.all([
+  const [bootstrap, taskCounts, issuesApi, dashboard, schema, migration] = await Promise.all([
     readFile("app/api/bootstrap/route.ts", "utf8"),
+    readFile("app/api/task-counts/route.ts", "utf8"),
     readFile("app/api/issues/route.ts", "utf8"),
     readFile("app/task-dashboard.tsx", "utf8"),
     readFile("db/schema.ts", "utf8"),
@@ -1864,9 +1861,9 @@ test("V143 scopes production reads so workspace loading stays responsive", async
   ]);
   assert.doesNotMatch(bootstrap, /allCommentRows|allSubtaskRows|allTaskAttachmentRows/);
   assert.match(bootstrap, /timeEntriesMode: "active"/);
-  assert.match(bootstrap, /TASK_QUERY_CHUNK_SIZE = 90/);
+  assert.match(taskCounts, /TASK_QUERY_CHUNK_SIZE = 90/);
   assert.match(bootstrap, /isNull\(taskTimeEntries\.endedAt\)/);
-  assert.match(bootstrap, /inArray\(projectIssues\.convertedTaskId, taskIds\)/);
+  assert.match(bootstrap, /isNotNull\(projectIssues\.convertedTaskId\)/);
   assert.match(bootstrap, /\.limit\(200\)/);
   assert.match(bootstrap, /process\.env\.NODE_ENV !== "production" && isManagement\(currentUser\)/);
   assert.match(issuesApi, /summaryOnly = url\.searchParams\.get\("summary"\) === "1"/);
@@ -1913,12 +1910,18 @@ test("V144 keeps report pulses on the task right and removes hidden high-volume 
 });
 
 test("V145 renders the workspace before loading task history and fetches task details on demand", async () => {
-  const [bootstrap, taskDetails, dashboard] = await Promise.all([
+  const [bootstrap, taskDetails, taskCounts, dashboard] = await Promise.all([
     source("app/api/bootstrap/route.ts"),
     source("app/api/task-details/route.ts"),
+    source("app/api/task-counts/route.ts"),
     source("app/task-dashboard.tsx"),
   ]);
-  assert.doesNotMatch(bootstrap, /from\(taskComments\)|from\(taskSubtasks\)|from\(taskAttachments\)/);
+  assert.doesNotMatch(bootstrap, /from\(taskComments\)/);
+  assert.doesNotMatch(bootstrap, /from\(taskSubtasks\)/);
+  assert.doesNotMatch(bootstrap, /from\(taskAttachments\)/);
+  assert.match(taskCounts, /groupBy\(taskComments\.taskId\)/);
+  assert.match(taskCounts, /groupBy\(taskSubtasks\.taskId\)/);
+  assert.match(taskCounts, /groupBy\(taskAttachments\.taskId\)/);
   assert.match(bootstrap, /isNull\(taskTimeEntries\.endedAt\)/);
   assert.match(bootstrap, /timeEntriesMode: "active"/);
   assert.match(taskDetails, /taskForView\(db, currentUser, taskId\)/);
@@ -1926,4 +1929,94 @@ test("V145 renders the workspace before loading task history and fetches task de
   assert.match(dashboard, /fetchTaskDetails\(taskId/);
   assert.match(dashboard, /taskDetailsLoaderRef\.current\(task\.id\)/);
   assert.match(dashboard, /current\.filter\(\(row\) => row\.taskId !== taskId\)/);
+});
+
+test("V146 expands governed task collaboration, aggregate team status, linked cleanup, and future project modules", async () => {
+  const [dashboard, styles, bootstrap, tasksApi, projectsApi, taskAccess, conversionApi] = await Promise.all([
+    source("app/task-dashboard.tsx"),
+    source("app/globals.css"),
+    source("app/api/bootstrap/route.ts"),
+    source("app/api/tasks/route.ts"),
+    source("app/api/projects/route.ts"),
+    source("lib/task-access.ts"),
+    source("app/api/tasks/convert-to-issue/route.ts"),
+  ]);
+  assert.match(taskAccess, /export async function canManageTask/);
+  assert.match(taskAccess, /Boolean\(membership\.isProjectManager\) \|\| Boolean\(task\.originatedByEmail\) \|\| task\.submittedToManager/);
+  assert.match(tasksApi, /requestedCheck === "approved"/);
+  assert.match(tasksApi, /completionPercent:[\s\S]*?approving[\s\S]*?100/);
+  assert.match(tasksApi, /insert\(taskTimeEntries\)/);
+  assert.match(tasksApi, /set\(\{ convertedTaskId: null/);
+  assert.match(projectsApi, /Only the owner can assign or remove project managers/);
+  assert.match(conversionApi, /Only the task creator, project manager, or owner/);
+  assert.match(bootstrap, /teamMetrics/);
+  assert.match(bootstrap, /activeTaskIds\.has\(task\.id\)/);
+  assert.match(dashboard, /className="team-employee-name"/);
+  assert.match(dashboard, /TaskRecordIndicators task=\{task\}/);
+  assert.match(dashboard, /projectWorkspaceTab === "notes"/);
+  assert.match(dashboard, /projectWorkspaceTab === "mom"/);
+  assert.match(styles, /grid-template-columns: repeat\(5, minmax\(0, 1fr\)\)/);
+  assert.match(styles, /\.task-title-drawer-progress \{ position: relative; z-index: 1;/);
+});
+
+test("V147 keeps bootstrap to one D1 batch and loads task counters after the workspace is visible", async () => {
+  const [bootstrap, taskCounts, dashboard] = await Promise.all([
+    source("app/api/bootstrap/route.ts"),
+    source("app/api/task-counts/route.ts"),
+    source("app/task-dashboard.tsx"),
+  ]);
+  assert.match(bootstrap, /await db\.batch\(\[/);
+  assert.doesNotMatch(bootstrap, /for \(const taskIds of chunks/);
+  assert.match(bootstrap, /Detail counters are intentionally deferred to \/api\/task-counts/);
+  assert.match(taskCounts, /const \[userRows, projectRows, membershipRows, taskRows\] = await db\.batch/);
+  assert.match(taskCounts, /const \[commentRows, subtaskRows, attachmentRows\] = await db\.batch/);
+  assert.match(dashboard, /fetchTaskCounts\(timeoutMs = 30_000\)/);
+  assert.match(dashboard, /window\.setTimeout\(\(\) => void loadTaskCounts\(\), 0\)/);
+  assert.match(dashboard, /Counters enhance task rows but must never hide or delay the workspace/);
+});
+
+test("V149 renders a compact owner workspace before loading the complete task history", async () => {
+  const [bootstrap, dashboard] = await Promise.all([
+    source("app/api/bootstrap/route.ts"),
+    source("app/task-dashboard.tsx"),
+  ]);
+  assert.match(bootstrap, /loadMode === "core"/);
+  assert.match(bootstrap, /loadMode: "core"/);
+  assert.match(bootstrap, /loadMode: "full"/);
+  assert.match(dashboard, /fetch\("\/api\/bootstrap\?mode=core"/);
+  assert.match(dashboard, /const isCoreLoad = data\.loadMode === "core"/);
+  assert.match(dashboard, /fetchWorkspaceData\(60_000\)/);
+  assert.match(dashboard, /setTimeout\(\(\) => void loadWorkspaceDetails\(\), 0\)/);
+  assert.match(dashboard, /timeZone: "Asia\/Amman"/);
+});
+
+test("V150 never runs schema mutations during production authentication and indexes notification startup reads", async () => {
+  const [init, schema] = await Promise.all([
+    source("lib/db-init.ts"),
+    source("db/schema.ts"),
+  ]);
+  assert.match(init, /if \(process\.env\.NODE_ENV === "production"\) return true/);
+  assert.match(schema, /notifications_recipient_created_idx/);
+  assert.match(schema, /table\.recipientEmail, table\.createdAt, table\.id/);
+});
+
+test("V148 converts paused management private work safely and tightens manager project controls", async () => {
+  const [dashboard, tasksApi, projectsApi, bootstrap] = await Promise.all([
+    source("app/task-dashboard.tsx"),
+    source("app/api/tasks/route.ts"),
+    source("app/api/projects/route.ts"),
+    source("app/api/bootstrap/route.ts"),
+  ]);
+  assert.match(tasksApi, /reassignmentAfterSubmission = existing\[0\]\.submittedToManager \|\| existing\[0\]\.managerCheck === "pending" \|\| convertingPrivate/);
+  assert.match(tasksApi, /isNull\(taskTimeEntries\.endedAt\)/);
+  assert.match(tasksApi, /Pause the private task timer before converting it/);
+  assert.doesNotMatch(tasksApi, /A private task cannot be converted after its timer has started/);
+  assert.match(dashboard, /const convertingPrivateInForm = Boolean\(task\?\.visibility === "private" && form\.visibility === "team"\)/);
+  assert.match(dashboard, /const privateConversionLocked = Boolean\(activeEntry\)/);
+  assert.match(dashboard, /currentUser\?\.role === "manager" && currentUser\.discipline[\s\S]*?baseProjectUsers\.filter\(\(user\) => user\.discipline === currentUser\.discipline\)/);
+  assert.match(projectsApi, /currentManagerIsProjectManager = Boolean\(membership\.isProjectManager\)/);
+  assert.match(projectsApi, /removesAnotherManager && !currentManagerIsProjectManager/);
+  assert.match(dashboard, /Only a project manager can remove another manager · مدير المشروع فقط يستطيع إزالة مسؤول آخر/);
+  assert.match(bootstrap, /task\.visibility !== "private" && activeTaskIds\.has\(task\.id\)/);
+  assert.match(dashboard, /Project updated successfully · تم تحديث المشروع بنجاح/);
 });

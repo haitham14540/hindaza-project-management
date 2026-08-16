@@ -1,9 +1,10 @@
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { and, eq, inArray, isNull, sql } from "drizzle-orm";
 import { getBucket, getDb } from "@/db";
-import { notifications, projectMembers, projects, taskAttachments, taskComments, taskSubtasks, taskTimeEntries, tasks, users } from "@/db/schema";
+import { notifications, projectIssues, projectMembers, projects, taskAttachments, taskComments, taskSubtasks, taskTimeEntries, tasks, users } from "@/db/schema";
 import { getCurrentUser, isManagement, unauthorizedResponse } from "@/lib/auth";
 import { recordActivity } from "@/lib/activity";
 import { createNotifications } from "@/lib/notification-delivery";
+import { canManageTask } from "@/lib/task-access";
 
 export const dynamic = "force-dynamic";
 
@@ -37,16 +38,6 @@ function enumValue<T extends readonly string[]>(
 
 type Database = Awaited<ReturnType<typeof getDb>>;
 type CurrentUser = Awaited<ReturnType<typeof getCurrentUser>>;
-
-async function managedEmployee(db: Database, currentUser: CurrentUser, employeeEmail: string) {
-  if (currentUser.role === "owner") return true;
-  if (currentUser.role !== "manager" || !currentUser.discipline) return false;
-  const row = await db.select({ discipline: users.discipline })
-    .from(users)
-    .where(and(eq(users.email, employeeEmail), eq(users.active, true)))
-    .limit(1);
-  return row[0]?.discipline === currentUser.discipline;
-}
 
 async function assignableEmployee(db: Database, currentUser: CurrentUser, employeeEmail: string) {
   const row = await db.select({ role: users.role, discipline: users.discipline })
@@ -92,11 +83,12 @@ async function canManageProject(db: Database, currentUser: CurrentUser, projectC
 }
 
 async function canManageExistingTask(db: Database, currentUser: CurrentUser, task: typeof tasks.$inferSelect) {
-  if (currentUser.role === "owner") return true;
-  return currentUser.role === "manager"
-    && task.createdBy === currentUser.email
-    && (!task.employeeEmail || await managedEmployee(db, currentUser, task.employeeEmail))
-    && await canManageProject(db, currentUser, task.project);
+  return canManageTask(db, currentUser, task);
+}
+
+function elapsedSeconds(startedAt: string, endedAt: string) {
+  const seconds = Math.floor((new Date(endedAt).getTime() - new Date(startedAt).getTime()) / 1000);
+  return Number.isFinite(seconds) ? Math.max(0, seconds) : 0;
 }
 
 async function isActiveProject(db: Database, projectCode: string) {
@@ -298,9 +290,6 @@ export async function PATCH(request: Request) {
       && existing[0].createdBy === currentUser.email;
     const management = scopedManagement;
     const convertingPrivate = management && existing[0].visibility === "private" && payload.visibility === "team";
-    if (management && requestedCheck === "approved" && existing[0].status !== "done") {
-      return Response.json({ error: "Only a completed task can be approved." }, { status: 409 });
-    }
     const employeeEmail = management
       ? text(payload.employeeEmail, 180).toLowerCase() || existing[0].employeeEmail
       : existing[0].employeeEmail;
@@ -311,16 +300,38 @@ export async function PATCH(request: Request) {
       ? text(payload.createdBy, 180).toLowerCase() || existing[0].createdBy
       : existing[0].createdBy;
     if (currentUser.role === "owner" && requestedCreatedBy !== existing[0].createdBy) {
-      const [creatorAccount] = await db.select({ email: users.email }).from(users)
+      const [creatorAccount] = await db.select({ email: users.email, role: users.role, discipline: users.discipline }).from(users)
         .where(and(eq(users.email, requestedCreatedBy), eq(users.active, true)))
         .limit(1);
-      if (!creatorAccount) return Response.json({ error: "Select an active user as Created By." }, { status: 400 });
+      if (!creatorAccount || !["owner", "manager"].includes(creatorAccount.role)) {
+        return Response.json({ error: "Created By must be an active owner or manager." }, { status: 400 });
+      }
+      if (creatorAccount.role === "manager" && project !== "PERSONAL" && !(await isProjectMember(db, project, creatorAccount.email))) {
+        return Response.json({ error: "The selected Created By manager must be assigned to this project." }, { status: 400 });
+      }
+      const [employeeAccount] = await db.select({ discipline: users.discipline }).from(users)
+        .where(and(eq(users.email, employeeEmail), eq(users.active, true)))
+        .limit(1);
+      if (creatorAccount.role === "manager" && (!creatorAccount.discipline || employeeAccount?.discipline !== creatorAccount.discipline)) {
+        return Response.json({ error: "Select an employee from the same discipline as the Created By manager." }, { status: 400 });
+      }
     }
     const employeeChanged = management && employeeEmail !== existing[0].employeeEmail;
-    const reassignmentAfterSubmission = existing[0].submittedToManager || existing[0].managerCheck === "pending";
-    if (employeeChanged) {
+    if (convertingPrivate) {
+      if (!employeeChanged) {
+        return Response.json({ error: "Select another project employee before converting the private task. · اختر موظفًا آخر في المشروع قبل تحويل المهمة الخاصة." }, { status: 400 });
+      }
+      const [activeSession] = await db.select({ id: taskTimeEntries.id }).from(taskTimeEntries)
+        .where(and(eq(taskTimeEntries.taskId, id), isNull(taskTimeEntries.endedAt)))
+        .limit(1);
+      if (activeSession) {
+        return Response.json({ error: "Pause the private task timer before converting it. · أوقف عداد المهمة الخاصة مؤقتًا قبل تحويلها." }, { status: 409 });
+      }
+    }
+    const reassignmentAfterSubmission = existing[0].submittedToManager || existing[0].managerCheck === "pending" || convertingPrivate;
+    if (employeeChanged && !reassignmentAfterSubmission) {
       const sessions = await db.select({ id: taskTimeEntries.id }).from(taskTimeEntries).where(eq(taskTimeEntries.taskId, id)).limit(1);
-      if (sessions[0] && !reassignmentAfterSubmission) return Response.json({ error: "This task has already started. Reassignment is available after the employee submits it for manager review." }, { status: 409 });
+      if (sessions[0]) return Response.json({ error: "This task has already started. Reassignment is available after the employee submits it for manager review." }, { status: 409 });
     }
     if (employeeChanged && !(await assignableEmployee(db, currentUser, employeeEmail))) {
       return Response.json({ error: currentUser.role === "manager" ? "You can reassign tasks only within your discipline." : "Select an active employee account." }, { status: 403 });
@@ -330,6 +341,44 @@ export async function PATCH(request: Request) {
     if ((management || canEditPrivateDetails) && !privateSelfEdit && !managementSelfTask && employeeEmail && !(await isProjectMember(db, project, employeeEmail))) {
       return Response.json({ error: "Select an employee assigned to this project." }, { status: 400 });
     }
+    let approvalActualHours = existing[0].actualHours;
+    let approvalStartTime = existing[0].startTime;
+    let approvalEndTime = existing[0].endTime;
+    let taskSessions = management && requestedCheck === "approved"
+      ? await db.select().from(taskTimeEntries).where(eq(taskTimeEntries.taskId, id))
+      : [];
+    if (management && requestedCheck === "approved") {
+      const now = new Date().toISOString();
+      if (!taskSessions.length) {
+        const insertedSession = await db.insert(taskTimeEntries).values({
+          taskId: id,
+          employeeEmail: existing[0].employeeEmail || currentUser.email,
+          employeeName: existing[0].employeeName || currentUser.displayName,
+          startedAt: now,
+          resumedAt: null,
+          endedAt: now,
+          durationSeconds: 0,
+          workCycle: existing[0].workCycle,
+        }).returning();
+        taskSessions = insertedSession;
+      } else {
+        for (const session of taskSessions.filter((entry) => !entry.endedAt)) {
+          const durationSeconds = session.durationSeconds + elapsedSeconds(session.resumedAt || session.startedAt, now);
+          await db.update(taskTimeEntries).set({ endedAt: now, resumedAt: null, durationSeconds }).where(eq(taskTimeEntries.id, session.id));
+          session.endedAt = now;
+          session.resumedAt = null;
+          session.durationSeconds = durationSeconds;
+        }
+      }
+      const totalSeconds = taskSessions.reduce((sum, entry) => sum + entry.durationSeconds, 0);
+      const firstSession = [...taskSessions].sort((a, b) => a.startedAt.localeCompare(b.startedAt))[0];
+      const lastSession = [...taskSessions].filter((entry) => entry.endedAt).sort((a, b) => (a.endedAt || "").localeCompare(b.endedAt || "")).at(-1);
+      approvalActualHours = Math.round((totalSeconds / 3600) * 100) / 100;
+      approvalStartTime = firstSession?.startedAt.slice(11, 16) || approvalStartTime;
+      approvalEndTime = lastSession?.endedAt?.slice(11, 16) || approvalEndTime;
+    }
+    const returningForRevision = management && requestedCheck === "returned" && ["pending", "approved"].includes(existing[0].managerCheck);
+    const approving = management && requestedCheck === "approved";
     const updated = await db
       .update(tasks)
       .set({
@@ -343,14 +392,19 @@ export async function PATCH(request: Request) {
           ? enumValue(payload.priority, priorities, existing[0].priority) as "high" | "medium" | "low"
           : existing[0].priority,
         plannedHours: management || canEditPrivateDetails ? number(payload.plannedHours) : existing[0].plannedHours,
-        startTime: existing[0].startTime,
-        endTime: existing[0].endTime,
-        actualHours: existing[0].actualHours,
+        startTime: approving ? approvalStartTime : existing[0].startTime,
+        endTime: approving ? approvalEndTime : existing[0].endTime,
+        actualHours: approving ? approvalActualHours : existing[0].actualHours,
         completionPercent:
-          management && requestedCheck === "returned" && existing[0].managerCheck === "pending"
+          approving
+            ? 100
+            : returningForRevision
             ? existing[0].completionBeforeReview
             : existing[0].completionPercent,
-        status: employeeChanged && reassignmentAfterSubmission ? "not_started" : existing[0].status,
+        completionBeforeReview: approving && existing[0].managerCheck !== "pending"
+          ? existing[0].completionPercent
+          : existing[0].completionBeforeReview,
+        status: approving ? "done" : employeeChanged && reassignmentAfterSubmission ? "not_started" : returningForRevision ? "needs_revision" : existing[0].status,
         managerCheck:
           management
             ? employeeChanged && reassignmentAfterSubmission ? "new" : requestedCheck
@@ -365,7 +419,7 @@ export async function PATCH(request: Request) {
         createdBy: currentUser.role === "owner"
           ? requestedCreatedBy
           : adoptingSubmittedTask ? currentUser.email : existing[0].createdBy,
-        workCycle: employeeChanged && reassignmentAfterSubmission ? existing[0].workCycle + 1 : management && requestedCheck === "returned" && existing[0].managerCheck !== "returned" ? existing[0].workCycle + 1 : existing[0].workCycle,
+        workCycle: employeeChanged && reassignmentAfterSubmission ? existing[0].workCycle + 1 : returningForRevision && existing[0].managerCheck !== "returned" ? existing[0].workCycle + 1 : existing[0].workCycle,
         updatedAt: sql`CURRENT_TIMESTAMP`,
       })
       .where(eq(tasks.id, id))
@@ -446,6 +500,7 @@ export async function DELETE(request: Request) {
     await db.delete(taskAttachments).where(eq(taskAttachments.taskId, id));
     await db.delete(taskSubtasks).where(eq(taskSubtasks.taskId, id));
     await db.delete(notifications).where(eq(notifications.taskId, id));
+    await db.update(projectIssues).set({ convertedTaskId: null, updatedAt: sql`CURRENT_TIMESTAMP` }).where(eq(projectIssues.convertedTaskId, id));
     await db.delete(tasks).where(eq(tasks.id, id));
     await recordActivity(db, currentUser, { action: "deleted", entityType: "task", entityId: id, entityLabel: existing[0].title, projectCode: existing[0].project, details: `Assigned to ${existing[0].employeeName}` });
     return Response.json({ ok: true });
