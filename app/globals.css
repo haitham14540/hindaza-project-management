@@ -212,7 +212,7 @@ button { cursor: pointer; }
 .project-context-topbar { display: grid; grid-template-columns: minmax(300px, 1fr) auto; align-items: center; }
 .project-context-topbar .subhead { margin-top: 7px; }
 .project-context-topbar .topbar-actions { justify-self: end; }
-.project-workspace-tabs { width: 100%; min-width: 0; padding: 5px; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; border: 1px solid var(--line); border-radius: 12px; background: #fff; box-shadow: 0 8px 25px rgba(23,55,73,.04); }
+.project-workspace-tabs { width: 100%; min-width: 0; padding: 5px; display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 6px; border: 1px solid var(--line); border-radius: 12px; background: #fff; box-shadow: 0 8px 25px rgba(23,55,73,.04); }
 .project-workspace-tabs button { min-height: 38px; padding: 0 14px; border: 1px solid #dce4e6; border-radius: 8px; background: #f7f9f9; color: #52616a; display: inline-flex; align-items: center; justify-content: center; gap: 7px; font-size: 11px; font-weight: 700; }
 .project-workspace-tabs button.active { border-color: #e1bc00; background: var(--yellow); color: #111; box-shadow: 0 8px 20px rgba(177,145,0,.15); }
 .project-workspace-tabs button .report-type-icon { flex: 0 0 25px; }
@@ -1336,8 +1336,15 @@ button.overview-kpi:hover { transform: translateY(-2px); border-color: #d8bc35; 
 .task-title-field.wide { margin-bottom: 13px; }
 .task-title-input-row { display: grid; grid-template-columns: minmax(0, 1fr) 42px; gap: 10px; align-items: center; }
 .task-title-input-row > input { width: 100%; }
-.task-title-drawer-progress { position: relative; z-index: 5; display: grid; place-items: center; }
+.task-title-drawer-progress { position: relative; z-index: 1; display: grid; place-items: center; }
 .task-title-drawer-progress .task-progress-menu { right: 0; left: auto; }
+.window-task-record-indicators { display: flex; align-items: center; gap: 5px; margin-top: 4px; min-height: 16px; }
+.window-task-record-indicators > span { display: inline-flex; align-items: center; gap: 3px; }
+.team-employee-name { display: grid; gap: 2px; min-width: 0; }
+.team-employee-name > small { display: inline-flex; align-items: center; gap: 5px; color: #c52832; font-size: 8px; line-height: 1.15; font-style: normal; font-weight: 850; }
+.team-employee-name > small .employee-task-live-pulse { flex: 0 0 auto; order: 2; }
+.team-management-table td { padding-top: 8px; padding-bottom: 8px; }
+.private-convert-bar small { display: block; margin-top: 6px; color: #9c2a32; font-size: 9px; font-weight: 700; }
 .management-timer-section { border-color: #e6c100; background: #fffdf1; }
 .management-pause-button { min-width: 190px; }
 @media (max-width: 620px) {

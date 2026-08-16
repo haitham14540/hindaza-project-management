@@ -1,0 +1,1 @@
+CREATE INDEX `notifications_recipient_created_idx` ON `notifications` (`recipient_email`,`created_at`,`id`);

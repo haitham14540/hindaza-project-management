@@ -1,9 +1,10 @@
-import { and, eq, sql } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { getDb } from "@/db";
-import { projectMembers, projects, taskComments, tasks, users } from "@/db/schema";
+import { taskComments, tasks } from "@/db/schema";
 import { getCurrentUser, unauthorizedResponse } from "@/lib/auth";
 import { recordActivity } from "@/lib/activity";
 import { createNotifications } from "@/lib/notification-delivery";
+import { canManageTask } from "@/lib/task-access";
 
 export const dynamic = "force-dynamic";
 const COMMENT_EDIT_WINDOW_MS = 15 * 60 * 1000;
@@ -28,30 +29,11 @@ export async function POST(request: Request) {
     }
 
     const db = await getDb();
-    const task = await db.select({
-      id: tasks.id,
-      employeeEmail: tasks.employeeEmail,
-      createdBy: tasks.createdBy,
-      visibility: tasks.visibility,
-      submittedToManager: tasks.submittedToManager,
-      title: tasks.title,
-      project: tasks.project,
-    }).from(tasks).where(eq(tasks.id, taskId)).limit(1);
+    const task = await db.select().from(tasks).where(eq(tasks.id, taskId)).limit(1);
     if (!task[0]) {
       return Response.json({ error: "Task not found." }, { status: 404 });
     }
-    let projectManagerAccess = false;
-    if (currentUser.role === "manager" && task[0].project !== "PERSONAL" && currentUser.discipline) {
-      const [employee] = await db.select({ discipline: users.discipline }).from(users).where(eq(users.email, task[0].employeeEmail)).limit(1);
-      const [membership] = await db.select({ isProjectManager: projectMembers.isProjectManager })
-        .from(projectMembers).innerJoin(projects, eq(projectMembers.projectId, projects.id))
-        .where(and(eq(projects.code, task[0].project), eq(projectMembers.employeeEmail, currentUser.email))).limit(1);
-      projectManagerAccess = employee?.discipline === currentUser.discipline && Boolean(membership?.isProjectManager);
-    }
-    const managementAccess = currentUser.role === "owner" || projectManagerAccess || (
-      currentUser.role === "manager" &&
-      task[0].createdBy === currentUser.email
-    );
+    const managementAccess = await canManageTask(db, currentUser, task[0]);
     const canComment = managementAccess
       ? task[0].visibility === "team" || task[0].submittedToManager
       : task[0].employeeEmail === currentUser.email || (task[0].visibility === "private" && task[0].createdBy === currentUser.email);

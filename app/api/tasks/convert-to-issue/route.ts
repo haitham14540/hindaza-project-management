@@ -1,6 +1,6 @@
 import { and, desc, eq, sql } from "drizzle-orm";
 import { getDb } from "@/db";
-import { projectIssues, projectMembers, projects, tasks } from "@/db/schema";
+import { projectIssues, projectMembers, projects, tasks, users } from "@/db/schema";
 import { getCurrentUser, isManagement, unauthorizedResponse } from "@/lib/auth";
 import { recordActivity } from "@/lib/activity";
 
@@ -41,10 +41,16 @@ export async function POST(request: Request) {
     const discipline = currentUser.role === "manager" && disciplines.includes(currentUser.discipline as (typeof disciplines)[number]) ? currentUser.discipline : requestedDiscipline;
     if (!disciplines.includes(discipline as (typeof disciplines)[number])) return Response.json({ error: "Select a valid issue discipline." }, { status: 400 });
     if (currentUser.role === "manager") {
-      const [membership] = await db.select({ id: projectMembers.id }).from(projectMembers)
+      const [membership] = await db.select({ id: projectMembers.id, isProjectManager: projectMembers.isProjectManager }).from(projectMembers)
         .innerJoin(projects, eq(projectMembers.projectId, projects.id))
         .where(and(eq(projects.code, task.project), eq(projectMembers.employeeEmail, currentUser.email))).limit(1);
       if (!membership) return Response.json({ error: "Managers can create linked issues only within assigned projects." }, { status: 403 });
+      const [employee] = await db.select({ discipline: users.discipline }).from(users).where(eq(users.email, task.employeeEmail)).limit(1);
+      const creatorAccess = task.createdBy === currentUser.email;
+      const projectManagerAccess = Boolean(membership.isProjectManager) && Boolean(currentUser.discipline) && employee?.discipline === currentUser.discipline;
+      if (!creatorAccess && !projectManagerAccess) {
+        return Response.json({ error: "Only the task creator, project manager, or owner can convert this task to an issue." }, { status: 403 });
+      }
     }
 
     const [last] = await db.select({ sequence: projectIssues.sequence }).from(projectIssues)

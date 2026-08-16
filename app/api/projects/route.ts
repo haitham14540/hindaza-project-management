@@ -128,10 +128,12 @@ export async function PATCH(request: Request) {
     const db = await getDb();
     const [existing] = await db.select().from(projects).where(eq(projects.id, id)).limit(1);
     if (!existing) return Response.json({ error: "Project not found." }, { status: 404 });
+    let currentManagerIsProjectManager = false;
     if (currentUser.role === "manager") {
-      const [membership] = await db.select({ id: projectMembers.id }).from(projectMembers)
+      const [membership] = await db.select({ id: projectMembers.id, isProjectManager: projectMembers.isProjectManager }).from(projectMembers)
         .where(and(eq(projectMembers.projectId, id), eq(projectMembers.employeeEmail, currentUser.email))).limit(1);
       if (!membership) return Response.json({ error: "Managers can edit only projects they are assigned to." }, { status: 403 });
+      currentManagerIsProjectManager = Boolean(membership.isProjectManager);
     }
 
     const currentRows = await db.select({ employeeEmail: projectMembers.employeeEmail, isProjectManager: projectMembers.isProjectManager }).from(projectMembers).where(eq(projectMembers.projectId, id));
@@ -139,11 +141,25 @@ export async function PATCH(request: Request) {
     const requestedMembers = memberEmails(payload.memberEmails);
     const validRequested = await validMemberEmails(db, requestedMembers);
     const requestedProjectManagers = memberEmails(payload.projectManagerEmails);
+    if (currentUser.role === "manager") {
+      const currentProjectManagers = currentRows.filter((row) => row.isProjectManager).map((row) => row.employeeEmail).sort();
+      const requestedManagers = requestedProjectManagers.sort();
+      if (currentProjectManagers.length !== requestedManagers.length || currentProjectManagers.some((email, index) => email !== requestedManagers[index])) {
+        return Response.json({ error: "Only the owner can assign or remove project managers." }, { status: 403 });
+      }
+    }
     let assignedMembers = validRequested;
     if (currentUser.role === "manager") {
       const candidates = [...new Set([...currentMembers, ...validRequested])];
-      const rows = candidates.length ? await db.select({ email: users.email, discipline: users.discipline }).from(users).where(inArray(users.email, candidates)) : [];
+      const rows = candidates.length ? await db.select({ email: users.email, discipline: users.discipline, role: users.role }).from(users).where(inArray(users.email, candidates)) : [];
       const disciplineByEmail = new Map(rows.map((row) => [row.email, row.discipline]));
+      const roleByEmail = new Map(rows.map((row) => [row.email, row.role]));
+      const removesAnotherManager = currentMembers.some((email) =>
+        email !== currentUser.email && !validRequested.includes(email) && roleByEmail.get(email) === "manager",
+      );
+      if (removesAnotherManager && !currentManagerIsProjectManager) {
+        return Response.json({ error: "Only a project manager can remove another manager from the project. · مدير المشروع فقط يستطيع إزالة مسؤول آخر من المشروع." }, { status: 403 });
+      }
       assignedMembers = [...new Set([
         ...currentMembers.filter((email) => disciplineByEmail.get(email) !== currentUser.discipline),
         ...validRequested.filter((email) => disciplineByEmail.get(email) === currentUser.discipline),

@@ -171,7 +171,7 @@ type ProjectForm = Omit<Project, "id" | "createdAt">;
 type UserForm = Pick<User, "email" | "displayName" | "role" | "discipline"> & { temporaryPassword: string };
 type Tab = "overview" | "tasks" | "rfi" | "issues" | "projects" | "team" | "reports" | "activity";
 type DirectoryView = "cards" | "table";
-type ProjectWorkspaceTab = "tasks" | "issues" | "rfi";
+type ProjectWorkspaceTab = "tasks" | "issues" | "rfi" | "notes" | "mom";
 type ReportMetric = "all" | "approved" | "wip" | "pending";
 
 type OverviewIssue = {
@@ -198,6 +198,7 @@ type ProjectOverviewRow = Project & {
 };
 
 type WorkspaceData = {
+  loadMode?: "core" | "full";
   currentUser: User;
   tasks: Task[];
   users: User[];
@@ -208,6 +209,7 @@ type WorkspaceData = {
   subtasks?: TaskSubtask[];
   taskAttachments?: TaskAttachment[];
   taskIssueLinks?: TaskIssueLink[];
+  teamMetrics?: TeamMetric[];
   notifications: Notification[];
 };
 
@@ -217,6 +219,27 @@ type TaskDetailsData = {
   subtasks: TaskSubtask[];
   taskAttachments: TaskAttachment[];
   taskIssueLinks: TaskIssueLink[];
+};
+
+type TaskCountsData = {
+  counts: Array<{
+    taskId: number;
+    commentCount: number;
+    subtaskCount: number;
+    completedSubtaskCount: number;
+    attachmentCount: number;
+  }>;
+};
+
+type TeamMetric = {
+  email: string;
+  total: number;
+  done: number;
+  attention: number;
+  planned: number;
+  actual: number;
+  activeProject: string;
+  activeTaskId: number | null;
 };
 
 const tabValues: Tab[] = ["overview", "tasks", "rfi", "issues", "projects", "team", "reports", "activity"];
@@ -233,6 +256,32 @@ async function fetchWorkspaceData(timeoutMs = 15_000): Promise<WorkspaceData | n
   const timeout = window.setTimeout(() => controller.abort(), timeoutMs);
   try {
     const response = await fetch("/api/bootstrap", {
+      cache: "no-store",
+      headers: { "Cache-Control": "no-cache" },
+      signal: controller.signal,
+    });
+    if (response.status === 401) {
+      window.location.replace("/login");
+      return null;
+    }
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || "تعذر تحميل البيانات");
+    return data as WorkspaceData;
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") {
+      throw new Error("استغرق تحميل البيانات وقتًا أطول من المتوقع. يرجى إعادة المحاولة.");
+    }
+    throw error;
+  } finally {
+    window.clearTimeout(timeout);
+  }
+}
+
+async function fetchCoreWorkspaceData(timeoutMs = 10_000): Promise<WorkspaceData | null> {
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch("/api/bootstrap?mode=core", {
       cache: "no-store",
       headers: { "Cache-Control": "no-cache" },
       signal: controller.signal,
@@ -273,6 +322,24 @@ async function fetchTaskDetails(taskId: number, timeoutMs = 12_000): Promise<Tas
   } catch (error) {
     if (error instanceof DOMException && error.name === "AbortError") throw new Error("Task details took too long to load. Please try again.");
     throw error;
+  } finally {
+    window.clearTimeout(timeout);
+  }
+}
+
+async function fetchTaskCounts(timeoutMs = 30_000): Promise<TaskCountsData | null> {
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch("/api/task-counts", {
+      cache: "no-store",
+      headers: { "Cache-Control": "no-cache" },
+      signal: controller.signal,
+    });
+    if (response.status === 401) return null;
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || "Unable to load task counters.");
+    return data as TaskCountsData;
   } finally {
     window.clearTimeout(timeout);
   }
@@ -557,6 +624,7 @@ export default function TaskDashboard() {
   const [taskIssueLinks, setTaskIssueLinks] = useState<TaskIssueLink[]>([]);
   const [taskDetailsLoadedIds, setTaskDetailsLoadedIds] = useState<Set<number>>(() => new Set());
   const [users, setUsers] = useState<User[]>([]);
+  const [teamMetrics, setTeamMetrics] = useState<TeamMetric[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [overviewIssues, setOverviewIssues] = useState<OverviewIssue[]>([]);
@@ -611,6 +679,9 @@ export default function TaskDashboard() {
 
   const issuesModuleRef = useRef<IssuesModuleHandle>(null);
   const syncInFlightRef = useRef(false);
+  const workspaceDetailsInFlightRef = useRef(false);
+  const taskCountsInFlightRef = useRef(false);
+  const taskCountsLoadedRef = useRef(false);
   const taskDetailsInFlightRef = useRef(new Set<number>());
   const taskDetailsLoaderRef = useRef<(taskId: number) => void>(() => undefined);
   const lastWorkspaceSyncAtRef = useRef(0);
@@ -649,10 +720,45 @@ export default function TaskDashboard() {
     return counts;
   }, [comments]);
 
+  const loadTaskCounts = useCallback(async () => {
+    if (taskCountsLoadedRef.current || taskCountsInFlightRef.current) return;
+    taskCountsInFlightRef.current = true;
+    try {
+      const data = await fetchTaskCounts();
+      if (!data) return;
+      const countsByTaskId = new Map(data.counts.map((item) => [item.taskId, item]));
+      setTasks((current) => current.map((task) => {
+        const counts = countsByTaskId.get(task.id);
+        return counts ? { ...task, ...counts } : task;
+      }));
+      taskCountsLoadedRef.current = true;
+    } catch {
+      // Counters enhance task rows but must never hide or delay the workspace.
+      // A later workspace refresh retries this background request.
+    } finally {
+      taskCountsInFlightRef.current = false;
+    }
+  }, []);
+
   const applyWorkspaceData = useCallback((data: WorkspaceData, initialize = false) => {
-    setTasks(data.tasks || []);
+    const isCoreLoad = data.loadMode === "core";
+    if (!isCoreLoad) {
+      setTasks((current) => {
+        const currentById = new Map(current.map((task) => [task.id, task]));
+        return (data.tasks || []).map((task) => {
+          const previous = currentById.get(task.id);
+          return previous ? {
+            ...task,
+            commentCount: previous.commentCount ?? task.commentCount,
+            subtaskCount: previous.subtaskCount ?? task.subtaskCount,
+            completedSubtaskCount: previous.completedSubtaskCount ?? task.completedSubtaskCount,
+            attachmentCount: previous.attachmentCount ?? task.attachmentCount,
+          } : task;
+        });
+      });
+    }
     if (Array.isArray(data.comments)) setComments(data.comments);
-    if (Array.isArray(data.timeEntries)) {
+    if (!isCoreLoad && Array.isArray(data.timeEntries)) {
       if (data.timeEntriesMode === "active") {
         const visibleTaskIds = new Set((data.tasks || []).map((task) => task.id));
         setTimeEntries((current) => [
@@ -663,8 +769,9 @@ export default function TaskDashboard() {
     }
     if (Array.isArray(data.subtasks)) setSubtasks(data.subtasks);
     if (Array.isArray(data.taskAttachments)) setTaskAttachments(data.taskAttachments);
-    if (Array.isArray(data.taskIssueLinks)) setTaskIssueLinks(data.taskIssueLinks);
+    if (!isCoreLoad && Array.isArray(data.taskIssueLinks)) setTaskIssueLinks(data.taskIssueLinks);
     setUsers(data.users || []);
+    if (!isCoreLoad) setTeamMetrics(data.teamMetrics || []);
     setProjects(data.projects || []);
     setNotifications(data.notifications || []);
     setCurrentUser(data.currentUser);
@@ -676,12 +783,35 @@ export default function TaskDashboard() {
     if (initialize) setTaskForm(blankTask(data.currentUser));
   }, []);
 
+  const loadWorkspaceDetails = useCallback(async () => {
+    if (workspaceDetailsInFlightRef.current) return false;
+    workspaceDetailsInFlightRef.current = true;
+    try {
+      // This request may be large for the owner. It is intentionally detached
+      // from the loading screen so a slow historical query cannot blank the
+      // projects, navigation or account controls.
+      const data = await fetchWorkspaceData(60_000);
+      if (!data) return false;
+      applyWorkspaceData(data);
+      lastWorkspaceSyncAtRef.current = Date.now();
+      setError("");
+      window.setTimeout(() => void loadTaskCounts(), 0);
+      return true;
+    } catch {
+      // Keep the fast core workspace usable. Focus/interval refresh retries the
+      // detail request without trapping the user behind an error screen.
+      return false;
+    } finally {
+      workspaceDetailsInFlightRef.current = false;
+    }
+  }, [applyWorkspaceData, loadTaskCounts]);
+
   const loadWorkspace = useCallback(async (initialize = false, showLoading = false) => {
     if (syncInFlightRef.current) return false;
     syncInFlightRef.current = true;
     if (showLoading) setLoading(true);
     try {
-      const data = await fetchWorkspaceData();
+      const data = await fetchCoreWorkspaceData();
       if (!data) {
         setLoading(false);
         return false;
@@ -690,6 +820,7 @@ export default function TaskDashboard() {
       lastWorkspaceSyncAtRef.current = Date.now();
       setError("");
       setLoading(false);
+      window.setTimeout(() => void loadWorkspaceDetails(), 0);
       return true;
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : "تعذر تحميل البيانات");
@@ -698,7 +829,7 @@ export default function TaskDashboard() {
     } finally {
       syncInFlightRef.current = false;
     }
-  }, [applyWorkspaceData]);
+  }, [applyWorkspaceData, loadWorkspaceDetails]);
 
   async function loadTaskDetails(taskId: number) {
     if (taskDetailsInFlightRef.current.has(taskId)) return;
@@ -820,7 +951,7 @@ export default function TaskDashboard() {
       setTab(previousTab);
       setSelectedProjectCode(url.searchParams.get("project") || "");
       const section = url.searchParams.get("section");
-      if (section === "tasks" || section === "issues" || section === "rfi") setProjectWorkspaceTab(section);
+      if (section === "tasks" || section === "issues" || section === "rfi" || section === "notes" || section === "mom") setProjectWorkspaceTab(section);
       const historyState = event.state as { hindazaEmployeeTasks?: unknown; hindazaEmployeeEdit?: unknown; hindazaReportTasks?: unknown; hindazaReportRow?: unknown; hindazaReportProjectEdit?: unknown; hindazaReportEmployeeEdit?: unknown; hindazaUserEdit?: unknown; hindazaUserProjectEdit?: unknown } | null;
       const employeeTasksState = typeof historyState?.hindazaEmployeeTasks === "string" ? historyState.hindazaEmployeeTasks : null;
       const employeeEditState = typeof historyState?.hindazaEmployeeEdit === "string" ? historyState.hindazaEmployeeEdit : null;
@@ -1092,6 +1223,7 @@ export default function TaskDashboard() {
 
   const teamRows = useMemo(() => {
     const tasksByEmployee = new Map<string, Task[]>();
+    const metricByEmployee = new Map(teamMetrics.map((metric) => [metric.email.toLowerCase(), metric]));
     for (const task of tasks) {
       const key = task.employeeEmail ? task.employeeEmail.toLowerCase() : task.employeeName;
       const rows = tasksByEmployee.get(key);
@@ -1099,17 +1231,20 @@ export default function TaskDashboard() {
     }
     return users.map((user) => {
     const rows = tasksByEmployee.get(user.email.toLowerCase()) || tasksByEmployee.get(user.displayName) || [];
+    const metric = metricByEmployee.get(user.email.toLowerCase());
     return {
       ...user,
       temporary: user.email.endsWith("@hindaza.local"),
-      total: rows.length,
-      done: rows.filter((task) => task.status === "done").length,
-      attention: rows.filter((task) => taskFlag(task).key !== "ok").length,
-      planned: rows.reduce((sum, task) => sum + task.plannedHours, 0),
-      actual: rows.reduce((sum, task) => sum + task.actualHours, 0),
+      total: metric?.total ?? rows.length,
+      done: metric?.done ?? rows.filter((task) => task.status === "done").length,
+      attention: metric?.attention ?? rows.filter((task) => taskFlag(task).key !== "ok").length,
+      planned: metric?.planned ?? rows.reduce((sum, task) => sum + task.plannedHours, 0),
+      actual: metric?.actual ?? rows.reduce((sum, task) => sum + task.actualHours, 0),
+      activeProject: metric?.activeProject || "",
+      activeTaskId: metric?.activeTaskId || null,
     };
     }).sort((a, b) => a.displayName.localeCompare(b.displayName, undefined, { sensitivity: "base" }));
-  }, [users, tasks]);
+  }, [users, tasks, teamMetrics]);
 
   const filteredTeamRows = useMemo(() => {
     const term = teamSearch.trim().toLowerCase();
@@ -1205,7 +1340,9 @@ export default function TaskDashboard() {
         planned: rows.reduce((sum, task) => sum + task.plannedHours, 0),
         actual: rows.reduce((sum, task) => sum + task.actualHours, 0),
       };
-    }).filter((row) => row.total > 0).sort((a, b) => b.total - a.total || a.key.localeCompare(b.key));
+    }).filter((row) => row.total > 0).sort((a, b) => reportGroup === "project"
+      ? a.key.localeCompare(b.key, undefined, { numeric: true, sensitivity: "base" })
+      : b.total - a.total || a.key.localeCompare(b.key));
   }, [reportTasks, reportGroup, projectCodes, reportEmployees, projects]);
 
   const reportSummary = useMemo(() => ({
@@ -1900,6 +2037,7 @@ export default function TaskDashboard() {
       setTimeEntries((current) => current.filter((entry) => entry.taskId !== selectedTaskId));
       setSubtasks((current) => current.filter((subtask) => subtask.taskId !== selectedTaskId));
       setTaskAttachments((current) => current.filter((attachment) => attachment.taskId !== selectedTaskId));
+      setTaskIssueLinks((current) => current.filter((link) => link.convertedTaskId !== selectedTaskId));
       setTaskDrawerOpen(false); setToast("Task deleted successfully · تم حذف المهمة");
     } catch (deleteError) { setError(deleteError instanceof Error ? deleteError.message : "تعذر حذف المهمة"); }
     finally { setSaving(false); }
@@ -1932,9 +2070,9 @@ export default function TaskDashboard() {
       } else setProjectDrawerOpen(false);
       setToast(selectedProjectId
         ? data.removedInvalidMembers > 0
-          ? `تم تحديث المشروع وإزالة ${data.removedInvalidMembers} عضو قديم أو غير صالح`
-          : "تم تحديث المشروع"
-        : "تمت إضافة المشروع");
+          ? `Project updated; ${data.removedInvalidMembers} invalid or inactive member(s) removed · تم تحديث المشروع وإزالة ${data.removedInvalidMembers} عضو قديم أو غير صالح`
+          : "Project updated successfully · تم تحديث المشروع بنجاح"
+        : "Project added successfully · تمت إضافة المشروع بنجاح");
     } catch (saveError) { setError(saveError instanceof Error ? saveError.message : "تعذر حفظ المشروع"); }
     finally { setSaving(false); }
   }
@@ -2379,7 +2517,7 @@ export default function TaskDashboard() {
 
       <main className="main-content">
         <header className={`topbar${tab === "projects" && selectedProject ? " project-context-topbar" : ""}`}>
-          <div className="page-heading"><div className="project-heading-line"><h1 dir="ltr">{tab === "projects" && selectedProject ? selectedProject.name : pageTitle[tab]}</h1>{tab === "projects" && selectedProject && projects.length > 1 && <div className="project-switcher" ref={projectSwitcherRef}><button type="button" className="project-switcher-button" onClick={() => { setProjectSwitcherOpen((open) => !open); setProjectSwitcherSearch(""); }} aria-label="Switch project" aria-expanded={projectSwitcherOpen} title="Switch project"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 9 5-5 5 5M17 15l-5 5-5-5" /></svg></button>{projectSwitcherOpen && <div className="project-switcher-menu" role="menu" aria-label="Available projects"><label className="project-switcher-search"><span>⌕</span><input autoFocus value={projectSwitcherSearch} onChange={(event) => setProjectSwitcherSearch(event.target.value)} placeholder="Search project..." aria-label="Search projects" /></label>{switcherProjects.length ? switcherProjects.map((project) => <button type="button" role="menuitem" key={project.code} className={project.code === selectedProject.code ? "active" : ""} onClick={() => { openProjectWorkspace(project.code, projectWorkspaceTab); setProjectSwitcherOpen(false); setProjectSwitcherSearch(""); }}><strong>{project.name}</strong><small>{project.code}</small></button>) : <div className="project-switcher-empty">No matching projects</div>}</div>}</div>}</div>{tab === "projects" && selectedProject && <div className="project-heading-meta"><span className="project-heading-code">{selectedProject.code}</span><span className={`project-status ${selectedProject.status}`}>{projectStatusLabel[selectedProject.status]}</span>{selectedProject.client && <span className="project-heading-client">{selectedProject.client}</span>}</div>}<p className="subhead" dir="ltr">{new Intl.DateTimeFormat("en-GB", { weekday: "long", year: "numeric", month: "long", day: "numeric" }).format(new Date())}</p></div>
+          <div className="page-heading"><div className="project-heading-line"><h1 dir="ltr">{tab === "projects" && selectedProject ? selectedProject.name : pageTitle[tab]}</h1>{tab === "projects" && selectedProject && projects.length > 1 && <div className="project-switcher" ref={projectSwitcherRef}><button type="button" className="project-switcher-button" onClick={() => { setProjectSwitcherOpen((open) => !open); setProjectSwitcherSearch(""); }} aria-label="Switch project" aria-expanded={projectSwitcherOpen} title="Switch project"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 9 5-5 5 5M17 15l-5 5-5-5" /></svg></button>{projectSwitcherOpen && <div className="project-switcher-menu" role="menu" aria-label="Available projects"><label className="project-switcher-search"><span>⌕</span><input autoFocus value={projectSwitcherSearch} onChange={(event) => setProjectSwitcherSearch(event.target.value)} placeholder="Search project..." aria-label="Search projects" /></label>{switcherProjects.length ? switcherProjects.map((project) => <button type="button" role="menuitem" key={project.code} className={project.code === selectedProject.code ? "active" : ""} onClick={() => { openProjectWorkspace(project.code, projectWorkspaceTab); setProjectSwitcherOpen(false); setProjectSwitcherSearch(""); }}><strong>{project.name}</strong><small>{project.code}</small></button>) : <div className="project-switcher-empty">No matching projects</div>}</div>}</div>}</div>{tab === "projects" && selectedProject && <div className="project-heading-meta"><span className="project-heading-code">{selectedProject.code}</span><span className={`project-status ${selectedProject.status}`}>{projectStatusLabel[selectedProject.status]}</span>{selectedProject.client && <span className="project-heading-client">{selectedProject.client}</span>}</div>}<p className="subhead" dir="ltr">{new Intl.DateTimeFormat("en-GB", { weekday: "long", year: "numeric", month: "long", day: "numeric", timeZone: "Asia/Amman" }).format(new Date())}</p></div>
           <div className="topbar-actions">
             {tab === "projects" && selectedProject && projectWorkspaceTab === "tasks" && isManagement(currentUser) && <button className="primary-button topbar-add-button" onClick={() => openNewTask(selectedProject.code)}><span className="button-icon" aria-hidden="true">✓</span><span>New Task</span></button>}
             {tab === "projects" && selectedProject && projectWorkspaceTab === "tasks" && currentUser && <button className="primary-button topbar-add-button private-task-button" onClick={() => openNewPrivateTask(selectedProject.code)}><span className="button-icon" aria-hidden="true">✓</span><span>Private Task</span></button>}
@@ -2423,6 +2561,8 @@ export default function TaskDashboard() {
             <button className={projectWorkspaceTab === "tasks" ? "active" : ""} onClick={() => setProjectWorkspaceTab("tasks")} role="tab" aria-selected={projectWorkspaceTab === "tasks"}><span className="report-type-icon" aria-hidden="true">✓</span> Tasks</button>
             <button className={projectWorkspaceTab === "issues" ? "active" : ""} onClick={() => setProjectWorkspaceTab("issues")} role="tab" aria-selected={projectWorkspaceTab === "issues"}><span className="report-type-icon" aria-hidden="true">!</span> Issues</button>
             <button className={projectWorkspaceTab === "rfi" ? "active" : ""} onClick={() => setProjectWorkspaceTab("rfi")} role="tab" aria-selected={projectWorkspaceTab === "rfi"}><span className="report-type-icon" aria-hidden="true">?</span> RFI</button>
+            <button className={projectWorkspaceTab === "notes" ? "active" : ""} onClick={() => setProjectWorkspaceTab("notes")} role="tab" aria-selected={projectWorkspaceTab === "notes"}><span className="report-type-icon" aria-hidden="true">N</span> Notes</button>
+            <button className={projectWorkspaceTab === "mom" ? "active" : ""} onClick={() => setProjectWorkspaceTab("mom")} role="tab" aria-selected={projectWorkspaceTab === "mom"}><span className="report-type-icon" aria-hidden="true">M</span> MOM</button>
           </div>
           {projectWorkspaceTab === "tasks" && <>
             <section className="stats-grid task-stats-ltr" aria-label={`${selectedProject.name} task summary`} dir="ltr">
@@ -2436,6 +2576,8 @@ export default function TaskDashboard() {
           </>}
           {projectWorkspaceTab === "issues" && currentUser && <IssuesModule key={selectedProject.code} ref={issuesModuleRef} currentUser={currentUser} users={users} projects={[selectedProject]} lockedProjectCode={selectedProject.code} onTaskCreated={(task) => setTasks((current) => [task as Task, ...current])} onIssueChanged={syncIssueLink} onOpenTask={(id) => void openLinkedTask(id)} onOpenProjectSettings={(project) => openProjectFromTask(project as Project)} onToast={setToast} />}
           {projectWorkspaceTab === "rfi" && <section className="panel module-placeholder"><div className="module-icon">RFI</div><p>REQUEST FOR INFORMATION</p><h2>{selectedProject.name}</h2><span>This RFI workspace is limited to {selectedProject.code}.</span><div className="module-status">Ready for configuration</div></section>}
+          {projectWorkspaceTab === "notes" && <section className="panel module-placeholder"><div className="module-icon">N</div><p>PROJECT NOTES</p><h2>{selectedProject.name}</h2><span>The Notes workspace will be configured in a future version.</span><div className="module-status">Coming soon</div></section>}
+          {projectWorkspaceTab === "mom" && <section className="panel module-placeholder"><div className="module-icon">M</div><p>MINUTES OF MEETING</p><h2>{selectedProject.name}</h2><span>The MOM workspace will be configured in a future version.</span><div className="module-status">Coming soon</div></section>}
         </section>}
 
         {tab === "tasks" && <>
@@ -2467,11 +2609,11 @@ export default function TaskDashboard() {
         {tab === "team" && <section className="panel team-panel">
           <div className="directory-filters team-filter-row"><label className="search-box directory-search"><span>⌕</span><input value={teamSearch} onChange={(event) => setTeamSearch(event.target.value)} placeholder="Search employee..." aria-label="Search employee" /></label><select value={teamDisciplineFilter} onChange={(event) => setTeamDisciplineFilter(event.target.value)} aria-label="فلترة الفريق حسب التخصص"><option value="all">كل التخصصات · All disciplines</option>{disciplines.map((discipline) => <option key={discipline} value={discipline}>{discipline}</option>)}</select><select value={teamRoleFilter} onChange={(event) => setTeamRoleFilter(event.target.value)} aria-label="فلترة الفريق حسب المسؤولية"><option value="all">كل المسؤوليات · All roles</option><option value="member">Member · موظف</option><option value="manager">Manager · مسؤول</option><option value="owner">Owner · مالك</option></select><button type="button" className="clear-filters-button" disabled={!teamSearch.trim() && teamDisciplineFilter === "all" && teamRoleFilter === "all"} onClick={() => { setTeamSearch(""); setTeamDisciplineFilter("all"); setTeamRoleFilter("all"); }} aria-label="Clear all team filters" title="Clear filters · مسح الفلاتر"><span className="filter-clear-icon" aria-hidden="true" /></button><span className="count-badge filter-count" dir="ltr">{filteredTeamRows.length} {filteredTeamRows.length === 1 ? "Employee" : "Employees"}</span><div className="view-switcher" role="group" aria-label="Team display style"><button type="button" className={teamView === "cards" ? "active" : ""} onClick={() => setTeamView("cards")} title="Cards view" aria-label="Cards view">▦</button><button type="button" className={teamView === "table" ? "active" : ""} onClick={() => setTeamView("table")} title="Table view" aria-label="Table view">☷</button></div></div>
           {filteredTeamRows.length === 0 ? <div className="empty-state"><strong>لا يوجد موظفون مطابقون</strong><p>غيّر البحث أو التخصص أو المسؤولية لعرض نتائج أخرى.</p></div> : teamView === "cards" ? <div className="team-grid">{filteredTeamRows.map((row) => <button className="team-card" key={row.email} onClick={() => openUser(row)}>
-            <div className="team-card-head"><UserAvatar user={row} name={row.displayName} className="soft" /><div><strong>{row.displayName}</strong><span>{roleLabel(row.role)}</span></div>{row.temporary && <em className="temporary-badge">مؤقت</em>}</div>
+            <div className="team-card-head"><UserAvatar user={row} name={row.displayName} className="soft" /><div><strong className="team-employee-name">{row.displayName}{row.activeProject && <small>({projects.find((project) => project.code === row.activeProject)?.name || row.activeProject})<i className="employee-task-live-pulse" aria-label="Working now" title={`Working now on ${row.activeProject}`} /></small>}</strong><span>{roleLabel(row.role)}</span></div>{row.temporary && <em className="temporary-badge">مؤقت</em>}</div>
             <div className={`discipline-badge${row.discipline ? "" : " unset"}`}>{row.discipline || "غير محدد · Not specified"}</div>
             <div className="team-metrics"><div><span>المهام</span><strong>{row.total}</strong></div><div><span>مكتمل</span><strong>{row.done}</strong></div><div><span>متابعة</span><strong className={row.attention ? "warn-text" : ""}>{row.attention}</strong></div><div><span>فعلي</span><strong>{row.actual.toFixed(1)}h</strong></div></div>
             <div className="employee-email">{row.temporary ? "سيتم ربط البريد عند النقل" : row.email}</div>
-          </button>)}</div> : <div className="task-table-wrap directory-table-wrap"><table className="task-table directory-table team-management-table"><thead><tr><th>Employee</th><th>Role</th><th>Discipline</th><th>Email</th><th>Tasks</th><th>Done</th><th>Attention</th><th>Actual</th><th className="team-settings-column">Setting</th></tr></thead><tbody>{filteredTeamRows.map((row) => <tr key={row.email} onClick={() => setEmployeeTasksEmail(row.email)} tabIndex={0} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); setEmployeeTasksEmail(row.email); } }} aria-label={`Show ${row.displayName} tasks`}><td><div className="employee-cell employee-summary-trigger" title="Show employee tasks"><UserAvatar user={row} name={row.displayName} /><strong>{row.displayName}</strong></div></td><td>{roleLabel(row.role)}</td><td>{row.discipline || "—"}</td><td dir="ltr">{row.temporary ? "Temporary account" : row.email}</td><td>{row.total}</td><td>{row.done}</td><td><strong className={row.attention ? "warn-text" : ""}>{row.attention}</strong></td><td>{row.actual.toFixed(1)}h</td><td className="team-settings-column"><button type="button" className="project-settings-button team-settings-button" onClick={(event) => { event.stopPropagation(); openUser(row); }} onKeyDown={(event) => event.stopPropagation()} aria-label={`Edit ${row.displayName}`} title="Employee settings">⚙</button></td></tr>)}</tbody></table></div>}
+          </button>)}</div> : <div className="task-table-wrap directory-table-wrap"><table className="task-table directory-table team-management-table"><thead><tr><th>Employee</th><th>Role</th><th>Discipline</th><th>Email</th><th>Tasks</th><th>Done</th><th>Attention</th><th>Actual</th><th className="team-settings-column">Setting</th></tr></thead><tbody>{filteredTeamRows.map((row) => <tr key={row.email} onClick={() => setEmployeeTasksEmail(row.email)} tabIndex={0} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); setEmployeeTasksEmail(row.email); } }} aria-label={`Show ${row.displayName} tasks`}><td><div className="employee-cell employee-summary-trigger" title="Show employee tasks"><UserAvatar user={row} name={row.displayName} /><strong className="team-employee-name">{row.displayName}{row.activeProject && <small>({projects.find((project) => project.code === row.activeProject)?.name || row.activeProject})<i className="employee-task-live-pulse" aria-label="Working now" title={`Working now on ${row.activeProject}`} /></small>}</strong></div></td><td>{roleLabel(row.role)}</td><td>{row.discipline || "—"}</td><td dir="ltr">{row.temporary ? "Temporary account" : row.email}</td><td>{row.total}</td><td>{row.done}</td><td><strong className={row.attention ? "warn-text" : ""}>{row.attention}</strong></td><td>{row.actual.toFixed(1)}h</td><td className="team-settings-column"><button type="button" className="project-settings-button team-settings-button" onClick={(event) => { event.stopPropagation(); openUser(row); }} onKeyDown={(event) => event.stopPropagation()} aria-label={`Edit ${row.displayName}`} title="Employee settings">⚙</button></td></tr>)}</tbody></table></div>}
         </section>}
 
         {tab === "activity" && currentUser?.role === "owner" && <section className="panel activity-panel">
@@ -2518,6 +2660,18 @@ export default function TaskDashboard() {
       {toast && <div className="toast">✓ {toast}</div>}
     </div>
   );
+}
+
+function TaskRecordIndicators({ task }: { task: Task }) {
+  const subtasks = Number(task.subtaskCount || 0);
+  const notes = Number(task.commentCount || 0);
+  const attachments = Number(task.attachmentCount || 0);
+  if (!subtasks && !notes && !attachments) return null;
+  return <span className="window-task-record-indicators">
+    {subtasks > 0 && <span className="subtask-indicator" title={`${subtasks} subtasks`}>☑ <small>{subtasks}</small></span>}
+    {notes > 0 && <span className="note-indicator" title={`${notes} notes`}>▰ <small>{notes}</small></span>}
+    {attachments > 0 && <span className="attachment-count task-attachment-indicator" title={`${attachments} attachments`}>📎 <small>{attachments}</small></span>}
+  </span>;
 }
 
 function ReportTasksDialog({ metric, title, groupBy, tasks, projects, users, timeEntries, clock, currentUser, updateCompletion, completionSavingTaskId, projectCode = "", employee = null, hideEmployeeColumn = false, onOpenProject, onProjectSettings, onEmployeeSettings, onClose, onOpenTask }: { metric: ReportMetric; title?: string; groupBy: "project" | "employee"; tasks: Task[]; projects: Project[]; users: User[]; timeEntries: TaskTimeEntry[]; clock: number; currentUser: User | null; updateCompletion: (taskId: number, completionPercent: number) => void; completionSavingTaskId: number | null; projectCode?: string; employee?: User | null; hideEmployeeColumn?: boolean; onOpenProject?: (projectCode: string) => void; onProjectSettings?: (project: Project) => void; onEmployeeSettings?: (user: User) => void; onClose: () => void; onOpenTask: (task: Task) => void; }) {
@@ -2604,7 +2758,7 @@ function ReportTasksDialog({ metric, title, groupBy, tasks, projects, users, tim
           const href = `/?view=projects&project=${encodeURIComponent(task.project)}&section=tasks&task=${task.id}`;
           const openLink = (event: React.MouseEvent<HTMLAnchorElement>) => { if (event.ctrlKey || event.metaKey || event.shiftKey || event.button !== 0) return; event.preventDefault(); onOpenTask(task); };
           const canEditProgress = canEditTaskCompletion(currentUser, task);
-          return <tr className="employee-task-clickable-row" key={task.id} onClick={(event) => { if (event.ctrlKey || event.metaKey || event.shiftKey || event.button !== 0 || (event.target as HTMLElement).closest("a, button, details")) return; onOpenTask(task); }}><td><div className="window-task-title-progress"><TaskProgressControl task={task} canEdit={canEditProgress} busy={completionSavingTaskId === task.id} onChange={(value) => updateCompletion(task.id, value)} /><a href={href} onClick={openLink}><span className="employee-task-title"><strong dir="auto">{task.title}</strong>{active && <i className="employee-task-live-pulse" title="Working now" aria-label="Working now" />}</span><small>{task.expectedOutput || "—"}</small></a></div></td>{!hideEmployeeColumn && <td><a href={href} onClick={openLink}>{task.employeeName || "Unassigned"}</a></td>}<td><a href={href} onClick={openLink}>{task.createdByName || "Unknown user"}</a></td><td dir="ltr"><a href={href} onClick={openLink}>{formatCreatedDate(task.createdAt)}</a></td><td dir="ltr"><a href={href} onClick={openLink}>{formatDueDate(task.taskDate)}</a></td><td><a href={href} onClick={openLink}><span className={`pill status-${task.status}`}>{tableStatusLabel[task.status]}</span></a></td><td><a href={href} onClick={openLink}><span className={`pill check-${task.managerCheck}`}>{tableCheckLabel[task.managerCheck]}</span></a></td><td><a href={href} onClick={openLink}>{logged ? `${logged.toFixed(2)}h` : "—"}</a></td><td><a href={href} onClick={openLink}><span className={`flag flag-${flag.key}`}>{flag.label}</span></a></td></tr>;
+          return <tr className="employee-task-clickable-row" key={task.id} onClick={(event) => { if (event.ctrlKey || event.metaKey || event.shiftKey || event.button !== 0 || (event.target as HTMLElement).closest("a, button, details")) return; onOpenTask(task); }}><td><div className="window-task-title-progress"><TaskProgressControl task={task} canEdit={canEditProgress} busy={completionSavingTaskId === task.id} onChange={(value) => updateCompletion(task.id, value)} /><a href={href} onClick={openLink}><span className="employee-task-title"><strong dir="auto">{task.title}</strong>{active && <i className="employee-task-live-pulse" title="Working now" aria-label="Working now" />}</span><TaskRecordIndicators task={task} /><small>{task.expectedOutput || "—"}</small></a></div></td>{!hideEmployeeColumn && <td><a href={href} onClick={openLink}>{task.employeeName || "Unassigned"}</a></td>}<td><a href={href} onClick={openLink}>{task.createdByName || "Unknown user"}</a></td><td dir="ltr"><a href={href} onClick={openLink}>{formatCreatedDate(task.createdAt)}</a></td><td dir="ltr"><a href={href} onClick={openLink}>{formatDueDate(task.taskDate)}</a></td><td><a href={href} onClick={openLink}><span className={`pill status-${task.status}`}>{tableStatusLabel[task.status]}</span></a></td><td><a href={href} onClick={openLink}><span className={`pill check-${task.managerCheck}`}>{tableCheckLabel[task.managerCheck]}</span></a></td><td><a href={href} onClick={openLink}>{logged ? `${logged.toFixed(2)}h` : "—"}</a></td><td><a href={href} onClick={openLink}><span className={`flag flag-${flag.key}`}>{flag.label}</span></a></td></tr>;
         })}</tbody></table></div>}</section>;
       })}</div></div>
     </section>
@@ -2676,7 +2830,7 @@ function EmployeeTasksDialog({ employee, tasks, projects, timeEntries, clock, cu
           const href = `/?view=projects&project=${encodeURIComponent(task.project)}&section=tasks&task=${task.id}`;
           const openTaskLink = (event: React.MouseEvent<HTMLAnchorElement>) => { if (event.ctrlKey || event.metaKey || event.shiftKey || event.button !== 0) return; event.preventDefault(); onOpenTask(task); };
           const canEditProgress = canEditTaskCompletion(currentUser, task);
-          return <tr className="employee-task-clickable-row" key={task.id} onClick={(event) => { if (event.ctrlKey || event.metaKey || event.shiftKey || event.button !== 0 || (event.target as HTMLElement).closest("a, button, details")) return; onOpenTask(task); }}><td><div className="window-task-title-progress"><TaskProgressControl task={task} canEdit={canEditProgress} busy={completionSavingTaskId === task.id} onChange={(value) => updateCompletion(task.id, value)} /><a href={href} onClick={openTaskLink}><span className="employee-task-title"><strong dir="auto">{task.title}</strong>{active && <i className="employee-task-live-pulse" title="Working now" aria-label="Working now" />}</span><small>{task.expectedOutput || "—"}</small></a></div></td><td><a href={href} onClick={openTaskLink}>{task.createdByName || "Unknown user"}</a></td><td dir="ltr"><a href={href} onClick={openTaskLink}>{formatCreatedDate(task.createdAt)}</a></td><td dir="ltr"><a href={href} onClick={openTaskLink}>{formatDueDate(task.taskDate)}</a></td><td><a href={href} onClick={openTaskLink}><span className={`pill status-${task.status}`}>{tableStatusLabel[task.status]}</span></a></td><td><a href={href} onClick={openTaskLink}><span className={`pill check-${task.managerCheck}`}>{tableCheckLabel[task.managerCheck]}</span></a></td><td><a href={href} onClick={openTaskLink}>{logged ? `${logged.toFixed(2)}h` : "—"}</a></td><td><a href={href} onClick={openTaskLink}><span className={`flag flag-${flag.key}`}>{flag.label}</span></a></td></tr>;
+          return <tr className="employee-task-clickable-row" key={task.id} onClick={(event) => { if (event.ctrlKey || event.metaKey || event.shiftKey || event.button !== 0 || (event.target as HTMLElement).closest("a, button, details")) return; onOpenTask(task); }}><td><div className="window-task-title-progress"><TaskProgressControl task={task} canEdit={canEditProgress} busy={completionSavingTaskId === task.id} onChange={(value) => updateCompletion(task.id, value)} /><a href={href} onClick={openTaskLink}><span className="employee-task-title"><strong dir="auto">{task.title}</strong>{active && <i className="employee-task-live-pulse" title="Working now" aria-label="Working now" />}</span><TaskRecordIndicators task={task} /><small>{task.expectedOutput || "—"}</small></a></div></td><td><a href={href} onClick={openTaskLink}>{task.createdByName || "Unknown user"}</a></td><td dir="ltr"><a href={href} onClick={openTaskLink}>{formatCreatedDate(task.createdAt)}</a></td><td dir="ltr"><a href={href} onClick={openTaskLink}>{formatDueDate(task.taskDate)}</a></td><td><a href={href} onClick={openTaskLink}><span className={`pill status-${task.status}`}>{tableStatusLabel[task.status]}</span></a></td><td><a href={href} onClick={openTaskLink}><span className={`pill check-${task.managerCheck}`}>{tableCheckLabel[task.managerCheck]}</span></a></td><td><a href={href} onClick={openTaskLink}>{logged ? `${logged.toFixed(2)}h` : "—"}</a></td><td><a href={href} onClick={openTaskLink}><span className={`flag flag-${flag.key}`}>{flag.label}</span></a></td></tr>;
         })}</tbody></table></div>}</section>;
       })}</div></div>
     </section>
@@ -2854,7 +3008,7 @@ function TaskTable(props: TaskTableProps) {
       const canEditProgress = canEditTaskCompletion(props.currentUser, task);
       return <tr key={task.id} onClick={() => props.openTask(task)} tabIndex={0} onKeyDown={(event) => event.key === "Enter" && props.openTask(task)}><td><div className="task-cell"><div className="task-title-progress"><TaskProgressControl task={task} canEdit={canEditProgress} busy={props.completionSavingTaskId === task.id} onChange={(value) => props.updateCompletion(task.id, value)} /><strong>{task.title}</strong></div><div className="task-tags">{task.originatedByName && <span className="employee-origin-tag">From employee · {task.originatedByName}</span>}{task.visibility === "private" && <span className="private-badge">Private</span>}{subtaskCount > 0 && <span className="subtask-indicator" title={`${completedSubtaskCount}/${subtaskCount} subtasks completed`} aria-label={`${subtaskCount} subtasks`}>☑ <small>{subtaskCount}</small></span>}{noteCount > 0 && <span className="note-indicator" title={`${noteCount} notes`} aria-label={`${noteCount} notes`}>▰ <small>{noteCount}</small></span>}{attachmentCount > 0 && <span className="attachment-count task-attachment-indicator" title={`${attachmentCount} attachments`} aria-label={`${attachmentCount} attachments`}>📎 <small>{attachmentCount}</small></span>}</div><small>{task.expectedOutput}</small></div></td>{props.showEmployeeFilter && <td><div className="employee-cell"><UserAvatar user={employee} name={task.employeeName} /><strong>{task.employeeName}</strong></div></td>}<td><div className="employee-cell creator-person-cell" title={creatorName}><UserAvatar user={creator} name={creatorName} /><strong>{creatorName}</strong></div></td>{props.showDisciplineColumn && <td><span className="task-discipline">{task.employeeDiscipline || employee?.discipline || "—"}</span></td>}<td><span className="due-date" dir="ltr">{formatCreatedDate(task.createdAt)}</span></td><td><span className="due-date" dir="ltr">{formatDueDate(task.taskDate)}</span></td><td><span className={`pill priority-${task.priority}`}>{tablePriorityLabel[task.priority]}</span></td><td><strong className={active ? "live-hours" : ""}>{logged ? logged.toFixed(2) : "—"}{active && <i />}</strong><small className="hours-note"> / {task.plannedHours || "—"}h</small></td><td><span className={`pill status-${task.status}`}>{tableStatusLabel[task.status]}</span></td><td><span className={`pill check-${task.managerCheck}`}>{tableCheckLabel[task.managerCheck]}</span></td><td><span className={`flag flag-${flag.key}`}>{flag.label}</span></td><td>{issueLink ? <button type="button" className={`record-link-button ${task.createdAt <= issueLink.createdAt ? "task-first" : "issue-first"}`} onClick={(event) => { event.stopPropagation(); props.openIssue(issueLink); }}>{issueLink.issueNumber}</button> : <span>—</span>}</td></tr>;
     })}</tbody></table></div>
-      <div className="mobile-task-list">{props.tasks.map((task) => { const flag = taskFlag(task); const entries = timeEntriesByTaskId.get(task.id) || []; const taskSubtasks = subtasksByTaskId.get(task.id) || []; const detailsLoaded = props.detailsLoadedTaskIds.has(task.id); const subtaskCount = detailsLoaded ? taskSubtasks.length : task.subtaskCount || taskSubtasks.length; const attachmentCount = detailsLoaded ? attachmentsByTaskId.get(task.id)?.length || 0 : task.attachmentCount || 0; const logged = taskLoggedHours(task, entries, props.clock); const creatorName = task.createdByName || usersByEmail.get(task.createdBy.toLowerCase())?.displayName || "Unknown user"; return <button className="mobile-task" key={task.id} onClick={() => props.openTask(task)}><div className="mobile-task-top"><div className="task-tags">{task.originatedByName && <span className="employee-origin-tag">From employee · {task.originatedByName}</span>}{task.visibility === "private" && <span className="private-badge">Private</span>}{subtaskCount > 0 && <span className="subtask-indicator">☑ <small>{subtaskCount}</small></span>}{attachmentCount > 0 && <span className="attachment-count task-attachment-indicator">📎 <small>{attachmentCount}</small></span>}</div><span className={`flag flag-${flag.key}`}>{flag.label}</span></div><strong>{task.title}</strong><small>{props.showEmployeeFilter ? `${task.employeeName} · ` : ""}<span className="mobile-date-label">Created by</span> {creatorName} · <span className="mobile-date-label">Created</span> <span className="due-date" dir="ltr">{formatCreatedDate(task.createdAt)}</span> · <span className="mobile-date-label">Due</span> <span className="due-date" dir="ltr">{formatDueDate(task.taskDate)}</span></small><div className="mobile-task-bottom"><span className={`pill status-${task.status}`}>{tableStatusLabel[task.status]}</span><span>{task.completionPercent}% · {logged.toFixed(2)}/{task.plannedHours}h</span></div></button>; })}</div>
+      <div className="mobile-task-list">{props.tasks.map((task) => { const flag = taskFlag(task); const entries = timeEntriesByTaskId.get(task.id) || []; const taskSubtasks = subtasksByTaskId.get(task.id) || []; const detailsLoaded = props.detailsLoadedTaskIds.has(task.id); const subtaskCount = detailsLoaded ? taskSubtasks.length : task.subtaskCount || taskSubtasks.length; const attachmentCount = detailsLoaded ? attachmentsByTaskId.get(task.id)?.length || 0 : task.attachmentCount || 0; const noteCount = detailsLoaded ? props.commentCounts.get(task.id) || 0 : task.commentCount || 0; const logged = taskLoggedHours(task, entries, props.clock); const creatorName = task.createdByName || usersByEmail.get(task.createdBy.toLowerCase())?.displayName || "Unknown user"; return <button className="mobile-task" key={task.id} onClick={() => props.openTask(task)}><div className="mobile-task-top"><div className="task-tags">{task.originatedByName && <span className="employee-origin-tag">From employee · {task.originatedByName}</span>}{task.visibility === "private" && <span className="private-badge">Private</span>}{subtaskCount > 0 && <span className="subtask-indicator">☑ <small>{subtaskCount}</small></span>}{noteCount > 0 && <span className="note-indicator">▰ <small>{noteCount}</small></span>}{attachmentCount > 0 && <span className="attachment-count task-attachment-indicator">📎 <small>{attachmentCount}</small></span>}</div><span className={`flag flag-${flag.key}`}>{flag.label}</span></div><strong>{task.title}</strong><small>{props.showEmployeeFilter ? `${task.employeeName} · ` : ""}<span className="mobile-date-label">Created by</span> {creatorName} · <span className="mobile-date-label">Created</span> <span className="due-date" dir="ltr">{formatCreatedDate(task.createdAt)}</span> · <span className="mobile-date-label">Due</span> <span className="due-date" dir="ltr">{formatDueDate(task.taskDate)}</span></small><div className="mobile-task-bottom"><span className={`pill status-${task.status}`}>{tableStatusLabel[task.status]}</span><span>{task.completionPercent}% · {logged.toFixed(2)}/{task.plannedHours}h</span></div></button>; })}</div>
       {props.tab === "overview" && props.filteredCount > 7 && <button className="text-button" onClick={props.showAll}><ButtonLabel en="View all tasks →" ar="عرض جميع المهام" /></button>}</>}
   </section>;
 }
@@ -3009,20 +3163,27 @@ function TaskDrawer({ selectedId, form, setOpen, saveTask, deleteTask, saving, c
   const [convertIssueError, setConvertIssueError] = useState("");
   const selectedProject = projects.find((project) => project.code === form.project);
   const canOpenProjectSettings = Boolean(selectedProject && currentUser && (currentUser.role === "owner" || currentUser.role === "manager"));
+  const employee = users.find((user) => user.email.toLowerCase() === (task?.employeeEmail || form.employeeEmail).toLowerCase());
+  const managerSameDiscipline = Boolean(currentUser?.role === "manager" && currentUser.discipline && employee?.discipline === currentUser.discipline);
+  const managerProjectMember = Boolean(currentUser?.role === "manager" && selectedProject?.memberEmails.includes(currentUser.email));
+  const projectManager = Boolean(managerSameDiscipline && managerProjectMember && selectedProject?.projectManagerEmails.includes(currentUser!.email));
   const acceptingEmployeeTask = Boolean(currentUser && (currentUser.role === "owner" || currentUser.role === "manager") && task?.visibility === "private" && task.submittedToManager && task.createdBy !== currentUser.email);
-  const managerCreatorReadOnly = Boolean(currentUser?.role === "manager" && task && task.createdBy !== currentUser.email && !acceptingEmployeeTask);
+  const managerTaskAccess = Boolean(currentUser?.role === "manager" && (!task || (task.project === "PERSONAL"
+    ? task.createdBy.toLowerCase() === currentUser.email.toLowerCase() || (managerSameDiscipline && acceptingEmployeeTask)
+    : managerProjectMember && (
+    task.createdBy.toLowerCase() === currentUser.email.toLowerCase()
+    || (managerSameDiscipline && (projectManager || acceptingEmployeeTask || Boolean(task.originatedByEmail) || task.submittedToManager))
+  ))));
   const privateOwner = Boolean(currentUser && form.visibility === "private" && (!task || (task.createdBy === currentUser.email && !task.submittedToManager)));
   const memberOwnPrivate = currentUser?.role === "member" && task?.visibility === "private" && task.createdBy === currentUser.email && task.employeeEmail === currentUser.email;
-  const management = isManagement(currentUser) && !managerCreatorReadOnly;
+  const management = Boolean(currentUser?.role === "owner" || managerTaskAccess);
   const managementPrivateProjectLocked = Boolean(management && form.visibility === "private");
-  const employee = users.find((user) => user.email === task?.employeeEmail);
-  const projectManager = Boolean(currentUser?.role === "manager" && selectedProject?.projectManagerEmails.includes(currentUser.email) && currentUser.discipline && employee?.discipline === currentUser.discipline);
   const canAuditSessions = Boolean(task && (management || projectManager));
   const canEditDetails = management || privateOwner;
   const canCollaborate = canEditDetails || Boolean(task && currentUser && task.employeeEmail === currentUser.email);
   const canEditSubtaskTitles = Boolean(task && currentUser && (task.visibility === "private"
-    ? task.createdBy === currentUser.email
-    : currentUser.role === "owner" || (currentUser.role === "manager" && task.createdBy === currentUser.email)));
+    ? task.createdBy === currentUser.email || management
+    : management));
   const canComment = canCollaborate || projectManager;
   const privateFinishOnly = Boolean(currentUser && task?.visibility === "private" && !task.submittedToManager && task.employeeEmail === currentUser.email);
   const openSubtaskCount = subtasks.filter((subtask) => !subtask.completed).length;
@@ -3031,18 +3192,28 @@ function TaskDrawer({ selectedId, form, setOpen, saveTask, deleteTask, saving, c
   const canEditProgress = Boolean(task && canEditTaskCompletion(currentUser, task));
   const canPauseEmployeeTimer = Boolean(activeEntry && canAuditSessions && !assignedToCurrentUser);
   const canReassignAfterWork = Boolean(task?.submittedToManager || task?.managerCheck === "pending");
-  const assignmentLocked = timeEntries.length > 0 && !canReassignAfterWork;
+  const convertingPrivateInForm = Boolean(task?.visibility === "private" && form.visibility === "team");
+  const assignmentLocked = Boolean(activeEntry) || (timeEntries.length > 0 && !canReassignAfterWork && !convertingPrivateInForm);
+  const privateConversionLocked = Boolean(activeEntry);
   const assignmentLockHint = "The employee cannot be changed after work starts until the task is submitted for manager review. · لا يمكن تغيير الموظف بعد بدء المهمة حتى يرسلها الموظف لمراجعة المسؤول";
   const loggedSeconds = timeEntries.length
     ? timeEntries.reduce((sum, entry) => sum + entrySeconds(entry, clock), 0)
     : Math.round((task?.actualHours || form.actualHours || 0) * 3600);
   const projectOptions = Array.from(new Set([...projects.filter((project) => project.status === "active" || project.code === form.project).map((project) => project.code), ...(!lockedProjectCode && form.visibility === "private" ? ["PERSONAL"] : [])]));
-  const projectUsers = form.project === "PERSONAL"
+  const baseProjectUsers = form.project === "PERSONAL"
     ? users.filter((user) => user.email === form.employeeEmail)
     : users.filter((user) => (user.role === "member" || user.role === "manager") && selectedProject?.memberEmails.includes(user.email));
+  const selectedCreator = users.find((user) => user.email.toLowerCase() === form.createdBy.toLowerCase());
+  const projectUsers = currentUser?.role === "manager" && currentUser.discipline
+    ? baseProjectUsers.filter((user) => user.discipline === currentUser.discipline)
+    : currentUser?.role === "owner" && selectedCreator?.role === "manager" && selectedCreator.discipline
+      ? baseProjectUsers.filter((user) => user.discipline === selectedCreator.discipline)
+      : baseProjectUsers;
   const assignmentOptions = form.employeeEmail && !projectUsers.some((user) => user.email === form.employeeEmail)
     ? [...projectUsers, ...users.filter((user) => user.email === form.employeeEmail)]
     : projectUsers;
+  const createdByOptions = users.filter((user) => user.role === "owner" || (user.role === "manager" && selectedProject?.memberEmails.includes(user.email)) || user.email === form.createdBy);
+  const canConvertTaskToIssue = Boolean(task && currentUser && (currentUser.role === "owner" || task.createdBy.toLowerCase() === currentUser.email.toLowerCase() || projectManager));
   const convertTaskToIssue = async () => {
     if (!task || !issueDescription.trim() || !issueDiscipline) return;
     setConvertingIssue(true); setConvertIssueError("");
@@ -3059,10 +3230,10 @@ function TaskDrawer({ selectedId, form, setOpen, saveTask, deleteTask, saving, c
     <aside className="task-drawer">
       <div className="drawer-head"><div><p>{selectedId ? `TASK #${selectedId}` : form.visibility === "private" ? "NEW PRIVATE TASK" : "NEW TASK"}</p><h2>{selectedId ? "Task Details & Update" : form.visibility === "private" ? "New Private Task" : "New Task"}</h2>{task && issueLink && <span className="drawer-conversion-label">{task.createdAt <= issueLink.createdAt ? "Converted to Issue" : "Converted from Issue"}</span>}{form.visibility === "private" && <span className="drawer-private-label">Private · خاص</span>}</div><button className="close-button" onClick={() => setOpen(false)} aria-label="Close">×</button></div>
       <form onSubmit={saveTask} className="task-form" dir="ltr">
-        {selectedId && management && task?.visibility === "private" && task.createdBy === currentUser?.email && <div className="private-convert-bar"><button type="button" onClick={() => { updateForm("visibility", "team"); updateForm("project", task.project !== "PERSONAL" ? task.project : projects.find((project) => project.status === "active")?.code || ""); updateForm("employeeEmail", ""); updateForm("employeeName", ""); }}>Convert to Employee Task · تحويل إلى مهمة موظف</button></div>}
+        {selectedId && management && task?.visibility === "private" && form.visibility === "private" && task.createdBy === currentUser?.email && <div className="private-convert-bar"><button type="button" disabled={privateConversionLocked} title={privateConversionLocked ? "Pause the private task timer before converting it." : undefined} onClick={() => { updateForm("visibility", "team"); updateForm("project", task.project !== "PERSONAL" ? task.project : projects.find((project) => project.status === "active")?.code || ""); updateForm("employeeEmail", ""); updateForm("employeeName", ""); }}>Convert to Employee Task · تحويل إلى مهمة موظف</button>{privateConversionLocked && <small>Pause the timer before conversion · أوقف العداد مؤقتًا قبل التحويل</small>}</div>}
         {acceptingEmployeeTask && task && <div className="employee-origin-banner"><strong>Created By · أنشأها الموظف: {task.originatedByName || task.employeeName}</strong><span>Opened by · فُتحت بواسطة: {currentUser?.displayName}</span></div>}
         <div className="form-section"><h3>Task Information <span>معلومات المهمة</span></h3><div className="wide task-title-field"><label htmlFor="task-title-input">Task · اسم المهمة</label><div className="task-title-input-row"><input id="task-title-input" required disabled={!canEditDetails} value={form.title} onChange={(event) => updateForm("title", event.target.value)} placeholder="مثال: تدقيق موديل المنطقة 02" />{selectedId && task && <span className="task-title-drawer-progress"><TaskProgressControl task={task} canEdit={canEditProgress} busy={completionSavingTaskId === task.id} onChange={(value) => updateCompletion(task.id, value)} /></span>}</div></div><label className="wide"><span>Expected Output · المخرج المتوقع</span><textarea disabled={!canEditDetails} value={form.expectedOutput} onChange={(event) => updateForm("expectedOutput", event.target.value)} rows={3} placeholder="ما المطلوب تسليمه عند اكتمال المهمة؟" /></label><div className="form-grid task-project-date-grid"><label><span className="task-project-label"><span>Project · المشروع</span>{canOpenProjectSettings && selectedProject && <button type="button" className="task-project-settings" onClick={() => openProjectSettings(selectedProject)} aria-label="Project settings" title="Project settings">⚙</button>}</span><select required disabled={!canEditDetails || managementPrivateProjectLocked} value={form.project} onChange={(event) => { const code = event.target.value; updateForm("project", code); const project = projects.find((item) => item.code === code); if (management && !project?.memberEmails.includes(form.employeeEmail)) { updateForm("employeeEmail", ""); updateForm("employeeName", ""); } }}><option value="">اختر المشروع</option>{projectOptions.map((project) => <option key={project}>{project}</option>)}</select></label><label><span>Due Date · تاريخ الإنجاز المتوقع</span><input type="date" lang="en-GB" disabled={!canEditDetails} value={form.taskDate} onChange={(event) => updateForm("taskDate", event.target.value)} /></label><label><span>Priority · الأولوية</span><select disabled={!canEditDetails} value={form.priority} onChange={(event) => updateForm("priority", event.target.value as Task["priority"])}>{Object.entries(priorityLabel).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></label><label><span>Status · الحالة</span><select disabled value={form.status}>{Object.entries(statusLabel).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></label></div></div>
-        <div className="form-section assignment-time-section"><h3>Assignment & Time</h3><div className={`assignment-time-grid ${management ? "management" : "member"}`}>{management && (form.visibility !== "private" || acceptingEmployeeTask) && <label className="assignment-employee" title={assignmentLocked ? assignmentLockHint : undefined}><span>Employee</span><select required disabled={assignmentLocked} title={assignmentLocked ? assignmentLockHint : undefined} value={form.employeeEmail} onChange={(event) => { const user = users.find((item) => item.email === event.target.value); updateForm("employeeEmail", event.target.value); if (user) updateForm("employeeName", user.displayName); }}><option value="">{form.project ? "Select a project employee" : "Select a project first"}</option>{assignmentOptions.map((user) => <option key={user.email} value={user.email}>{user.displayName}{user.discipline ? ` · ${user.discipline}` : ""}</option>)}</select></label>}{selectedId && currentUser?.role === "owner" && <label className="assignment-created-by"><span>Created By</span><select required value={form.createdBy} onChange={(event) => updateForm("createdBy", event.target.value)}>{users.map((user) => <option key={user.email} value={user.email}>{user.displayName} · {user.email}</option>)}</select></label>}<label><span>Planned Hours</span><input type="number" disabled={!canEditDetails} min="0" step="0.25" value={form.plannedHours} onChange={(event) => updateForm("plannedHours", Number(event.target.value))} /></label><label><span>Logged Hours</span><input disabled value={formatDuration(loggedSeconds)} /></label></div></div>
+        <div className="form-section assignment-time-section"><h3>Assignment & Time</h3><div className={`assignment-time-grid ${management ? "management" : "member"}`}>{management && (form.visibility !== "private" || acceptingEmployeeTask) && <label className="assignment-employee" title={assignmentLocked ? assignmentLockHint : undefined}><span>Employee</span><select required disabled={assignmentLocked} title={assignmentLocked ? assignmentLockHint : undefined} value={form.employeeEmail} onChange={(event) => { const user = users.find((item) => item.email === event.target.value); updateForm("employeeEmail", event.target.value); if (user) updateForm("employeeName", user.displayName); }}><option value="">{form.project ? "Select a project employee" : "Select a project first"}</option>{assignmentOptions.map((user) => <option key={user.email} value={user.email}>{user.displayName}{user.discipline ? ` · ${user.discipline}` : ""}</option>)}</select></label>}{selectedId && currentUser?.role === "owner" && <label className="assignment-created-by"><span>Created By</span><select required value={form.createdBy} onChange={(event) => { const creator = users.find((user) => user.email === event.target.value); updateForm("createdBy", event.target.value); if (creator?.role === "manager" && form.employeeEmail && users.find((user) => user.email === form.employeeEmail)?.discipline !== creator.discipline) { updateForm("employeeEmail", ""); updateForm("employeeName", ""); } }}>{createdByOptions.map((user) => <option key={user.email} value={user.email}>{user.displayName}{user.discipline ? ` · ${user.discipline}` : ""}</option>)}</select></label>}<label><span>Planned Hours</span><input type="number" disabled={!canEditDetails} min="0" step="0.25" value={form.plannedHours} onChange={(event) => updateForm("plannedHours", Number(event.target.value))} /></label><label><span>Logged Hours</span><input disabled value={formatDuration(loggedSeconds)} /></label></div></div>
         <div className="form-section task-attachments-section"><div className="comments-heading"><h3>Task Attachments <span>مرفقات المهمة</span></h3><span>{selectedId ? attachments.filter((attachment) => attachment.subtaskId === null).length : draftAttachments.length}/10</span></div>{selectedId ? <TaskAttachmentTable attachments={attachments.filter((attachment) => attachment.subtaskId === null)} onUpload={(file) => uploadAttachment(file, null)} onDelete={deleteAttachment} busy={attachmentBusy} progress={attachmentProgress?.subtaskId === null ? attachmentProgress : null} readOnly={!canCollaborate} /> : <><label className="task-attachment-add draft-task-attachment-add"><span>＋</span><strong>Add Attachments</strong><input type="file" multiple disabled={saving || draftAttachments.length >= 10} onChange={(event) => { addDraftAttachments(Array.from(event.target.files || [])); event.currentTarget.value = ""; }} /></label><div className="attachment-paste-zone" contentEditable suppressContentEditableWarning role="textbox" tabIndex={0} onInput={(event) => { event.currentTarget.textContent = ""; }} onPaste={(event) => { const files = pastedFiles(event); if (!files.length) return; event.preventDefault(); addDraftAttachments(files); }}><span>Paste attachments here · الصق المرفقات هنا</span></div><small>Optional · maximum 10 files and 25 MB per file</small>{draftAttachments.length > 0 && <div className="pending-files">{draftAttachments.map(({ id, file }) => <span key={id}>{file.name} <small>{fileSizeLabel(file.size)}</small><button type="button" onClick={() => deleteDraftAttachment(id)} aria-label={`Remove ${file.name}`}>×</button></span>)}</div>}</>}</div>
         <div className="form-section subtasks-section">
           <div className="comments-heading"><h3>Subtasks <span>المهام الفرعية</span></h3><span>{selectedId ? `${subtasks.filter((subtask) => subtask.completed).length}/${subtasks.length}` : draftSubtasks.length}</span></div>
@@ -3090,7 +3261,7 @@ function TaskDrawer({ selectedId, form, setOpen, saveTask, deleteTask, saving, c
           })}</div>)}
           {canComment && <div className="comment-composer"><label className="wide"><span>{selectedId ? "Add a note · أضف ملاحظة" : "Initial note (optional) · ملاحظة أولية (اختيارية)"}</span><textarea maxLength={2000} rows={3} value={commentDraft} onChange={(event) => setCommentDraft(event.target.value)} placeholder="اكتب تحديثًا أو ملاحظة مرتبطة بهذه المهمة..." /></label><div><small>{commentDraft.length}/2000</small>{selectedId && <button type="button" className="comment-button" onClick={addComment} disabled={savingComment || !commentDraft.trim()}><ButtonLabel en={savingComment ? "Posting..." : "Post note"} ar={savingComment ? "جاري الإضافة..." : "إضافة الملاحظة"} /></button>}</div></div>}
         </div>
-        {selectedId && task && (issueLink || (isManagement(currentUser) && task.project !== "PERSONAL")) && <div className="form-section task-to-issue-section"><h3>{issueLink ? (task.createdAt <= issueLink.createdAt ? "Converted to Issue" : "Converted from Issue") : "Convert to Issue"} <span>{issueLink ? "سجل مرتبط" : "تحويل المهمة إلى مشكلة"}</span></h3>{issueLink ? <><p>{task.createdAt <= issueLink.createdAt ? "This task was converted to a linked issue." : "This task was created from a linked issue."}</p><button type="button" className={`record-link-button ${task.createdAt <= issueLink.createdAt ? "task-first" : "issue-first"}`} onClick={() => onOpenIssue(issueLink)}>Open {issueLink.issueNumber}</button></> : <><p>Create a project issue from this task. The records will stay linked automatically.</p>{convertIssueError && <div className="inline-form-error">{convertIssueError}</div>}<label className="wide"><span>Description · وصف المشكلة</span><textarea rows={3} maxLength={2000} value={issueDescription} onChange={(event) => setIssueDescription(event.target.value)} /></label><div className="form-grid"><label><span>Discipline · التخصص</span><select value={issueDiscipline} disabled={currentUser?.role === "manager" && currentUser.discipline !== "Manager"} onChange={(event) => setIssueDiscipline(event.target.value as Discipline)}>{disciplines.filter((discipline) => discipline !== "Manager").map((discipline) => <option key={discipline}>{discipline}</option>)}</select></label><label><span>Category · التصنيف</span><input maxLength={120} value={issueCategory} onChange={(event) => setIssueCategory(event.target.value)} /></label><label><span>Issue Date · تاريخ المشكلة</span><input type="date" value={issueDate} onChange={(event) => setIssueDate(event.target.value)} /></label></div><button type="button" className="convert-issue-button" onClick={() => void convertTaskToIssue()} disabled={convertingIssue || !issueDescription.trim()}>{convertingIssue ? "Creating Issue..." : "Convert and Link Issue"}</button></>}</div>}
+        {selectedId && task && (issueLink || (canConvertTaskToIssue && task.project !== "PERSONAL")) && <div className="form-section task-to-issue-section"><h3>{issueLink ? (task.createdAt <= issueLink.createdAt ? "Converted to Issue" : "Converted from Issue") : "Convert to Issue"} <span>{issueLink ? "سجل مرتبط" : "تحويل المهمة إلى مشكلة"}</span></h3>{issueLink ? <><p>{task.createdAt <= issueLink.createdAt ? "This task was converted to a linked issue." : "This task was created from a linked issue."}</p><button type="button" className={`record-link-button ${task.createdAt <= issueLink.createdAt ? "task-first" : "issue-first"}`} onClick={() => onOpenIssue(issueLink)}>Open {issueLink.issueNumber}</button></> : <><p>Create a project issue from this task. The records will stay linked automatically.</p>{convertIssueError && <div className="inline-form-error">{convertIssueError}</div>}<label className="wide"><span>Description · وصف المشكلة</span><textarea rows={3} maxLength={2000} value={issueDescription} onChange={(event) => setIssueDescription(event.target.value)} /></label><div className="form-grid"><label><span>Discipline · التخصص</span><select value={issueDiscipline} disabled={currentUser?.role === "manager" && currentUser.discipline !== "Manager"} onChange={(event) => setIssueDiscipline(event.target.value as Discipline)}>{disciplines.filter((discipline) => discipline !== "Manager").map((discipline) => <option key={discipline}>{discipline}</option>)}</select></label><label><span>Category · التصنيف</span><input maxLength={120} value={issueCategory} onChange={(event) => setIssueCategory(event.target.value)} /></label><label><span>Issue Date · تاريخ المشكلة</span><input type="date" value={issueDate} onChange={(event) => setIssueDate(event.target.value)} /></label></div><button type="button" className="convert-issue-button" onClick={() => void convertTaskToIssue()} disabled={convertingIssue || !issueDescription.trim()}>{convertingIssue ? "Creating Issue..." : "Convert and Link Issue"}</button></>}</div>}
         <div className="drawer-actions">{selectedId && (management || memberOwnPrivate) && <button type="button" className="delete-button" onClick={deleteTask} disabled={saving}><ButtonLabel en="Delete Task" ar="حذف المهمة" /></button>}<button type="button" className="secondary-button" onClick={() => setOpen(false)}><ButtonLabel en="Close" ar="إغلاق" /></button>{canEditDetails && <button type="submit" className="primary-button" disabled={saving}><ButtonLabel en={saving ? "Saving..." : selectedId ? "Save Changes" : "Create Task"} ar={saving ? "جاري الحفظ..." : selectedId ? "حفظ التعديلات" : "إنشاء مهمة"} /></button>}</div>
       </form>
     </aside>
@@ -3120,6 +3291,7 @@ function ProjectDrawer({ selectedId, form, setForm, setOpen, saveProject, delete
   const owner = currentUser?.role === "owner";
   const manager = currentUser?.role === "manager";
   const canEditTeam = owner || manager;
+  const currentManagerIsProjectManager = Boolean(manager && currentUser && form.projectManagerEmails.includes(currentUser.email));
   const teamMembers = users.filter((user) => (user.role === "member" || user.role === "manager") && (owner || (manager && user.discipline === currentUser?.discipline) || (!canEditTeam && form.memberEmails.includes(user.email))));
   const availableDisciplines = disciplines.filter((discipline) => teamMembers.some((user) => user.discipline === discipline));
   const memberSearchTerm = memberSearch.trim().toLowerCase();
@@ -3127,9 +3299,10 @@ function ProjectDrawer({ selectedId, form, setForm, setOpen, saveProject, delete
     (disciplineFilter === "all" || user.discipline === disciplineFilter) &&
     (!memberSearchTerm || `${user.displayName} ${user.email} ${user.discipline}`.toLowerCase().includes(memberSearchTerm))
   );
+  const canToggleMember = (user: User) => Boolean(owner || (manager && (user.role !== "manager" || currentManagerIsProjectManager || user.email === currentUser?.email)));
 
   const toggleMember = (user: User) => {
-    if (!canEditTeam) return;
+    if (!canEditTeam || !canToggleMember(user)) return;
     const isRemoving = form.memberEmails.includes(user.email);
     if (isRemoving && selectedId) {
       const taskCount = tasks.filter((task) => task.project === projectCode && task.employeeEmail === user.email).length;
@@ -3166,7 +3339,7 @@ function ProjectDrawer({ selectedId, form, setForm, setOpen, saveProject, delete
       <div className="drawer-head"><div><p>PROJECT</p><h2 className="drawer-record-title">{selectedId ? <><span>{form.name}</span> Edit</> : "Add new project"}</h2></div><button className="close-button" onClick={() => setOpen(false)}>×</button></div>
       <form onSubmit={saveProject} className="task-form">
         <div className="form-section"><h3>Project Information <span>معلومات المشروع</span></h3><div className="form-grid"><label><span>Code · كود المشروع</span><input required disabled={!owner} value={form.code} onChange={(event) => setForm({ ...form, code: event.target.value.toUpperCase() })} placeholder="مثال: DH2" /></label><label><span>Status · الحالة</span><select disabled={!owner} value={form.status} onChange={(event) => setForm({ ...form, status: event.target.value as Project["status"] })}>{Object.entries(projectStatusLabel).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label></div><label className="wide"><span>Project Name · اسم المشروع</span><input required disabled={!owner} value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} placeholder="اسم المشروع الكامل" /></label><label className="wide"><span>Client · العميل</span><input disabled={!owner} value={form.client} onChange={(event) => setForm({ ...form, client: event.target.value })} placeholder="اسم العميل" /></label><div className="form-grid"><label><span>Start Date · تاريخ البداية</span><input type="date" disabled={!owner} value={form.startDate} onChange={(event) => setForm({ ...form, startDate: event.target.value })} /></label><label><span>Target Date · التسليم المستهدف</span><input type="date" disabled={!owner} value={form.targetDate} onChange={(event) => setForm({ ...form, targetDate: event.target.value })} /></label></div></div>
-        <div className="form-section"><div className="comments-heading project-team-heading"><h3>Project Team <span>فريق المشروع</span></h3><div className="project-team-controls"><label className="search-box project-team-search"><span>⌕</span><input value={memberSearch} onChange={(event) => setMemberSearch(event.target.value)} placeholder="Search employee..." aria-label="Search project employees" /></label><select value={disciplineFilter} onChange={(event) => setDisciplineFilter(event.target.value)} aria-label="Filter project team by discipline"><option value="all">All disciplines · كل التخصصات</option>{availableDisciplines.map((discipline) => <option key={discipline} value={discipline}>{discipline}</option>)}</select><span aria-label={`${form.memberEmails.length} selected project members`}>{form.memberEmails.length}</span></div></div>{teamMembers.length === 0 ? <div className="comments-empty">أضف الموظفين أولاً من بوابة الفريق.</div> : filteredTeamMembers.length === 0 ? <div className="comments-empty">No matching employees · لا يوجد موظفون مطابقون</div> : <div className="member-picker">{filteredTeamMembers.map((user) => { const selected = form.memberEmails.includes(user.email); const projectManager = form.projectManagerEmails.includes(user.email); return <div key={user.email} className={`member-picker-row${selected ? " selected" : ""}${projectManager ? " project-manager" : ""}`}><label className="member-select"><input type="checkbox" disabled={!canEditTeam} checked={selected} onChange={() => toggleMember(user)} /><UserAvatar user={user} name={user.displayName} /><span><strong>{user.displayName} <em className="member-role">({roleLabel(user.role)})</em></strong><small className="project-member-email" dir="ltr">{user.email}</small><small>{user.discipline || "Team member"}</small></span></label>{(owner || (manager && user.role === "member" && user.discipline === currentUser?.discipline)) && <button type="button" className="project-member-settings" onClick={() => onEditUser(user)} aria-label={`Edit ${user.displayName}`} title="Edit employee">⚙</button>}<label className="project-manager-toggle" title={!owner ? "Only the owner can assign project managers" : selected ? "Grant full project visibility" : "Select the employee first"}><input type="checkbox" disabled={!owner || !selected} checked={projectManager} onChange={() => toggleProjectManager(user.email)} /><span>Project Manager</span></label></div>; })}</div>}
+        <div className="form-section"><div className="comments-heading project-team-heading"><h3>Project Team <span>فريق المشروع</span></h3><div className="project-team-controls"><label className="search-box project-team-search"><span>⌕</span><input value={memberSearch} onChange={(event) => setMemberSearch(event.target.value)} placeholder="Search employee..." aria-label="Search project employees" /></label><select value={disciplineFilter} onChange={(event) => setDisciplineFilter(event.target.value)} aria-label="Filter project team by discipline"><option value="all">All disciplines · كل التخصصات</option>{availableDisciplines.map((discipline) => <option key={discipline} value={discipline}>{discipline}</option>)}</select><span aria-label={`${form.memberEmails.length} selected project members`}>{form.memberEmails.length}</span></div></div>{teamMembers.length === 0 ? <div className="comments-empty">أضف الموظفين أولاً من بوابة الفريق.</div> : filteredTeamMembers.length === 0 ? <div className="comments-empty">No matching employees · لا يوجد موظفون مطابقون</div> : <div className="member-picker">{filteredTeamMembers.map((user) => { const selected = form.memberEmails.includes(user.email); const projectManager = form.projectManagerEmails.includes(user.email); const memberToggleAllowed = canToggleMember(user); return <div key={user.email} className={`member-picker-row${selected ? " selected" : ""}${projectManager ? " project-manager" : ""}`}><label className="member-select" title={!memberToggleAllowed ? "Only a project manager can remove another manager · مدير المشروع فقط يستطيع إزالة مسؤول آخر" : undefined}><input type="checkbox" disabled={!memberToggleAllowed} checked={selected} onChange={() => toggleMember(user)} /><UserAvatar user={user} name={user.displayName} /><span><strong>{user.displayName} <em className="member-role">({roleLabel(user.role)})</em></strong><small className="project-member-email" dir="ltr">{user.email}</small><small>{user.discipline || "Team member"}</small></span></label>{(owner || (manager && user.role === "member" && user.discipline === currentUser?.discipline)) && <button type="button" className="project-member-settings" onClick={() => onEditUser(user)} aria-label={`Edit ${user.displayName}`} title="Edit employee">⚙</button>}<label className="project-manager-toggle" title={!owner ? "Only the owner can assign project managers" : selected ? "Grant full project visibility" : "Select the employee first"}><input type="checkbox" disabled={!owner || !selected} checked={projectManager} onChange={() => toggleProjectManager(user.email)} /><span>Project Manager</span></label></div>; })}</div>}
           {removalWarning && <div className="member-removal-warning" role="alert"><strong>Employee cannot be removed yet · لا يمكن إزالة هذا الموظف الآن</strong><p>لدى {removalWarning.user.displayName} عدد {removalWarning.taskCount} من المهام على مشروع {projectCode}. يجب تغيير الموظف المسؤول إلى موظف آخر لديه صلاحية على المشروع قبل الإزالة.</p><small>{removalWarning.user.displayName} has {removalWarning.taskCount} assigned task(s) on this project. Reassign them to another authorized project member first.</small><button type="button" onClick={() => onResolveMemberTasks(removalWarning.user, projectCode)}><ButtonLabel en="Open filtered tasks" ar="الذهاب إلى المهام وتغيير الموظف" /></button><em>إذا لم يوجد بديل، أضف موظفًا آخر إلى المشروع واحفظه أولًا. · If no replacement is available, add another member and save the project first.</em></div>}
         </div>
         <div className="drawer-actions">{owner && selectedId && <button type="button" className="delete-button" onClick={deleteProject} disabled={saving}><ButtonLabel en="Delete Project" ar="حذف المشروع" /></button>}<button type="button" className="secondary-button" onClick={() => setOpen(false)}><ButtonLabel en="Close" ar="إغلاق" /></button>{canEditTeam && <button type="submit" className="primary-button" disabled={saving}><ButtonLabel en={saving ? "Saving..." : selectedId ? "Save Changes" : "Add Project"} ar={saving ? "جاري الحفظ..." : selectedId ? "حفظ التعديلات" : "إضافة المشروع"} /></button>}</div>
