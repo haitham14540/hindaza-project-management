@@ -43,6 +43,10 @@ type Task = {
   startTime: string;
   endTime: string;
   actualHours: number;
+  commentCount?: number;
+  subtaskCount?: number;
+  completedSubtaskCount?: number;
+  attachmentCount?: number;
   completionPercent: number;
   completionBeforeReview: number;
   status: "not_started" | "in_progress" | "paused" | "blocked" | "needs_revision" | "done";
@@ -162,7 +166,7 @@ type PasswordForm = {
   confirmPassword: string;
 };
 
-type TaskForm = Omit<Task, "id" | "createdBy" | "createdByName" | "createdByProfileImageKey" | "employeeDiscipline" | "createdAt" | "updatedAt" | "managerNote" | "submittedToManager" | "originatedByEmail" | "originatedByName" | "acceptedByEmail" | "acceptedByName" | "workCycle" | "completionBeforeReview">;
+type TaskForm = Omit<Task, "id" | "createdByName" | "createdByProfileImageKey" | "employeeDiscipline" | "createdAt" | "updatedAt" | "managerNote" | "submittedToManager" | "originatedByEmail" | "originatedByName" | "acceptedByEmail" | "acceptedByName" | "workCycle" | "completionBeforeReview">;
 type ProjectForm = Omit<Project, "id" | "createdAt">;
 type UserForm = Pick<User, "email" | "displayName" | "role" | "discipline"> & { temporaryPassword: string };
 type Tab = "overview" | "tasks" | "rfi" | "issues" | "projects" | "team" | "reports" | "activity";
@@ -198,22 +202,25 @@ type WorkspaceData = {
   tasks: Task[];
   users: User[];
   projects: Project[];
+  comments?: TaskComment[];
+  timeEntries?: TaskTimeEntry[];
+  timeEntriesMode?: "active" | "full";
+  subtasks?: TaskSubtask[];
+  taskAttachments?: TaskAttachment[];
+  taskIssueLinks?: TaskIssueLink[];
+  notifications: Notification[];
+};
+
+type TaskDetailsData = {
   comments: TaskComment[];
   timeEntries: TaskTimeEntry[];
   subtasks: TaskSubtask[];
   taskAttachments: TaskAttachment[];
   taskIssueLinks: TaskIssueLink[];
-  notifications: Notification[];
 };
 
 const tabValues: Tab[] = ["overview", "tasks", "rfi", "issues", "projects", "team", "reports", "activity"];
 const activeTabStorageKey = "hindaza-project-management-active-tab";
-
-function savedTab(): Tab {
-  if (typeof window === "undefined") return "overview";
-  const value = window.localStorage.getItem(activeTabStorageKey);
-  return tabValues.includes(value as Tab) ? value as Tab : "overview";
-}
 
 function tabFromLocation(): Tab {
   if (typeof window === "undefined") return "overview";
@@ -221,7 +228,7 @@ function tabFromLocation(): Tab {
   return tabValues.includes(value as Tab) ? value as Tab : "overview";
 }
 
-async function fetchWorkspaceData(timeoutMs = 25_000): Promise<WorkspaceData | null> {
+async function fetchWorkspaceData(timeoutMs = 15_000): Promise<WorkspaceData | null> {
   const controller = new AbortController();
   const timeout = window.setTimeout(() => controller.abort(), timeoutMs);
   try {
@@ -241,6 +248,30 @@ async function fetchWorkspaceData(timeoutMs = 25_000): Promise<WorkspaceData | n
     if (error instanceof DOMException && error.name === "AbortError") {
       throw new Error("استغرق تحميل البيانات وقتًا أطول من المتوقع. يرجى إعادة المحاولة.");
     }
+    throw error;
+  } finally {
+    window.clearTimeout(timeout);
+  }
+}
+
+async function fetchTaskDetails(taskId: number, timeoutMs = 12_000): Promise<TaskDetailsData | null> {
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(`/api/task-details?taskId=${taskId}`, {
+      cache: "no-store",
+      headers: { "Cache-Control": "no-cache" },
+      signal: controller.signal,
+    });
+    if (response.status === 401) {
+      window.location.replace("/login");
+      return null;
+    }
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || "Unable to load task details.");
+    return data as TaskDetailsData;
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") throw new Error("Task details took too long to load. Please try again.");
     throw error;
   } finally {
     window.clearTimeout(timeout);
@@ -312,6 +343,7 @@ function blankTask(user?: User, visibility: Task["visibility"] = "team"): TaskFo
     status: "not_started",
     managerCheck: "new",
     visibility,
+    createdBy: user?.email || "",
   };
 }
 
@@ -477,15 +509,19 @@ function taskLoggedHours(task: Task, entries: TaskTimeEntry[], now: number) {
   return entries.reduce((sum, entry) => sum + entrySeconds(entry, now), 0) / 3600;
 }
 
+function rowsByTaskId<T extends { taskId: number }>(rows: T[]) {
+  const grouped = new Map<number, T[]>();
+  for (const row of rows) {
+    const existing = grouped.get(row.taskId);
+    if (existing) existing.push(row);
+    else grouped.set(row.taskId, [row]);
+  }
+  return grouped;
+}
+
 function isoDate(date: Date) {
   const offset = date.getTimezoneOffset();
   return new Date(date.getTime() - offset * 60_000).toISOString().slice(0, 10);
-}
-
-function nextIsoDate(value: string) {
-  const date = new Date(`${value}T12:00:00`);
-  date.setDate(date.getDate() + 1);
-  return isoDate(date);
 }
 
 function reportRange(anchor: string, period: "week" | "month") {
@@ -519,6 +555,7 @@ export default function TaskDashboard() {
   const [subtasks, setSubtasks] = useState<TaskSubtask[]>([]);
   const [taskAttachments, setTaskAttachments] = useState<TaskAttachment[]>([]);
   const [taskIssueLinks, setTaskIssueLinks] = useState<TaskIssueLink[]>([]);
+  const [taskDetailsLoadedIds, setTaskDetailsLoadedIds] = useState<Set<number>>(() => new Set());
   const [users, setUsers] = useState<User[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
   const [notifications, setNotifications] = useState<Notification[]>([]);
@@ -567,12 +604,16 @@ export default function TaskDashboard() {
   const [accountMenuOpen, setAccountMenuOpen] = useState(false);
   const [notificationMenuOpen, setNotificationMenuOpen] = useState(false);
   const [projectSwitcherOpen, setProjectSwitcherOpen] = useState(false);
+  const [projectSwitcherSearch, setProjectSwitcherSearch] = useState("");
   const accountMenuRef = useRef<HTMLDivElement>(null);
   const notificationMenuRef = useRef<HTMLDivElement>(null);
   const projectSwitcherRef = useRef<HTMLDivElement>(null);
 
   const issuesModuleRef = useRef<IssuesModuleHandle>(null);
   const syncInFlightRef = useRef(false);
+  const taskDetailsInFlightRef = useRef(new Set<number>());
+  const taskDetailsLoaderRef = useRef<(taskId: number) => void>(() => undefined);
+  const lastWorkspaceSyncAtRef = useRef(0);
   const issueSyncInFlightRef = useRef(false);
   const applyingHistoryRef = useRef(false);
   const deepLinkedTaskRef = useRef<number | null>(null);
@@ -610,11 +651,19 @@ export default function TaskDashboard() {
 
   const applyWorkspaceData = useCallback((data: WorkspaceData, initialize = false) => {
     setTasks(data.tasks || []);
-    setComments(data.comments || []);
-    setTimeEntries(data.timeEntries || []);
-    setSubtasks(data.subtasks || []);
-    setTaskAttachments(data.taskAttachments || []);
-    setTaskIssueLinks(data.taskIssueLinks || []);
+    if (Array.isArray(data.comments)) setComments(data.comments);
+    if (Array.isArray(data.timeEntries)) {
+      if (data.timeEntriesMode === "active") {
+        const visibleTaskIds = new Set((data.tasks || []).map((task) => task.id));
+        setTimeEntries((current) => [
+          ...current.filter((entry) => Boolean(entry.endedAt) && visibleTaskIds.has(entry.taskId)),
+          ...data.timeEntries!,
+        ]);
+      } else setTimeEntries(data.timeEntries);
+    }
+    if (Array.isArray(data.subtasks)) setSubtasks(data.subtasks);
+    if (Array.isArray(data.taskAttachments)) setTaskAttachments(data.taskAttachments);
+    if (Array.isArray(data.taskIssueLinks)) setTaskIssueLinks(data.taskIssueLinks);
     setUsers(data.users || []);
     setProjects(data.projects || []);
     setNotifications(data.notifications || []);
@@ -633,8 +682,12 @@ export default function TaskDashboard() {
     if (showLoading) setLoading(true);
     try {
       const data = await fetchWorkspaceData();
-      if (!data) return false;
+      if (!data) {
+        setLoading(false);
+        return false;
+      }
       applyWorkspaceData(data, initialize);
+      lastWorkspaceSyncAtRef.current = Date.now();
       setError("");
       setLoading(false);
       return true;
@@ -647,11 +700,38 @@ export default function TaskDashboard() {
     }
   }, [applyWorkspaceData]);
 
+  async function loadTaskDetails(taskId: number) {
+    if (taskDetailsInFlightRef.current.has(taskId)) return;
+    taskDetailsInFlightRef.current.add(taskId);
+    try {
+      const data = await fetchTaskDetails(taskId);
+      if (!data) return;
+      setComments((current) => [...current.filter((row) => row.taskId !== taskId), ...(data.comments || [])]);
+      setTimeEntries((current) => [...current.filter((row) => row.taskId !== taskId), ...(data.timeEntries || [])]);
+      setSubtasks((current) => [...current.filter((row) => row.taskId !== taskId), ...(data.subtasks || [])]);
+      setTaskAttachments((current) => [...current.filter((row) => row.taskId !== taskId), ...(data.taskAttachments || [])]);
+      setTaskIssueLinks((current) => [...current.filter((row) => row.convertedTaskId !== taskId), ...(data.taskIssueLinks || [])]);
+      setTasks((current) => current.map((task) => task.id === taskId ? {
+        ...task,
+        commentCount: data.comments?.length || 0,
+        subtaskCount: data.subtasks?.length || 0,
+        completedSubtaskCount: data.subtasks?.filter((row) => row.completed).length || 0,
+        attachmentCount: data.taskAttachments?.length || 0,
+      } : task));
+      setTaskDetailsLoadedIds((current) => new Set(current).add(taskId));
+    } catch (detailsError) {
+      setError(detailsError instanceof Error ? detailsError.message : "Unable to load task details.");
+    } finally {
+      taskDetailsInFlightRef.current.delete(taskId);
+    }
+  }
+  taskDetailsLoaderRef.current = (taskId) => { void loadTaskDetails(taskId); };
+
   const loadOverviewIssues = useCallback(async () => {
     if (issueSyncInFlightRef.current) return;
     issueSyncInFlightRef.current = true;
     try {
-      const response = await fetch("/api/issues", { cache: "no-store" });
+      const response = await fetch("/api/issues?summary=1", { cache: "no-store" });
       if (response.status === 401) return;
       const data = await response.json();
       if (response.ok) setOverviewIssues(data.issues || []);
@@ -670,9 +750,10 @@ export default function TaskDashboard() {
   useEffect(() => {
     const refresh = async () => {
       if (document.visibilityState !== "visible") return;
+      if (Date.now() - lastWorkspaceSyncAtRef.current < 20_000) return;
       await loadWorkspace();
     };
-    const interval = window.setInterval(refresh, 30_000);
+    const interval = window.setInterval(refresh, 60_000);
     const onVisibility = () => { if (document.visibilityState === "visible") void refresh(); };
     const onFocus = () => void refresh();
     document.addEventListener("visibilitychange", onVisibility);
@@ -852,8 +933,11 @@ export default function TaskDashboard() {
       url.searchParams.delete("task");
       window.history.replaceState({ ...window.history.state, hindazaEmployeeTasks: null, hindazaTask: null }, "", url);
       deepLinkedTaskRef.current = null;
-      setTaskDrawerOpen(false);
-      setSelectedTaskId(null);
+      const closeDrawerTimer = window.setTimeout(() => {
+        setTaskDrawerOpen(false);
+        setSelectedTaskId(null);
+      }, 0);
+      return () => window.clearTimeout(closeDrawerTimer);
     }
   }, [employeeTasksEmail, tabReady]);
 
@@ -943,7 +1027,14 @@ export default function TaskDashboard() {
       .map((name) => ({ name, discipline: disciplineByName.get(name) || "Unspecified" }))
       .sort((a, b) => a.discipline.localeCompare(b.discipline) || a.name.localeCompare(b.name));
   }, [users, tasks]);
-  const employees = useMemo(() => employeeOptions.map((employee) => employee.name), [employeeOptions]);
+  const userByIdentity = useMemo(() => {
+    const map = new Map<string, User>();
+    for (const user of users) {
+      map.set(user.email.toLowerCase(), user);
+      map.set(user.displayName, user);
+    }
+    return map;
+  }, [users]);
   const projectCodes = useMemo(() => projects.map((project) => project.code).sort(), [projects]);
   const activeWork = useMemo(() => {
     const activeEntryByTask = new Map(timeEntries.filter((entry) => !entry.endedAt).map((entry) => [entry.taskId, entry]));
@@ -964,7 +1055,10 @@ export default function TaskDashboard() {
     : null;
   const activeWorkByProject = useMemo(() => {
     const grouped = new Map<string, typeof activeWork>();
-    activeWork.forEach((work) => grouped.set(work.task.project, [...(grouped.get(work.task.project) || []), work]));
+    for (const work of activeWork) {
+      const rows = grouped.get(work.task.project);
+      if (rows) rows.push(work); else grouped.set(work.task.project, [work]);
+    }
     return grouped;
   }, [activeWork]);
 
@@ -978,9 +1072,9 @@ export default function TaskDashboard() {
         (statusFilter === "all" || task.status === statusFilter) &&
         (reviewFilter === "all" || (reviewFilter === "unapproved" ? task.managerCheck !== "approved" : task.managerCheck === reviewFilter)) &&
         (!dueDateFilter || task.taskDate === dueDateFilter) &&
-        (disciplineFilter === "all" || task.employeeDiscipline === disciplineFilter || users.find((user) => user.email === task.employeeEmail || user.displayName === task.employeeName)?.discipline === disciplineFilter);
+        (disciplineFilter === "all" || task.employeeDiscipline === disciplineFilter || userByIdentity.get(task.employeeEmail.toLowerCase())?.discipline === disciplineFilter || userByIdentity.get(task.employeeName)?.discipline === disciplineFilter);
     }).sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.id - a.id);
-  }, [tasks, users, search, employeeFilter, projectFilter, statusFilter, reviewFilter, dueDateFilter, disciplineFilter, tab, selectedProjectCode]);
+  }, [tasks, userByIdentity, search, employeeFilter, projectFilter, statusFilter, reviewFilter, dueDateFilter, disciplineFilter, tab, selectedProjectCode]);
 
   const selectedProject = useMemo(() => projects.find((project) => project.code === selectedProjectCode) || null, [projects, selectedProjectCode]);
   const currentUserIsProjectManager = Boolean(currentUser && selectedProject?.projectManagerEmails.includes(currentUser.email));
@@ -996,8 +1090,15 @@ export default function TaskDashboard() {
     return { total: tasks.length, new: count("new"), pending: count("pending"), approved: count("approved"), returned: count("returned") };
   }, [tasks]);
 
-  const teamRows = useMemo(() => users.map((user) => {
-    const rows = tasks.filter((task) => task.employeeEmail === user.email || (!task.employeeEmail && task.employeeName === user.displayName));
+  const teamRows = useMemo(() => {
+    const tasksByEmployee = new Map<string, Task[]>();
+    for (const task of tasks) {
+      const key = task.employeeEmail ? task.employeeEmail.toLowerCase() : task.employeeName;
+      const rows = tasksByEmployee.get(key);
+      if (rows) rows.push(task); else tasksByEmployee.set(key, [task]);
+    }
+    return users.map((user) => {
+    const rows = tasksByEmployee.get(user.email.toLowerCase()) || tasksByEmployee.get(user.displayName) || [];
     return {
       ...user,
       temporary: user.email.endsWith("@hindaza.local"),
@@ -1007,7 +1108,8 @@ export default function TaskDashboard() {
       planned: rows.reduce((sum, task) => sum + task.plannedHours, 0),
       actual: rows.reduce((sum, task) => sum + task.actualHours, 0),
     };
-  }).sort((a, b) => b.total - a.total || a.displayName.localeCompare(b.displayName)), [users, tasks]);
+    }).sort((a, b) => a.displayName.localeCompare(b.displayName, undefined, { sensitivity: "base" }));
+  }, [users, tasks]);
 
   const filteredTeamRows = useMemo(() => {
     const term = teamSearch.trim().toLowerCase();
@@ -1018,9 +1120,20 @@ export default function TaskDashboard() {
     );
   }, [teamRows, teamSearch, teamDisciplineFilter, teamRoleFilter]);
 
-  const projectRows = useMemo(() => projects.map((project) => {
-    const rows = tasks.filter((task) => task.project === project.code);
-    const issueRows = overviewIssues.filter((issue) => issue.projectCode === project.code);
+  const projectRows = useMemo(() => {
+    const tasksByProject = new Map<string, Task[]>();
+    const issuesByProject = new Map<string, OverviewIssue[]>();
+    for (const task of tasks) {
+      const rows = tasksByProject.get(task.project);
+      if (rows) rows.push(task); else tasksByProject.set(task.project, [task]);
+    }
+    for (const issue of overviewIssues) {
+      const rows = issuesByProject.get(issue.projectCode);
+      if (rows) rows.push(issue); else issuesByProject.set(issue.projectCode, [issue]);
+    }
+    return projects.map((project) => {
+    const rows = tasksByProject.get(project.code) || [];
+    const issueRows = issuesByProject.get(project.code) || [];
     const done = rows.filter((task) => task.status === "done").length;
     return {
       ...project,
@@ -1039,7 +1152,8 @@ export default function TaskDashboard() {
       totalRfi: 0,
       closedRfi: 0,
     };
-  }), [projects, tasks, overviewIssues]);
+    });
+  }, [projects, tasks, overviewIssues]);
 
   const filteredProjectRows = useMemo(() => {
     const term = projectSearch.trim().toLowerCase();
@@ -1065,7 +1179,10 @@ export default function TaskDashboard() {
     if (reportEligibleTasks.some((task) => task.taskDate >= visibleRange.start && task.taskDate <= visibleRange.end)) return;
     const dates = reportEligibleTasks.map((task) => task.taskDate).filter(Boolean).sort();
     const mostRecentDate = dates.filter((date) => date <= localToday()).at(-1) || dates[0];
-    if (mostRecentDate) setReportAnchor(mostRecentDate);
+    if (mostRecentDate) {
+      const anchorTimer = window.setTimeout(() => setReportAnchor(mostRecentDate), 0);
+      return () => window.clearTimeout(anchorTimer);
+    }
   }, [loading, reportEligibleTasks, reportAnchor, reportPeriod]);
   const reportTasks = useMemo(() => customRangeInvalid ? [] : reportEligibleTasks.filter((task) => task.taskDate >= range.start && task.taskDate <= range.end && (
     reportScope === "all" || (reportGroup === "project" ? task.project === reportScope : task.employeeName === reportScope)
@@ -1164,6 +1281,7 @@ export default function TaskDashboard() {
       actualHours: task.actualHours, status: task.status, managerCheck: task.managerCheck,
       completionPercent: task.completionPercent,
       visibility: task.visibility,
+      createdBy: task.createdBy,
     });
     setCommentDraft("");
     setSubtaskDraft("");
@@ -1171,6 +1289,7 @@ export default function TaskDashboard() {
     setDraftTaskAttachments([]);
     setTaskAttachmentProgress(null);
     setTaskDrawerOpen(true);
+    taskDetailsLoaderRef.current(task.id);
   }
 
   function openEmployeeTask(task: Task) {
@@ -2194,7 +2313,9 @@ export default function TaskDashboard() {
       const groupCount = reportGroup === "employee" ? `${row.projectCount} projects` : `${row.employeeCount} employees`;
       return `<div class="bar-row"><strong>${escapeXml(row.label)}<small>(${groupCount})</small></strong><div class="bar"><i class="approved" style="width:${scale(row.approved)}%">${row.approved || ""}</i><i class="wip" style="width:${scale(row.wip)}%">${row.wip || ""}</i><i class="pending" style="width:${scale(row.pending)}%">${row.pending || ""}</i><i class="returned" style="width:${scale(row.returned)}%">${row.returned || ""}</i></div><span>${row.total}</span></div>`;
     }).join("");
-    popup.document.write(`<!doctype html><html dir="ltr"><head><meta charset="utf-8"><title>HINDAZA Project Management Report</title><style>*{box-sizing:border-box;-webkit-print-color-adjust:exact;print-color-adjust:exact}body{font-family:Arial,Tahoma,sans-serif;color:#1d1d1d;padding:26px;text-align:left}.logo{display:block;width:220px;max-height:76px;object-fit:contain;object-position:left center;margin:0 0 20px}h1{color:#171717;margin:0;border-left:5px solid #ffd200;padding-left:12px}.meta{color:#737373;margin:8px 0 22px}.summary{display:grid;grid-template-columns:repeat(4,minmax(110px,1fr));gap:10px;margin:20px 0}.summary div{border:1px solid #d9d9d2;border-radius:10px;padding:11px 14px}.summary strong{font-size:22px;color:#8b6c00;display:block;margin-top:4px}.chart{margin:22px 0;padding:14px;border:1px solid #deded8;border-radius:10px}.bar-row{display:grid;grid-template-columns:190px 1fr 35px;gap:10px;align-items:center;margin:9px 0;font-size:11px}.bar-row strong small{display:block;margin-top:3px;color:#c8414a;font-size:8px}.bar{display:flex;height:18px;background:#f1f1ed;border:1px solid #bfc3c3;border-radius:8px;overflow:hidden}.bar i{display:grid;height:100%;min-width:0;place-items:center;color:white;font-size:9px;font-style:normal;text-shadow:0 1px 2px rgba(0,0,0,.45)}.approved{background:#2f8a64!important}.wip{background:#627b87!important}.pending{background:#ffd200!important;color:#171717!important;text-shadow:none!important}.returned{background:#d05a62!important}.legend{display:flex;flex-wrap:wrap;gap:16px;margin-top:13px;font-size:10px}.legend span{display:inline-flex;align-items:center;gap:6px}.legend i{width:18px;height:8px;border:1px solid #999;border-radius:4px}.footer{margin-top:30px;color:#858585;font-size:9px}@media print{body{padding:0}}</style></head><body><img class="logo" src="/report-logo.png" alt="HINDAZA"><h1>HINDAZA Project Management</h1><div class="meta">${reportPeriodLabel} Report · ${formatDate(range.start)} — ${formatDate(range.end)}</div><div class="summary"><div>Total Tasks<strong>${reportSummary.total}</strong></div><div>Manager Approved<strong>${reportSummary.approved}</strong></div><div>WIP<strong>${reportSummary.wip}</strong></div><div>Needs Review<strong>${reportSummary.pending}</strong></div></div><div class="chart">${bars}<div class="legend"><span><i class="approved"></i>Manager Approved</span><span><i class="wip"></i>WIP</span><span><i class="pending"></i>Needs Review</span><span><i class="returned"></i>Returned</span></div></div><div class="footer">Generated from HINDAZA Project Management</div><script>window.onload=()=>{window.print();}</script></body></html>`);
+    const reportTableRows = displayedReportRows.map((row) => `<tr><td>${escapeXml(row.label)}</td><td>${row.total}</td><td>${row.approved}</td><td>${row.wip}</td><td>${row.pending}</td><td>${row.returned}</td><td>${row.planned.toFixed(2)}</td><td>${row.actual.toFixed(2)}</td></tr>`).join("");
+    const reportTable = `<table class="report-detail-table"><thead><tr><th>${reportGroup === "project" ? "Project" : "Employee"}</th><th>Total Tasks</th><th>Manager Approved</th><th>WIP</th><th>Needs Review</th><th>Returned</th><th>Planned Hours</th><th>Actual Hours</th></tr></thead><tbody>${reportTableRows}</tbody></table>`;
+    popup.document.write(`<!doctype html><html dir="ltr"><head><meta charset="utf-8"><title>HINDAZA Project Management Report</title><style>*{box-sizing:border-box;-webkit-print-color-adjust:exact;print-color-adjust:exact}body{font-family:Arial,Tahoma,sans-serif;color:#1d1d1d;padding:26px;text-align:left}.logo{display:block;width:220px;max-height:76px;object-fit:contain;object-position:left center;margin:0 0 20px}h1{color:#171717;margin:0;border-left:5px solid #ffd200;padding-left:12px}.meta{color:#737373;margin:8px 0 22px}.summary{display:grid;grid-template-columns:repeat(4,minmax(110px,1fr));gap:10px;margin:20px 0}.summary div{border:1px solid #d9d9d2;border-radius:10px;padding:11px 14px}.summary strong{font-size:22px;color:#8b6c00;display:block;margin-top:4px}.chart{margin:22px 0;padding:14px;border:1px solid #deded8;border-radius:10px}.bar-row{display:grid;grid-template-columns:190px 1fr 35px;gap:10px;align-items:center;margin:9px 0;font-size:11px}.bar-row strong small{display:block;margin-top:3px;color:#c8414a;font-size:8px}.bar{display:flex;height:18px;background:#f1f1ed;border:1px solid #bfc3c3;border-radius:8px;overflow:hidden}.bar i{display:grid;height:100%;min-width:0;place-items:center;color:white;font-size:9px;font-style:normal;text-shadow:0 1px 2px rgba(0,0,0,.45)}.approved{background:#2f8a64!important}.wip{background:#627b87!important}.pending{background:#ffd200!important;color:#171717!important;text-shadow:none!important}.returned{background:#d05a62!important}.legend{display:flex;flex-wrap:wrap;gap:16px;margin-top:13px;font-size:10px}.legend span{display:inline-flex;align-items:center;gap:6px}.legend i{width:18px;height:8px;border:1px solid #999;border-radius:4px}.report-detail-table{width:100%;margin-top:16px;border-collapse:collapse;table-layout:fixed}.report-detail-table th,.report-detail-table td{padding:8px 7px;border:1px solid #d9d9d2;text-align:left;font-size:9px}.report-detail-table th{background:#171717;color:#fff;font-size:8px}.report-detail-table th:first-child{width:22%}.footer{margin-top:30px;color:#858585;font-size:9px}@media print{body{padding:0}.report-detail-table{break-inside:auto}.report-detail-table tr{break-inside:avoid}}</style></head><body><img class="logo" src="/report-logo.png" alt="HINDAZA"><h1>HINDAZA Project Management</h1><div class="meta">${reportPeriodLabel} Report · ${formatDate(range.start)} — ${formatDate(range.end)}</div><div class="summary"><div>Total Tasks<strong>${reportSummary.total}</strong></div><div>Manager Approved<strong>${reportSummary.approved}</strong></div><div>WIP<strong>${reportSummary.wip}</strong></div><div>Needs Review<strong>${reportSummary.pending}</strong></div></div><div class="chart">${bars}<div class="legend"><span><i class="approved"></i>Manager Approved</span><span><i class="wip"></i>WIP</span><span><i class="pending"></i>Needs Review</span><span><i class="returned"></i>Returned</span></div></div>${reportTable}<div class="footer">Generated from HINDAZA Project Management</div><script>window.onload=()=>{window.print();}</script></body></html>`);
     popup.document.close();
   }
 
@@ -2218,6 +2339,10 @@ export default function TaskDashboard() {
     if (!isManagement(currentUser) || workers.length === 0) return null;
     return <span className="project-live-workers" aria-label={`${workers.length} employees working now`}>{workers.map(({ employeeEmail, employeeName, task }) => <i key={`${employeeEmail}-${task.id}`} title={`${employeeName} is working on ${task.title}`} aria-label={`${employeeName}: ${task.title}`} />)}</span>;
   };
+  const switcherTerm = projectSwitcherSearch.trim().toLowerCase();
+  const switcherProjects = projects
+    .filter((project) => !switcherTerm || `${project.name} ${project.code}`.toLowerCase().includes(switcherTerm))
+    .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }));
   const accountProfileProgressStyle = { "--profile-upload-progress": `${profileImageProgress * 3.6}deg` } as CSSProperties;
 
   return (
@@ -2254,7 +2379,7 @@ export default function TaskDashboard() {
 
       <main className="main-content">
         <header className={`topbar${tab === "projects" && selectedProject ? " project-context-topbar" : ""}`}>
-          <div className="page-heading"><div className="project-heading-line"><h1 dir="ltr">{tab === "projects" && selectedProject ? selectedProject.name : pageTitle[tab]}</h1>{tab === "projects" && selectedProject && projects.length > 1 && <div className="project-switcher" ref={projectSwitcherRef}><button type="button" className="project-switcher-button" onClick={() => setProjectSwitcherOpen((open) => !open)} aria-label="Switch project" aria-expanded={projectSwitcherOpen} title="Switch project"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 9 5-5 5 5M17 15l-5 5-5-5" /></svg></button>{projectSwitcherOpen && <div className="project-switcher-menu" role="menu" aria-label="Available projects">{projects.map((project) => <button type="button" role="menuitem" key={project.code} className={project.code === selectedProject.code ? "active" : ""} onClick={() => { openProjectWorkspace(project.code, projectWorkspaceTab); setProjectSwitcherOpen(false); }}><strong>{project.name}</strong><small>{project.code}</small></button>)}</div>}</div>}</div>{tab === "projects" && selectedProject && <div className="project-heading-meta"><span className="project-heading-code">{selectedProject.code}</span><span className={`project-status ${selectedProject.status}`}>{projectStatusLabel[selectedProject.status]}</span>{selectedProject.client && <span className="project-heading-client">{selectedProject.client}</span>}</div>}<p className="subhead" dir="ltr">{new Intl.DateTimeFormat("en-GB", { weekday: "long", year: "numeric", month: "long", day: "numeric" }).format(new Date())}</p></div>
+          <div className="page-heading"><div className="project-heading-line"><h1 dir="ltr">{tab === "projects" && selectedProject ? selectedProject.name : pageTitle[tab]}</h1>{tab === "projects" && selectedProject && projects.length > 1 && <div className="project-switcher" ref={projectSwitcherRef}><button type="button" className="project-switcher-button" onClick={() => { setProjectSwitcherOpen((open) => !open); setProjectSwitcherSearch(""); }} aria-label="Switch project" aria-expanded={projectSwitcherOpen} title="Switch project"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 9 5-5 5 5M17 15l-5 5-5-5" /></svg></button>{projectSwitcherOpen && <div className="project-switcher-menu" role="menu" aria-label="Available projects"><label className="project-switcher-search"><span>⌕</span><input autoFocus value={projectSwitcherSearch} onChange={(event) => setProjectSwitcherSearch(event.target.value)} placeholder="Search project..." aria-label="Search projects" /></label>{switcherProjects.length ? switcherProjects.map((project) => <button type="button" role="menuitem" key={project.code} className={project.code === selectedProject.code ? "active" : ""} onClick={() => { openProjectWorkspace(project.code, projectWorkspaceTab); setProjectSwitcherOpen(false); setProjectSwitcherSearch(""); }}><strong>{project.name}</strong><small>{project.code}</small></button>) : <div className="project-switcher-empty">No matching projects</div>}</div>}</div>}</div>{tab === "projects" && selectedProject && <div className="project-heading-meta"><span className="project-heading-code">{selectedProject.code}</span><span className={`project-status ${selectedProject.status}`}>{projectStatusLabel[selectedProject.status]}</span>{selectedProject.client && <span className="project-heading-client">{selectedProject.client}</span>}</div>}<p className="subhead" dir="ltr">{new Intl.DateTimeFormat("en-GB", { weekday: "long", year: "numeric", month: "long", day: "numeric" }).format(new Date())}</p></div>
           <div className="topbar-actions">
             {tab === "projects" && selectedProject && projectWorkspaceTab === "tasks" && isManagement(currentUser) && <button className="primary-button topbar-add-button" onClick={() => openNewTask(selectedProject.code)}><span className="button-icon" aria-hidden="true">✓</span><span>New Task</span></button>}
             {tab === "projects" && selectedProject && projectWorkspaceTab === "tasks" && currentUser && <button className="primary-button topbar-add-button private-task-button" onClick={() => openNewPrivateTask(selectedProject.code)}><span className="button-icon" aria-hidden="true">✓</span><span>Private Task</span></button>}
@@ -2307,7 +2432,7 @@ export default function TaskDashboard() {
               <article className="stat-card amber"><span>Returned · مُعادة</span><strong>{projectStats.returned}</strong></article>
               <article className="stat-card green"><span>Approved · معتمدة</span><strong>{projectStats.approved}</strong></article>
             </section>
-            <TaskTable loading={loading} tasks={projectTasks} filteredCount={projectTasks.length} tab={tab} employees={employeeOptions} users={users} projects={[selectedProject.code]} lockedProjectCode={selectedProject.code} search={search} employeeFilter={employeeFilter} projectFilter={projectFilter} statusFilter={statusFilter} reviewFilter={reviewFilter} dueDateFilter={dueDateFilter} disciplineFilter={disciplineFilter} showEmployeeFilter={currentUser?.role !== "member" || currentUserIsProjectManager} showDisciplineColumn={currentUser?.role === "owner" || currentUser?.role === "manager" || currentUserIsProjectManager} setSearch={setSearch} setEmployeeFilter={setEmployeeFilter} setProjectFilter={setProjectFilter} setStatusFilter={setStatusFilter} setReviewFilter={setReviewFilter} setDueDateFilter={setDueDateFilter} setDisciplineFilter={setDisciplineFilter} openTask={openTask} showAll={() => undefined} timeEntries={timeEntries} clock={clock} commentCounts={taskCommentCounts} subtasks={subtasks} attachments={taskAttachments} issueLinks={taskIssueLinks} openIssue={openLinkedIssue} currentUser={currentUser} completionSavingTaskId={completionSavingTaskId} updateCompletion={updateTaskCompletion} />
+            <TaskTable loading={loading} tasks={projectTasks} filteredCount={projectTasks.length} tab={tab} employees={employeeOptions} users={users} projects={[selectedProject.code]} lockedProjectCode={selectedProject.code} search={search} employeeFilter={employeeFilter} projectFilter={projectFilter} statusFilter={statusFilter} reviewFilter={reviewFilter} dueDateFilter={dueDateFilter} disciplineFilter={disciplineFilter} showEmployeeFilter={currentUser?.role !== "member" || currentUserIsProjectManager} showDisciplineColumn={currentUser?.role === "owner" || currentUser?.role === "manager" || currentUserIsProjectManager} setSearch={setSearch} setEmployeeFilter={setEmployeeFilter} setProjectFilter={setProjectFilter} setStatusFilter={setStatusFilter} setReviewFilter={setReviewFilter} setDueDateFilter={setDueDateFilter} setDisciplineFilter={setDisciplineFilter} openTask={openTask} showAll={() => undefined} timeEntries={timeEntries} clock={clock} commentCounts={taskCommentCounts} detailsLoadedTaskIds={taskDetailsLoadedIds} subtasks={subtasks} attachments={taskAttachments} issueLinks={taskIssueLinks} openIssue={openLinkedIssue} currentUser={currentUser} completionSavingTaskId={completionSavingTaskId} updateCompletion={updateTaskCompletion} />
           </>}
           {projectWorkspaceTab === "issues" && currentUser && <IssuesModule key={selectedProject.code} ref={issuesModuleRef} currentUser={currentUser} users={users} projects={[selectedProject]} lockedProjectCode={selectedProject.code} onTaskCreated={(task) => setTasks((current) => [task as Task, ...current])} onIssueChanged={syncIssueLink} onOpenTask={(id) => void openLinkedTask(id)} onOpenProjectSettings={(project) => openProjectFromTask(project as Project)} onToast={setToast} />}
           {projectWorkspaceTab === "rfi" && <section className="panel module-placeholder"><div className="module-icon">RFI</div><p>REQUEST FOR INFORMATION</p><h2>{selectedProject.name}</h2><span>This RFI workspace is limited to {selectedProject.code}.</span><div className="module-status">Ready for configuration</div></section>}
@@ -2321,7 +2446,7 @@ export default function TaskDashboard() {
             <article className="stat-card amber"><span>Returned · مُعادة</span><strong>{stats.returned}</strong><small>تحتاج إجراء من الموظف</small></article>
             <article className="stat-card green"><span>Approved · معتمدة</span><strong>{stats.approved}</strong><small>تم اعتمادها من المسؤول</small></article>
           </section>
-          <TaskTable loading={loading} tasks={filteredTasks} filteredCount={filteredTasks.length} tab={tab} employees={employeeOptions} users={users} projects={projectCodes} search={search} employeeFilter={employeeFilter} projectFilter={projectFilter} statusFilter={statusFilter} reviewFilter={reviewFilter} dueDateFilter={dueDateFilter} disciplineFilter={disciplineFilter} showEmployeeFilter={currentUser?.role !== "member"} showDisciplineColumn={currentUser?.role === "owner" || currentUser?.role === "manager"} setSearch={setSearch} setEmployeeFilter={setEmployeeFilter} setProjectFilter={setProjectFilter} setStatusFilter={setStatusFilter} setReviewFilter={setReviewFilter} setDueDateFilter={setDueDateFilter} setDisciplineFilter={setDisciplineFilter} openTask={openTask} showAll={() => setTab("tasks")} timeEntries={timeEntries} clock={clock} commentCounts={taskCommentCounts} subtasks={subtasks} attachments={taskAttachments} issueLinks={taskIssueLinks} openIssue={openLinkedIssue} currentUser={currentUser} completionSavingTaskId={completionSavingTaskId} updateCompletion={updateTaskCompletion} />
+          <TaskTable loading={loading} tasks={filteredTasks} filteredCount={filteredTasks.length} tab={tab} employees={employeeOptions} users={users} projects={projectCodes} search={search} employeeFilter={employeeFilter} projectFilter={projectFilter} statusFilter={statusFilter} reviewFilter={reviewFilter} dueDateFilter={dueDateFilter} disciplineFilter={disciplineFilter} showEmployeeFilter={currentUser?.role !== "member"} showDisciplineColumn={currentUser?.role === "owner" || currentUser?.role === "manager"} setSearch={setSearch} setEmployeeFilter={setEmployeeFilter} setProjectFilter={setProjectFilter} setStatusFilter={setStatusFilter} setReviewFilter={setReviewFilter} setDueDateFilter={setDueDateFilter} setDisciplineFilter={setDisciplineFilter} openTask={openTask} showAll={() => setTab("tasks")} timeEntries={timeEntries} clock={clock} commentCounts={taskCommentCounts} detailsLoadedTaskIds={taskDetailsLoadedIds} subtasks={subtasks} attachments={taskAttachments} issueLinks={taskIssueLinks} openIssue={openLinkedIssue} currentUser={currentUser} completionSavingTaskId={completionSavingTaskId} updateCompletion={updateTaskCompletion} />
         </>}
 
         {tab === "rfi" && <section className="panel module-placeholder">
@@ -2413,6 +2538,8 @@ function ReportTasksDialog({ metric, title, groupBy, tasks, projects, users, tim
   }, [onClose]);
   const employeeNames = useMemo(() => Array.from(new Set(tasks.map((task) => task.employeeName).filter(Boolean))).sort(), [tasks]);
   const taskDisciplines = useMemo(() => Array.from(new Set(tasks.map((task) => task.employeeDiscipline).filter(Boolean))).sort(), [tasks]);
+  const timeEntriesByTaskId = useMemo(() => rowsByTaskId(timeEntries), [timeEntries]);
+  const activeTaskIds = useMemo(() => new Set(timeEntries.filter((entry) => !entry.endedAt).map((entry) => entry.taskId)), [timeEntries]);
   const visibleTasks = useMemo(() => tasks.filter((task) => (employeeFilter === "all" || task.employeeName === employeeFilter) && (statusFilter === "all" || task.status === statusFilter) && (reviewFilter === "all" || task.managerCheck === reviewFilter) && (disciplineFilter === "all" || task.employeeDiscipline === disciplineFilter) && (!dueDateFilter || task.taskDate === dueDateFilter)), [tasks, employeeFilter, statusFilter, reviewFilter, disciplineFilter, dueDateFilter]);
   const groups = useMemo(() => {
     const grouped = new Map<string, Task[]>();
@@ -2451,7 +2578,7 @@ function ReportTasksDialog({ metric, title, groupBy, tasks, projects, users, tim
       const heading = groupBy === "project" ? project?.name || key : employee?.displayName || key;
       const subheading = groupBy === "project" ? key : employee?.discipline || "Employee";
       const rows = groupTasks.map((task) => {
-        const logged = taskLoggedHours(task, timeEntries.filter((entry) => entry.taskId === task.id), clock);
+        const logged = taskLoggedHours(task, timeEntriesByTaskId.get(task.id) || [], clock);
         const flag = taskFlag(task);
         return `<tr><td><strong>${escapeXml(task.title)}</strong><small>${escapeXml(task.expectedOutput || "—")}</small></td>${hideEmployeeColumn ? "" : `<td>${escapeXml(task.employeeName || "Unassigned")}</td>`}<td>${escapeXml(task.createdByName || "Unknown user")}</td><td>${escapeXml(formatCreatedDate(task.createdAt))}</td><td>${escapeXml(formatDueDate(task.taskDate))}</td><td>${escapeXml(tableStatusLabel[task.status])}</td><td>${escapeXml(tableCheckLabel[task.managerCheck])}</td><td>${logged ? `${logged.toFixed(2)}h` : "—"}</td><td>${flag.label}</td></tr>`;
       }).join("");
@@ -2470,12 +2597,14 @@ function ReportTasksDialog({ metric, title, groupBy, tasks, projects, users, tim
         const groupEmployee = groupBy === "employee" ? users.find((item) => item.displayName === key) : null;
         const collapsed = collapsedGroups.has(key);
         return <section className="employee-project-group" key={key}><button type="button" className={`employee-project-heading${employee && project && onProjectSettings ? " with-settings" : ""}`} onClick={() => toggleGroup(key)} aria-expanded={!collapsed}><span>{collapsed ? "+" : "−"}</span><div><strong>{groupBy === "project" ? project?.name || key : groupEmployee?.displayName || key}</strong><small>{groupBy === "project" ? key : groupEmployee?.discipline || "Employee"}</small></div><em>{groupTasks.length}</em>{employee && project && onProjectSettings && <span className="report-project-settings" role="button" tabIndex={0} title={`Project settings for ${project.name}`} aria-label={`Project settings for ${project.name}`} onClick={(event) => { event.stopPropagation(); onProjectSettings(project); }} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); event.stopPropagation(); onProjectSettings(project); } }}>⚙</span>}</button>{!collapsed && <div className={`employee-task-table-wrap${groupTasks.length > 4 ? " has-more-tasks" : ""}`} tabIndex={groupTasks.length > 4 ? 0 : undefined}><table className="employee-task-table"><thead><tr><th>Task</th>{!hideEmployeeColumn && <th>Employee</th>}<th>Created By</th><th>Created Date</th><th>Due Date</th><th>Status</th><th>Manager Review</th><th>Hours</th><th>Indicator</th></tr></thead><tbody>{groupTasks.map((task) => {
-          const logged = taskLoggedHours(task, timeEntries.filter((entry) => entry.taskId === task.id), clock);
+          const taskEntries = timeEntriesByTaskId.get(task.id) || [];
+          const logged = taskLoggedHours(task, taskEntries, clock);
+          const active = task.status === "in_progress" || activeTaskIds.has(task.id);
           const flag = taskFlag(task);
           const href = `/?view=projects&project=${encodeURIComponent(task.project)}&section=tasks&task=${task.id}`;
           const openLink = (event: React.MouseEvent<HTMLAnchorElement>) => { if (event.ctrlKey || event.metaKey || event.shiftKey || event.button !== 0) return; event.preventDefault(); onOpenTask(task); };
           const canEditProgress = canEditTaskCompletion(currentUser, task);
-          return <tr className="employee-task-clickable-row" key={task.id} onClick={(event) => { if (event.ctrlKey || event.metaKey || event.shiftKey || event.button !== 0 || (event.target as HTMLElement).closest("a, button, details")) return; onOpenTask(task); }}><td><div className="window-task-title-progress"><TaskProgressControl task={task} canEdit={canEditProgress} busy={completionSavingTaskId === task.id} onChange={(value) => updateCompletion(task.id, value)} /><a href={href} onClick={openLink}><strong dir="auto">{task.title}</strong><small>{task.expectedOutput || "—"}</small></a></div></td>{!hideEmployeeColumn && <td><a href={href} onClick={openLink}>{task.employeeName || "Unassigned"}</a></td>}<td><a href={href} onClick={openLink}>{task.createdByName || "Unknown user"}</a></td><td dir="ltr"><a href={href} onClick={openLink}>{formatCreatedDate(task.createdAt)}</a></td><td dir="ltr"><a href={href} onClick={openLink}>{formatDueDate(task.taskDate)}</a></td><td><a href={href} onClick={openLink}><span className={`pill status-${task.status}`}>{tableStatusLabel[task.status]}</span></a></td><td><a href={href} onClick={openLink}><span className={`pill check-${task.managerCheck}`}>{tableCheckLabel[task.managerCheck]}</span></a></td><td><a href={href} onClick={openLink}>{logged ? `${logged.toFixed(2)}h` : "—"}</a></td><td><a href={href} onClick={openLink}><span className={`flag flag-${flag.key}`}>{flag.label}</span></a></td></tr>;
+          return <tr className="employee-task-clickable-row" key={task.id} onClick={(event) => { if (event.ctrlKey || event.metaKey || event.shiftKey || event.button !== 0 || (event.target as HTMLElement).closest("a, button, details")) return; onOpenTask(task); }}><td><div className="window-task-title-progress"><TaskProgressControl task={task} canEdit={canEditProgress} busy={completionSavingTaskId === task.id} onChange={(value) => updateCompletion(task.id, value)} /><a href={href} onClick={openLink}><span className="employee-task-title"><strong dir="auto">{task.title}</strong>{active && <i className="employee-task-live-pulse" title="Working now" aria-label="Working now" />}</span><small>{task.expectedOutput || "—"}</small></a></div></td>{!hideEmployeeColumn && <td><a href={href} onClick={openLink}>{task.employeeName || "Unassigned"}</a></td>}<td><a href={href} onClick={openLink}>{task.createdByName || "Unknown user"}</a></td><td dir="ltr"><a href={href} onClick={openLink}>{formatCreatedDate(task.createdAt)}</a></td><td dir="ltr"><a href={href} onClick={openLink}>{formatDueDate(task.taskDate)}</a></td><td><a href={href} onClick={openLink}><span className={`pill status-${task.status}`}>{tableStatusLabel[task.status]}</span></a></td><td><a href={href} onClick={openLink}><span className={`pill check-${task.managerCheck}`}>{tableCheckLabel[task.managerCheck]}</span></a></td><td><a href={href} onClick={openLink}>{logged ? `${logged.toFixed(2)}h` : "—"}</a></td><td><a href={href} onClick={openLink}><span className={`flag flag-${flag.key}`}>{flag.label}</span></a></td></tr>;
         })}</tbody></table></div>}</section>;
       })}</div></div>
     </section>
@@ -2486,6 +2615,8 @@ function EmployeeTasksDialog({ employee, tasks, projects, timeEntries, clock, cu
   const [showAll, setShowAll] = useState(false);
   const [collapsedProjects, setCollapsedProjects] = useState<Set<string>>(() => new Set());
   const projectGroupsRef = useRef<HTMLDivElement>(null);
+  const timeEntriesByTaskId = useMemo(() => rowsByTaskId(timeEntries), [timeEntries]);
+  const activeTaskIds = useMemo(() => new Set(timeEntries.filter((entry) => !entry.endedAt).map((entry) => entry.taskId)), [timeEntries]);
   const visibleTasks = showAll ? tasks : tasks.filter((task) => task.managerCheck !== "approved");
   const groups = useMemo(() => {
     const grouped = new Map<string, Task[]>();
@@ -2520,7 +2651,7 @@ function EmployeeTasksDialog({ employee, tasks, projects, timeEntries, clock, cu
     const printedGroups = groups.map(([projectCode, projectTasks]) => {
       const project = projects.find((item) => item.code === projectCode);
       const rows = projectTasks.map((task) => {
-        const logged = taskLoggedHours(task, timeEntries.filter((entry) => entry.taskId === task.id), clock);
+        const logged = taskLoggedHours(task, timeEntriesByTaskId.get(task.id) || [], clock);
         const flag = taskFlag(task);
         return `<tr><td><strong>${escapeXml(task.title)}</strong><small>${escapeXml(task.expectedOutput || "—")}</small></td><td>${escapeXml(task.createdByName || "Unknown user")}</td><td>${escapeXml(formatCreatedDate(task.createdAt))}</td><td>${escapeXml(formatDueDate(task.taskDate))}</td><td>${escapeXml(tableStatusLabel[task.status])}</td><td>${escapeXml(tableCheckLabel[task.managerCheck])}</td><td>${logged ? `${logged.toFixed(2)}h` : "—"}</td><td>${flag.label}</td></tr>`;
       }).join("");
@@ -2538,9 +2669,9 @@ function EmployeeTasksDialog({ employee, tasks, projects, timeEntries, clock, cu
         const project = projects.find((item) => item.code === projectCode);
         const collapsed = collapsedProjects.has(projectCode);
         return <section className="employee-project-group" key={projectCode}><button type="button" className="employee-project-heading" onClick={() => toggleProject(projectCode)} aria-expanded={!collapsed}><span>{collapsed ? "+" : "−"}</span><div><strong>{project?.name || projectCode}</strong><small>{projectCode}</small></div><em>{projectTasks.length}</em></button>{!collapsed && <div className={`employee-task-table-wrap${projectTasks.length > 4 ? " has-more-tasks" : ""}`} tabIndex={projectTasks.length > 4 ? 0 : undefined} aria-label={projectTasks.length > 4 ? `${project?.name || projectCode}: scroll for more tasks` : undefined}><table className="employee-task-table"><thead><tr><th>Task</th><th>Created By</th><th>Created Date</th><th>Due Date</th><th>Status</th><th>Manager Review</th><th>Hours</th><th>Indicator</th></tr></thead><tbody>{projectTasks.map((task) => {
-          const taskEntries = timeEntries.filter((entry) => entry.taskId === task.id);
+          const taskEntries = timeEntriesByTaskId.get(task.id) || [];
           const logged = taskLoggedHours(task, taskEntries, clock);
-          const active = task.status === "in_progress" || taskEntries.some((entry) => !entry.endedAt);
+          const active = task.status === "in_progress" || activeTaskIds.has(task.id);
           const flag = taskFlag(task);
           const href = `/?view=projects&project=${encodeURIComponent(task.project)}&section=tasks&task=${task.id}`;
           const openTaskLink = (event: React.MouseEvent<HTMLAnchorElement>) => { if (event.ctrlKey || event.metaKey || event.shiftKey || event.button !== 0) return; event.preventDefault(); onOpenTask(task); };
@@ -2567,6 +2698,8 @@ function ProjectOverviewDashboard(props: {
   showTasks: () => void;
   showIssues: () => void;
 }) {
+  const timeEntriesByTaskId = useMemo(() => rowsByTaskId(props.timeEntries), [props.timeEntries]);
+  const activeTaskIds = useMemo(() => new Set(props.timeEntries.filter((entry) => !entry.endedAt).map((entry) => entry.taskId)), [props.timeEntries]);
   const activeProjects = props.projects.filter((project) => project.status === "active");
   const completedProjects = props.projects.filter((project) => project.status === "completed").length;
   const onHoldProjects = props.projects.filter((project) => project.status === "on_hold").length;
@@ -2576,7 +2709,7 @@ function ProjectOverviewDashboard(props: {
   const criticalIssues = openIssues.filter((issue) => issue.priority === "critical");
   const completion = props.tasks.length ? Math.round((props.tasks.filter((task) => task.status === "done").length / props.tasks.length) * 100) : 0;
   const plannedHours = props.tasks.reduce((sum, task) => sum + task.plannedHours, 0);
-  const actualHours = props.tasks.reduce((sum, task) => sum + taskLoggedHours(task, props.timeEntries.filter((entry) => entry.taskId === task.id), props.clock), 0);
+  const actualHours = props.tasks.reduce((sum, task) => sum + taskLoggedHours(task, timeEntriesByTaskId.get(task.id) || [], props.clock), 0);
   const attentionTasks = [...props.tasks]
     .filter((task) => task.status !== "done" || task.managerCheck === "pending")
     .sort((a, b) => {
@@ -2589,7 +2722,7 @@ function ProjectOverviewDashboard(props: {
     return priority[b.priority] - priority[a.priority] || b.updatedAt.localeCompare(a.updatedAt);
   }).slice(0, 6);
   const visibleProjects = [...props.projects].sort((a, b) => {
-    const statusOrder = { active: 0, on_hold: 1, completed: 2 };
+    const statusOrder: Record<Project["status"], number> = { active: 0, on_hold: 1, completed: 2, archived: 3 };
     return statusOrder[a.status] - statusOrder[b.status] || b.openIssues - a.openIssues || a.code.localeCompare(b.code);
   }).slice(0, 6);
 
@@ -2631,7 +2764,7 @@ function ProjectOverviewDashboard(props: {
     <div className="overview-detail-grid">
       <section className="panel overview-queue-panel">
         <div className="overview-panel-heading"><div><span>TASK QUEUE</span><h2>Tasks needing attention</h2></div><button onClick={props.showTasks}>Open tasks →</button></div>
-        {attentionTasks.length === 0 ? <div className="overview-empty-compact">All visible tasks are complete.</div> : <div className="overview-record-list">{attentionTasks.map((task) => { const flag = taskFlag(task); return <button key={task.id} onClick={() => props.openTask(task)}><span className={`overview-record-marker marker-${flag.key}`} /><div><strong>{task.title}</strong><small>{task.project} · {task.employeeName}</small></div><span className={`flag ${flag.key}`}>{flag.label.split(" · ")[0]}</span><time>{formatDueDate(task.taskDate)}</time></button>; })}</div>}
+        {attentionTasks.length === 0 ? <div className="overview-empty-compact">All visible tasks are complete.</div> : <div className="overview-record-list">{attentionTasks.map((task) => { const flag = taskFlag(task); const active = task.status === "in_progress" || activeTaskIds.has(task.id); return <button key={task.id} onClick={() => props.openTask(task)}><span className={`overview-record-marker marker-${flag.key}`} /><div><span className="employee-task-title"><strong dir="auto">{task.title}</strong>{active && <i className="employee-task-live-pulse" title="Working now" aria-label="Working now" />}</span><small>{task.project} · {task.employeeName}</small></div><span className={`flag ${flag.key}`}>{flag.label.split(" · ")[0]}</span><time>{formatDueDate(task.taskDate)}</time></button>; })}</div>}
       </section>
       <section className="panel overview-queue-panel issue-queue">
         <div className="overview-panel-heading"><div><span>ISSUE QUEUE</span><h2>Issues needing attention</h2></div><button onClick={props.showIssues}>Open issues →</button></div>
@@ -2649,6 +2782,7 @@ type TaskTableProps = {
   openTask: (task: Task) => void; showAll: () => void;
   timeEntries: TaskTimeEntry[]; clock: number;
   commentCounts: Map<number, number>;
+  detailsLoadedTaskIds: Set<number>;
   subtasks: TaskSubtask[];
   attachments: TaskAttachment[];
   issueLinks: TaskIssueLink[];
@@ -2675,15 +2809,22 @@ function TaskProgressControl({ task, canEdit, busy, onChange }: { task: Task; ca
     "--task-completion": `${completionPercent * 3.6}deg`,
     "--task-progress-color": `hsl(${completionPercent * 1.2} 68% 43%)`,
   } as CSSProperties;
-  if (!canEdit) return <span className="task-progress-circle readonly" style={style} title={`${completionPercent}% complete`}><span>{completionPercent}%</span></span>;
-  return <details className="task-progress-control" onClick={(event) => event.stopPropagation()} onPointerDown={(event) => event.stopPropagation()} onKeyDown={(event) => event.stopPropagation()}>
+  const livePulse = task.status === "in_progress" ? <i className="employee-task-live-pulse" title="Working now" aria-label="Working now" /> : null;
+  if (!canEdit) return <span className="task-progress-live-wrap"><span className="task-progress-circle readonly" style={style} title={`${completionPercent}% complete`}><span>{completionPercent}%</span></span>{livePulse}</span>;
+  return <span className="task-progress-live-wrap"><details className="task-progress-control" onClick={(event) => event.stopPropagation()} onPointerDown={(event) => event.stopPropagation()} onKeyDown={(event) => event.stopPropagation()}>
     <summary className="task-progress-circle" style={style} title="Update task completion" aria-label={`Task completion ${completionPercent}%`}><span>{completionPercent}%</span></summary>
     <div className="task-progress-menu">{taskCompletionOptions.map((value) => <button type="button" key={value} className={value === completionPercent ? "active" : ""} disabled={busy} onClick={(event) => { event.currentTarget.closest("details")?.removeAttribute("open"); onChange(value); }}>{value}%</button>)}</div>
-  </details>;
+  </details>{livePulse}</span>;
 }
 
 function TaskTable(props: TaskTableProps) {
   const filtersActive = Boolean(props.search.trim()) || props.employeeFilter !== "all" || (!props.lockedProjectCode && props.projectFilter !== "all") || props.statusFilter !== "all" || props.reviewFilter !== "all" || Boolean(props.dueDateFilter) || (props.showDisciplineColumn && props.disciplineFilter !== "all");
+  const timeEntriesByTaskId = useMemo(() => rowsByTaskId(props.timeEntries), [props.timeEntries]);
+  const subtasksByTaskId = useMemo(() => rowsByTaskId(props.subtasks), [props.subtasks]);
+  const attachmentsByTaskId = useMemo(() => rowsByTaskId(props.attachments), [props.attachments]);
+  const issueLinkByTaskId = useMemo(() => new Map(props.issueLinks.map((link) => [link.convertedTaskId, link])), [props.issueLinks]);
+  const usersByEmail = useMemo(() => new Map(props.users.map((user) => [user.email.toLowerCase(), user])), [props.users]);
+  const usersByName = useMemo(() => new Map(props.users.map((user) => [user.displayName, user])), [props.users]);
   const clearFilters = () => {
     props.setSearch("");
     props.setEmployeeFilter("all");
@@ -2696,21 +2837,24 @@ function TaskTable(props: TaskTableProps) {
   return <section className="panel">
     <div className="filters"><label className="search-box"><span>⌕</span><input value={props.search} onChange={(event) => props.setSearch(event.target.value)} placeholder={props.lockedProjectCode ? "Search tasks in this project..." : "Search for a task or project..."} /></label>{props.showEmployeeFilter && <select value={props.employeeFilter} onChange={(event) => props.setEmployeeFilter(event.target.value)} aria-label="Filter by employee"><option value="all">All employees · كل الموظفين</option>{props.employees.map((employee) => <option key={employee.name} value={employee.name}>{employee.name} ({employee.discipline})</option>)}</select>}{props.showDisciplineColumn && <select value={props.disciplineFilter} onChange={(event) => props.setDisciplineFilter(event.target.value)} aria-label="Filter by discipline"><option value="all">All disciplines · كل التخصصات</option>{disciplines.map((discipline) => <option key={discipline} value={discipline}>{discipline}</option>)}</select>}{!props.lockedProjectCode && <select value={props.projectFilter} onChange={(event) => props.setProjectFilter(event.target.value)} aria-label="Filter by project"><option value="all">All projects · كل المشاريع</option>{props.projects.map((project) => <option key={project}>{project}</option>)}</select>}<select value={props.statusFilter} onChange={(event) => props.setStatusFilter(event.target.value)} aria-label="Filter by status"><option value="all">All employee statuses · كل حالات الموظف</option>{Object.entries(statusLabel).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select><select value={props.reviewFilter} onChange={(event) => props.setReviewFilter(event.target.value)} aria-label="Filter by manager review">{props.lockedProjectCode && <option value="unapproved">Unapproved · غير معتمدة</option>}<option value="all">All manager reviews · كل مراجعات المسؤول</option>{Object.entries(checkLabel).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select><label className="due-date-filter"><span>Due Date</span><input type="date" value={props.dueDateFilter} onChange={(event) => props.setDueDateFilter(event.target.value)} aria-label="Filter by due date" /></label><button type="button" className="clear-filters-button" onClick={clearFilters} disabled={!filtersActive} aria-label="Clear all task filters" title="Clear filters · مسح الفلاتر"><span className="filter-clear-icon" aria-hidden="true" /></button><span className="count-badge filter-count" dir="ltr">{props.filteredCount} {props.filteredCount === 1 ? "Task" : "Tasks"}</span></div>
     {props.loading ? <div className="loading-state"><div className="spinner" /><p>جاري تحميل المهام...</p></div> : props.tasks.length === 0 ? <div className="empty-state"><strong>لا توجد مهام مطابقة</strong><p>غيّر خيارات البحث أو أضف مهمة جديدة.</p></div> : <><div className="task-table-wrap"><table className={`task-table task-data-table task-table-ltr${props.showEmployeeFilter ? "" : " member-task-table"}`}><thead><tr><th>Task</th>{props.showEmployeeFilter && <th>Employee</th>}<th>Created By</th>{props.showDisciplineColumn && <th>Discipline</th>}<th>Created Date</th><th>Due Date</th><th>Priority</th><th>Hours</th><th>Status</th><th>Manager Review</th><th>Indicator</th><th>Issue Link</th></tr></thead><tbody>{props.tasks.map((task) => {
-      const flag = taskFlag(task);
-      const entries = props.timeEntries.filter((entry) => entry.taskId === task.id);
-      const taskSubtasks = props.subtasks.filter((subtask) => subtask.taskId === task.id);
-      const attachmentCount = props.attachments.filter((attachment) => attachment.taskId === task.id).length;
-      const issueLink = props.issueLinks.find((link) => link.convertedTaskId === task.id);
+	      const flag = taskFlag(task);
+	      const entries = timeEntriesByTaskId.get(task.id) || [];
+	      const taskSubtasks = subtasksByTaskId.get(task.id) || [];
+	      const detailsLoaded = props.detailsLoadedTaskIds.has(task.id);
+	      const subtaskCount = detailsLoaded ? taskSubtasks.length : task.subtaskCount || taskSubtasks.length;
+	      const completedSubtaskCount = detailsLoaded ? taskSubtasks.filter((item) => item.completed).length : task.completedSubtaskCount || 0;
+	      const attachmentCount = detailsLoaded ? attachmentsByTaskId.get(task.id)?.length || 0 : task.attachmentCount || 0;
+      const issueLink = issueLinkByTaskId.get(task.id);
       const logged = taskLoggedHours(task, entries, props.clock);
       const active = task.status === "in_progress" || entries.some((entry) => !entry.endedAt);
-      const noteCount = props.commentCounts.get(task.id) || 0;
-      const creator = props.users.find((user) => user.email === task.createdBy) || (task.createdBy ? { email: task.createdBy, displayName: task.createdByName || "Unknown user", role: "member" as const, discipline: "" as const, profileImageKey: task.createdByProfileImageKey || "" } : undefined);
-      const employee = props.users.find((user) => user.email === task.employeeEmail || user.displayName === task.employeeName);
+	      const noteCount = detailsLoaded ? props.commentCounts.get(task.id) || 0 : task.commentCount || 0;
+      const creator = usersByEmail.get(task.createdBy.toLowerCase()) || (task.createdBy ? { email: task.createdBy, displayName: task.createdByName || "Unknown user", role: "member" as const, discipline: "" as const, profileImageKey: task.createdByProfileImageKey || "" } : undefined);
+      const employee = usersByEmail.get(task.employeeEmail.toLowerCase()) || usersByName.get(task.employeeName);
       const creatorName = task.createdByName || creator?.displayName || "Unknown user";
       const canEditProgress = canEditTaskCompletion(props.currentUser, task);
-      return <tr key={task.id} onClick={() => props.openTask(task)} tabIndex={0} onKeyDown={(event) => event.key === "Enter" && props.openTask(task)}><td><div className="task-cell"><div className="task-title-progress"><TaskProgressControl task={task} canEdit={canEditProgress} busy={props.completionSavingTaskId === task.id} onChange={(value) => props.updateCompletion(task.id, value)} /><strong>{task.title}</strong></div><div className="task-tags">{task.originatedByName && <span className="employee-origin-tag">From employee · {task.originatedByName}</span>}{task.visibility === "private" && <span className="private-badge">Private</span>}{taskSubtasks.length > 0 && <span className="subtask-indicator" title={`${taskSubtasks.filter((item) => item.completed).length}/${taskSubtasks.length} subtasks completed`} aria-label={`${taskSubtasks.length} subtasks`}>☑ <small>{taskSubtasks.length}</small></span>}{noteCount > 0 && <span className="note-indicator" title={`${noteCount} notes`} aria-label={`${noteCount} notes`}>▰ <small>{noteCount}</small></span>}{attachmentCount > 0 && <span className="attachment-count task-attachment-indicator" title={`${attachmentCount} attachments`} aria-label={`${attachmentCount} attachments`}>📎 <small>{attachmentCount}</small></span>}</div><small>{task.expectedOutput}</small></div></td>{props.showEmployeeFilter && <td><div className="employee-cell"><UserAvatar user={employee} name={task.employeeName} /><strong>{task.employeeName}</strong></div></td>}<td><div className="employee-cell creator-person-cell" title={creatorName}><UserAvatar user={creator} name={creatorName} /><strong>{creatorName}</strong></div></td>{props.showDisciplineColumn && <td><span className="task-discipline">{task.employeeDiscipline || employee?.discipline || "—"}</span></td>}<td><span className="due-date" dir="ltr">{formatCreatedDate(task.createdAt)}</span></td><td><span className="due-date" dir="ltr">{formatDueDate(task.taskDate)}</span></td><td><span className={`pill priority-${task.priority}`}>{tablePriorityLabel[task.priority]}</span></td><td><strong className={active ? "live-hours" : ""}>{logged ? logged.toFixed(2) : "—"}{active && <i />}</strong><small className="hours-note"> / {task.plannedHours || "—"}h</small></td><td><span className={`pill status-${task.status}`}>{tableStatusLabel[task.status]}</span></td><td><span className={`pill check-${task.managerCheck}`}>{tableCheckLabel[task.managerCheck]}</span></td><td><span className={`flag flag-${flag.key}`}>{flag.label}</span></td><td>{issueLink ? <button type="button" className={`record-link-button ${task.createdAt <= issueLink.createdAt ? "task-first" : "issue-first"}`} onClick={(event) => { event.stopPropagation(); props.openIssue(issueLink); }}>{issueLink.issueNumber}</button> : <span>—</span>}</td></tr>;
+      return <tr key={task.id} onClick={() => props.openTask(task)} tabIndex={0} onKeyDown={(event) => event.key === "Enter" && props.openTask(task)}><td><div className="task-cell"><div className="task-title-progress"><TaskProgressControl task={task} canEdit={canEditProgress} busy={props.completionSavingTaskId === task.id} onChange={(value) => props.updateCompletion(task.id, value)} /><strong>{task.title}</strong></div><div className="task-tags">{task.originatedByName && <span className="employee-origin-tag">From employee · {task.originatedByName}</span>}{task.visibility === "private" && <span className="private-badge">Private</span>}{subtaskCount > 0 && <span className="subtask-indicator" title={`${completedSubtaskCount}/${subtaskCount} subtasks completed`} aria-label={`${subtaskCount} subtasks`}>☑ <small>{subtaskCount}</small></span>}{noteCount > 0 && <span className="note-indicator" title={`${noteCount} notes`} aria-label={`${noteCount} notes`}>▰ <small>{noteCount}</small></span>}{attachmentCount > 0 && <span className="attachment-count task-attachment-indicator" title={`${attachmentCount} attachments`} aria-label={`${attachmentCount} attachments`}>📎 <small>{attachmentCount}</small></span>}</div><small>{task.expectedOutput}</small></div></td>{props.showEmployeeFilter && <td><div className="employee-cell"><UserAvatar user={employee} name={task.employeeName} /><strong>{task.employeeName}</strong></div></td>}<td><div className="employee-cell creator-person-cell" title={creatorName}><UserAvatar user={creator} name={creatorName} /><strong>{creatorName}</strong></div></td>{props.showDisciplineColumn && <td><span className="task-discipline">{task.employeeDiscipline || employee?.discipline || "—"}</span></td>}<td><span className="due-date" dir="ltr">{formatCreatedDate(task.createdAt)}</span></td><td><span className="due-date" dir="ltr">{formatDueDate(task.taskDate)}</span></td><td><span className={`pill priority-${task.priority}`}>{tablePriorityLabel[task.priority]}</span></td><td><strong className={active ? "live-hours" : ""}>{logged ? logged.toFixed(2) : "—"}{active && <i />}</strong><small className="hours-note"> / {task.plannedHours || "—"}h</small></td><td><span className={`pill status-${task.status}`}>{tableStatusLabel[task.status]}</span></td><td><span className={`pill check-${task.managerCheck}`}>{tableCheckLabel[task.managerCheck]}</span></td><td><span className={`flag flag-${flag.key}`}>{flag.label}</span></td><td>{issueLink ? <button type="button" className={`record-link-button ${task.createdAt <= issueLink.createdAt ? "task-first" : "issue-first"}`} onClick={(event) => { event.stopPropagation(); props.openIssue(issueLink); }}>{issueLink.issueNumber}</button> : <span>—</span>}</td></tr>;
     })}</tbody></table></div>
-      <div className="mobile-task-list">{props.tasks.map((task) => { const flag = taskFlag(task); const entries = props.timeEntries.filter((entry) => entry.taskId === task.id); const taskSubtasks = props.subtasks.filter((subtask) => subtask.taskId === task.id); const attachmentCount = props.attachments.filter((attachment) => attachment.taskId === task.id).length; const logged = taskLoggedHours(task, entries, props.clock); const creatorName = task.createdByName || props.users.find((user) => user.email === task.createdBy)?.displayName || "Unknown user"; return <button className="mobile-task" key={task.id} onClick={() => props.openTask(task)}><div className="mobile-task-top"><div className="task-tags">{task.originatedByName && <span className="employee-origin-tag">From employee · {task.originatedByName}</span>}{task.visibility === "private" && <span className="private-badge">Private</span>}{taskSubtasks.length > 0 && <span className="subtask-indicator">☑ <small>{taskSubtasks.length}</small></span>}{attachmentCount > 0 && <span className="attachment-count task-attachment-indicator">📎 <small>{attachmentCount}</small></span>}</div><span className={`flag flag-${flag.key}`}>{flag.label}</span></div><strong>{task.title}</strong><small>{props.showEmployeeFilter ? `${task.employeeName} · ` : ""}<span className="mobile-date-label">Created by</span> {creatorName} · <span className="mobile-date-label">Created</span> <span className="due-date" dir="ltr">{formatCreatedDate(task.createdAt)}</span> · <span className="mobile-date-label">Due</span> <span className="due-date" dir="ltr">{formatDueDate(task.taskDate)}</span></small><div className="mobile-task-bottom"><span className={`pill status-${task.status}`}>{tableStatusLabel[task.status]}</span><span>{task.completionPercent}% · {logged.toFixed(2)}/{task.plannedHours}h</span></div></button>; })}</div>
+      <div className="mobile-task-list">{props.tasks.map((task) => { const flag = taskFlag(task); const entries = timeEntriesByTaskId.get(task.id) || []; const taskSubtasks = subtasksByTaskId.get(task.id) || []; const detailsLoaded = props.detailsLoadedTaskIds.has(task.id); const subtaskCount = detailsLoaded ? taskSubtasks.length : task.subtaskCount || taskSubtasks.length; const attachmentCount = detailsLoaded ? attachmentsByTaskId.get(task.id)?.length || 0 : task.attachmentCount || 0; const logged = taskLoggedHours(task, entries, props.clock); const creatorName = task.createdByName || usersByEmail.get(task.createdBy.toLowerCase())?.displayName || "Unknown user"; return <button className="mobile-task" key={task.id} onClick={() => props.openTask(task)}><div className="mobile-task-top"><div className="task-tags">{task.originatedByName && <span className="employee-origin-tag">From employee · {task.originatedByName}</span>}{task.visibility === "private" && <span className="private-badge">Private</span>}{subtaskCount > 0 && <span className="subtask-indicator">☑ <small>{subtaskCount}</small></span>}{attachmentCount > 0 && <span className="attachment-count task-attachment-indicator">📎 <small>{attachmentCount}</small></span>}</div><span className={`flag flag-${flag.key}`}>{flag.label}</span></div><strong>{task.title}</strong><small>{props.showEmployeeFilter ? `${task.employeeName} · ` : ""}<span className="mobile-date-label">Created by</span> {creatorName} · <span className="mobile-date-label">Created</span> <span className="due-date" dir="ltr">{formatCreatedDate(task.createdAt)}</span> · <span className="mobile-date-label">Due</span> <span className="due-date" dir="ltr">{formatDueDate(task.taskDate)}</span></small><div className="mobile-task-bottom"><span className={`pill status-${task.status}`}>{tableStatusLabel[task.status]}</span><span>{task.completionPercent}% · {logged.toFixed(2)}/{task.plannedHours}h</span></div></button>; })}</div>
       {props.tab === "overview" && props.filteredCount > 7 && <button className="text-button" onClick={props.showAll}><ButtonLabel en="View all tasks →" ar="عرض جميع المهام" /></button>}</>}
   </section>;
 }
@@ -2918,7 +3062,7 @@ function TaskDrawer({ selectedId, form, setOpen, saveTask, deleteTask, saving, c
         {selectedId && management && task?.visibility === "private" && task.createdBy === currentUser?.email && <div className="private-convert-bar"><button type="button" onClick={() => { updateForm("visibility", "team"); updateForm("project", task.project !== "PERSONAL" ? task.project : projects.find((project) => project.status === "active")?.code || ""); updateForm("employeeEmail", ""); updateForm("employeeName", ""); }}>Convert to Employee Task · تحويل إلى مهمة موظف</button></div>}
         {acceptingEmployeeTask && task && <div className="employee-origin-banner"><strong>Created By · أنشأها الموظف: {task.originatedByName || task.employeeName}</strong><span>Opened by · فُتحت بواسطة: {currentUser?.displayName}</span></div>}
         <div className="form-section"><h3>Task Information <span>معلومات المهمة</span></h3><div className="wide task-title-field"><label htmlFor="task-title-input">Task · اسم المهمة</label><div className="task-title-input-row"><input id="task-title-input" required disabled={!canEditDetails} value={form.title} onChange={(event) => updateForm("title", event.target.value)} placeholder="مثال: تدقيق موديل المنطقة 02" />{selectedId && task && <span className="task-title-drawer-progress"><TaskProgressControl task={task} canEdit={canEditProgress} busy={completionSavingTaskId === task.id} onChange={(value) => updateCompletion(task.id, value)} /></span>}</div></div><label className="wide"><span>Expected Output · المخرج المتوقع</span><textarea disabled={!canEditDetails} value={form.expectedOutput} onChange={(event) => updateForm("expectedOutput", event.target.value)} rows={3} placeholder="ما المطلوب تسليمه عند اكتمال المهمة؟" /></label><div className="form-grid task-project-date-grid"><label><span className="task-project-label"><span>Project · المشروع</span>{canOpenProjectSettings && selectedProject && <button type="button" className="task-project-settings" onClick={() => openProjectSettings(selectedProject)} aria-label="Project settings" title="Project settings">⚙</button>}</span><select required disabled={!canEditDetails || managementPrivateProjectLocked} value={form.project} onChange={(event) => { const code = event.target.value; updateForm("project", code); const project = projects.find((item) => item.code === code); if (management && !project?.memberEmails.includes(form.employeeEmail)) { updateForm("employeeEmail", ""); updateForm("employeeName", ""); } }}><option value="">اختر المشروع</option>{projectOptions.map((project) => <option key={project}>{project}</option>)}</select></label><label><span>Due Date · تاريخ الإنجاز المتوقع</span><input type="date" lang="en-GB" disabled={!canEditDetails} value={form.taskDate} onChange={(event) => updateForm("taskDate", event.target.value)} /></label><label><span>Priority · الأولوية</span><select disabled={!canEditDetails} value={form.priority} onChange={(event) => updateForm("priority", event.target.value as Task["priority"])}>{Object.entries(priorityLabel).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></label><label><span>Status · الحالة</span><select disabled value={form.status}>{Object.entries(statusLabel).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></label></div></div>
-        <div className="form-section assignment-time-section"><h3>Assignment & Time</h3><div className={`assignment-time-grid ${management ? "management" : "member"}`}>{management && (form.visibility !== "private" || acceptingEmployeeTask) && <label className="assignment-employee" title={assignmentLocked ? assignmentLockHint : undefined}><span>Employee</span><select required disabled={assignmentLocked} title={assignmentLocked ? assignmentLockHint : undefined} value={form.employeeEmail} onChange={(event) => { const user = users.find((item) => item.email === event.target.value); updateForm("employeeEmail", event.target.value); if (user) updateForm("employeeName", user.displayName); }}><option value="">{form.project ? "Select a project employee" : "Select a project first"}</option>{assignmentOptions.map((user) => <option key={user.email} value={user.email}>{user.displayName}{user.discipline ? ` · ${user.discipline}` : ""}</option>)}</select></label>}<label><span>Planned Hours</span><input type="number" disabled={!canEditDetails} min="0" step="0.25" value={form.plannedHours} onChange={(event) => updateForm("plannedHours", Number(event.target.value))} /></label><label><span>Logged Hours</span><input disabled value={formatDuration(loggedSeconds)} /></label></div></div>
+        <div className="form-section assignment-time-section"><h3>Assignment & Time</h3><div className={`assignment-time-grid ${management ? "management" : "member"}`}>{management && (form.visibility !== "private" || acceptingEmployeeTask) && <label className="assignment-employee" title={assignmentLocked ? assignmentLockHint : undefined}><span>Employee</span><select required disabled={assignmentLocked} title={assignmentLocked ? assignmentLockHint : undefined} value={form.employeeEmail} onChange={(event) => { const user = users.find((item) => item.email === event.target.value); updateForm("employeeEmail", event.target.value); if (user) updateForm("employeeName", user.displayName); }}><option value="">{form.project ? "Select a project employee" : "Select a project first"}</option>{assignmentOptions.map((user) => <option key={user.email} value={user.email}>{user.displayName}{user.discipline ? ` · ${user.discipline}` : ""}</option>)}</select></label>}{selectedId && currentUser?.role === "owner" && <label className="assignment-created-by"><span>Created By</span><select required value={form.createdBy} onChange={(event) => updateForm("createdBy", event.target.value)}>{users.map((user) => <option key={user.email} value={user.email}>{user.displayName} · {user.email}</option>)}</select></label>}<label><span>Planned Hours</span><input type="number" disabled={!canEditDetails} min="0" step="0.25" value={form.plannedHours} onChange={(event) => updateForm("plannedHours", Number(event.target.value))} /></label><label><span>Logged Hours</span><input disabled value={formatDuration(loggedSeconds)} /></label></div></div>
         <div className="form-section task-attachments-section"><div className="comments-heading"><h3>Task Attachments <span>مرفقات المهمة</span></h3><span>{selectedId ? attachments.filter((attachment) => attachment.subtaskId === null).length : draftAttachments.length}/10</span></div>{selectedId ? <TaskAttachmentTable attachments={attachments.filter((attachment) => attachment.subtaskId === null)} onUpload={(file) => uploadAttachment(file, null)} onDelete={deleteAttachment} busy={attachmentBusy} progress={attachmentProgress?.subtaskId === null ? attachmentProgress : null} readOnly={!canCollaborate} /> : <><label className="task-attachment-add draft-task-attachment-add"><span>＋</span><strong>Add Attachments</strong><input type="file" multiple disabled={saving || draftAttachments.length >= 10} onChange={(event) => { addDraftAttachments(Array.from(event.target.files || [])); event.currentTarget.value = ""; }} /></label><div className="attachment-paste-zone" contentEditable suppressContentEditableWarning role="textbox" tabIndex={0} onInput={(event) => { event.currentTarget.textContent = ""; }} onPaste={(event) => { const files = pastedFiles(event); if (!files.length) return; event.preventDefault(); addDraftAttachments(files); }}><span>Paste attachments here · الصق المرفقات هنا</span></div><small>Optional · maximum 10 files and 25 MB per file</small>{draftAttachments.length > 0 && <div className="pending-files">{draftAttachments.map(({ id, file }) => <span key={id}>{file.name} <small>{fileSizeLabel(file.size)}</small><button type="button" onClick={() => deleteDraftAttachment(id)} aria-label={`Remove ${file.name}`}>×</button></span>)}</div>}</>}</div>
         <div className="form-section subtasks-section">
           <div className="comments-heading"><h3>Subtasks <span>المهام الفرعية</span></h3><span>{selectedId ? `${subtasks.filter((subtask) => subtask.completed).length}/${subtasks.length}` : draftSubtasks.length}</span></div>

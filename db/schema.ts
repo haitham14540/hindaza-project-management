@@ -98,6 +98,9 @@ export const tasks = sqliteTable(
   (table) => [
     index("tasks_date_idx").on(table.taskDate),
     index("tasks_employee_idx").on(table.employeeEmail),
+    index("tasks_created_idx").on(table.createdAt),
+    index("tasks_project_created_idx").on(table.project, table.createdAt),
+    index("tasks_creator_idx").on(table.createdBy),
   ],
 );
 
@@ -249,6 +252,7 @@ export const projectIssues = sqliteTable(
     index("project_issues_status_idx").on(table.status),
     index("project_issues_assignee_idx").on(table.assigneeEmail),
     index("project_issues_created_idx").on(table.createdAt),
+    index("project_issues_converted_task_idx").on(table.convertedTaskId),
   ],
 );
 

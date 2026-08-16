@@ -35,6 +35,7 @@ type Issue = {
   updatedAt: string;
   createdByEmail: string;
   attachments: Attachment[];
+  attachmentCount?: number;
   notes: IssueNote[];
 };
 type IssueForm = Pick<Issue, "projectCode" | "status" | "discipline" | "description" | "category" | "priority" | "raisedByEmail" | "issueDate" | "resolvedDate" | "comments" | "clientReply">;
@@ -68,11 +69,15 @@ function initials(name: string) { return name.split(" ").filter(Boolean).slice(0
 function IssueUserAvatar({ user, name, className = "small" }: { user?: IssueUser; name: string; className?: string }) { const hasImage = Boolean(user?.profileImageKey); return <span className={`avatar ${className}${hasImage ? " has-image" : ""}`}>{hasImage ? <img src={`/api/profile-image?email=${encodeURIComponent(user!.email)}&v=${encodeURIComponent(user!.profileImageKey)}`} alt={name} /> : initials(name)}</span>; }
 function ButtonLabel({ en }: { en: string; ar: string }) { return <span className="button-label"><strong>{en}</strong></span>; }
 
-async function fetchIssues() {
+async function fetchIssues(projectCode = "", reportOnly = false) {
   const controller = new AbortController();
   const timeout = window.setTimeout(() => controller.abort(), ISSUE_LOAD_TIMEOUT_MS);
   try {
-    return await fetch("/api/issues", { cache: "no-store", signal: controller.signal });
+    const params = new URLSearchParams();
+    if (projectCode) params.set("project", projectCode);
+    if (reportOnly) params.set("report", "1");
+    const query = params.size ? `?${params.toString()}` : "";
+    return await fetch(`/api/issues${query}`, { cache: "no-store", signal: controller.signal });
   } catch (error) {
     if (error instanceof DOMException && error.name === "AbortError") {
       throw new Error("Project issues took too long to load. Please retry. · استغرق تحميل المشاكل وقتًا طويلًا، يرجى إعادة المحاولة.");
@@ -227,14 +232,14 @@ export const IssuesModule = forwardRef<IssuesModuleHandle, {
     loadInFlightRef.current = true;
     if (!silent) setLoading(true);
     try {
-      const data = await jsonResponse(await fetchIssues());
+      const data = await jsonResponse(await fetchIssues(lockedProjectCode));
       setIssues(data.issues || []);
       setCategories(data.categories || []);
       setError("");
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : "تعذر تحميل مشاكل المشاريع");
     } finally { loadInFlightRef.current = false; if (!silent) setLoading(false); }
-  }, []);
+  }, [lockedProjectCode]);
 
   useEffect(() => {
     // The loader is stable and intentionally owns the request lifecycle for this project.
@@ -244,7 +249,7 @@ export const IssuesModule = forwardRef<IssuesModuleHandle, {
   useEffect(() => {
     const interval = window.setInterval(() => {
       if (document.visibilityState === "visible" && !drawerOpen && !saving) void load(true);
-    }, 30_000);
+    }, 60_000);
     return () => window.clearInterval(interval);
   }, [load, drawerOpen, saving]);
   useEffect(() => {
@@ -301,13 +306,13 @@ export const IssuesModule = forwardRef<IssuesModuleHandle, {
   const openIssueById = useCallback((id: number) => {
     const issue = issues.find((item) => item.id === id);
     if (issue) openIssue(issue);
-    else void fetch("/api/issues", { cache: "no-store" }).then(jsonResponse).then((data) => {
+    else void fetchIssues(lockedProjectCode).then(jsonResponse).then((data) => {
       const rows = (data.issues || []) as Issue[];
       setIssues(rows); setCategories(data.categories || []);
       const row = rows.find((item) => item.id === id);
       if (row) openIssue(row);
     }).catch((openError) => setError(openError instanceof Error ? openError.message : "Unable to open the issue."));
-  }, [issues, openIssue]);
+  }, [issues, openIssue, lockedProjectCode]);
   useImperativeHandle(ref, () => ({ openNew, openIssue: openIssueById }), [openNew, openIssueById]);
   function chooseFiles(event: ChangeEvent<HTMLInputElement>, currentCount: number, update: (files: File[]) => void) {
     const input = event.currentTarget;
@@ -496,20 +501,45 @@ type IssueReportMetric = "all" | "open" | "re_open" | "closed";
 
 export function IssueReportPanel({ projects, onOpenIssue, onProjectSettings }: { projects: IssueProject[]; onOpenIssue: (id: number, projectCode: string) => void; onProjectSettings: (project: IssueProject) => void }) {
   const [issues, setIssues] = useState<Issue[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
   const [project, setProject] = useState("all");
   const [metric, setMetric] = useState<IssueReportMetric | null>(() => typeof window !== "undefined" ? window.history.state?.hindazaIssueReport || null : null);
   const [projectDialog, setProjectDialog] = useState(() => typeof window !== "undefined" && typeof window.history.state?.hindazaIssueProject === "string" ? window.history.state.hindazaIssueProject : "");
-  useEffect(() => { void fetch("/api/issues", { cache: "no-store" }).then(jsonResponse).then((data) => setIssues(data.issues || [])).catch(() => setIssues([])); }, []);
+  const loadReportIssues = useCallback(async () => {
+    setLoading(true);
+    try {
+      const data = await jsonResponse(await fetchIssues("", true));
+      setIssues(data.issues || []);
+      setError("");
+    } catch (loadError) {
+      setError(loadError instanceof Error ? loadError.message : "Unable to load issue report data.");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+  useEffect(() => {
+    const loadTimer = window.setTimeout(() => void loadReportIssues(), 0);
+    return () => window.clearTimeout(loadTimer);
+  }, [loadReportIssues]);
   useEffect(() => {
     const restore = () => { setMetric(window.history.state?.hindazaIssueReport || null); setProjectDialog(typeof window.history.state?.hindazaIssueProject === "string" ? window.history.state.hindazaIssueProject : ""); };
     window.addEventListener("popstate", restore);
     return () => window.removeEventListener("popstate", restore);
   }, []);
-  const rows = issues.filter((issue) => project === "all" || issue.projectCode === project);
-  const byProject = projects.map((item) => {
-    const projectIssues = rows.filter((issue) => issue.projectCode === item.code);
-    return { code: item.code, name: item.name, total: projectIssues.length, open: projectIssues.filter((issue) => issue.status === "open").length, reopen: projectIssues.filter((issue) => issue.status === "re_open").length, closed: projectIssues.filter((issue) => issue.status === "closed").length };
-  }).filter((row) => row.total > 0);
+  const rows = useMemo(() => issues.filter((issue) => project === "all" || issue.projectCode === project), [issues, project]);
+  const byProject = useMemo(() => {
+    const counts = new Map<string, { total: number; open: number; reopen: number; closed: number }>();
+    for (const issue of rows) {
+      const current = counts.get(issue.projectCode) || { total: 0, open: 0, reopen: 0, closed: 0 };
+      current.total += 1;
+      if (issue.status === "open") current.open += 1;
+      else if (issue.status === "re_open") current.reopen += 1;
+      else current.closed += 1;
+      counts.set(issue.projectCode, current);
+    }
+    return projects.map((item) => ({ code: item.code, name: item.name, ...(counts.get(item.code) || { total: 0, open: 0, reopen: 0, closed: 0 }) })).filter((row) => row.total > 0);
+  }, [projects, rows]);
   const filteredIssues = metric === "all" ? rows : metric ? rows.filter((issue) => issue.status === metric) : [];
   const openMetric = (next: IssueReportMetric) => {
     window.history.pushState({ ...window.history.state, hindazaIssueReport: next }, "");
@@ -543,8 +573,8 @@ export function IssueReportPanel({ projects, onOpenIssue, onProjectSettings }: {
   };
   return <section className="issue-report">
     <div className="panel report-controls"><div className="panel-heading"><div><h2>Project Issues Report</h2></div></div><div className="report-filter-grid"><label><span>Project</span><select value={project} onChange={(event) => setProject(event.target.value)}><option value="all">All Projects</option>{projects.map((item) => <option key={item.id} value={item.code}>{item.code} · {item.name}</option>)}</select></label></div></div>
-    <div className="report-content"><section className="report-stats report-filter-stats issue-report-stats"><button type="button" onClick={() => openMetric("all")}><span>All Issues</span><strong>{rows.length}</strong></button><button type="button" onClick={() => openMetric("open")}><span>Open</span><strong>{rows.filter((issue) => issue.status === "open").length}</strong></button><button type="button" onClick={() => openMetric("re_open")}><span>Re-Opened</span><strong>{rows.filter((issue) => issue.status === "re_open").length}</strong></button><button type="button" onClick={() => openMetric("closed")}><span>Closed</span><strong>{rows.filter((issue) => issue.status === "closed").length}</strong></button></section>
-      <section className="panel chart-panel"><div className="panel-heading"><div><h2>Project Issues Status</h2></div><span className="count-badge">{byProject.length} projects</span></div>{byProject.length ? <div className="bar-chart issue-report-chart">{byProject.map((row) => <div className="bar-chart-row report-clickable-row" key={row.code} role="button" tabIndex={0} onClick={() => openProjectIssues(row.code)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") openProjectIssues(row.code); }}><strong title={`Open ${row.code} issues`}>{row.name}</strong><div className="bar-track issue-report-track"><i className="issue-bar-open" style={{ width: `${(row.open / row.total) * 100}%` }}>{row.open > 0 && <b>{row.open}</b>}</i><i className="issue-bar-reopen" style={{ width: `${(row.reopen / row.total) * 100}%` }}>{row.reopen > 0 && <b>{row.reopen}</b>}</i><i className="issue-bar-closed" style={{ width: `${(row.closed / row.total) * 100}%` }}>{row.closed > 0 && <b>{row.closed}</b>}</i></div><span>{row.total}</span></div>)}<div className="chart-legend"><span><i className="legend-issue-open" />Open</span><span><i className="legend-issue-reopen" />Re-Opened</span><span><i className="legend-issue-closed" />Closed</span></div></div> : <div className="empty-state"><strong>No issue data</strong><p>No issue records match the selected filters.</p></div>}</section>
+    <div className="report-content">{loading ? <div className="loading-state"><div className="spinner" /><p>Loading issue report...</p></div> : error ? <div className="empty-state issue-load-failed"><strong>Unable to load issue report</strong><p>{error}</p><button type="button" className="secondary-button" onClick={() => void loadReportIssues()}>Retry</button></div> : <><section className="report-stats report-filter-stats issue-report-stats"><button type="button" onClick={() => openMetric("all")}><span>All Issues</span><strong>{rows.length}</strong></button><button type="button" onClick={() => openMetric("open")}><span>Open</span><strong>{rows.filter((issue) => issue.status === "open").length}</strong></button><button type="button" onClick={() => openMetric("re_open")}><span>Re-Opened</span><strong>{rows.filter((issue) => issue.status === "re_open").length}</strong></button><button type="button" onClick={() => openMetric("closed")}><span>Closed</span><strong>{rows.filter((issue) => issue.status === "closed").length}</strong></button></section>
+      <section className="panel chart-panel"><div className="panel-heading"><div><h2>Project Issues Status</h2></div><span className="count-badge">{byProject.length} projects</span></div>{byProject.length ? <div className="bar-chart issue-report-chart">{byProject.map((row) => <div className="bar-chart-row report-clickable-row" key={row.code} role="button" tabIndex={0} onClick={() => openProjectIssues(row.code)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") openProjectIssues(row.code); }}><strong title={`Open ${row.code} issues`}>{row.name}</strong><div className="bar-track issue-report-track"><i className="issue-bar-open" style={{ width: `${(row.open / row.total) * 100}%` }}>{row.open > 0 && <b>{row.open}</b>}</i><i className="issue-bar-reopen" style={{ width: `${(row.reopen / row.total) * 100}%` }}>{row.reopen > 0 && <b>{row.reopen}</b>}</i><i className="issue-bar-closed" style={{ width: `${(row.closed / row.total) * 100}%` }}>{row.closed > 0 && <b>{row.closed}</b>}</i></div><span>{row.total}</span></div>)}<div className="chart-legend"><span><i className="legend-issue-open" />Open</span><span><i className="legend-issue-reopen" />Re-Opened</span><span><i className="legend-issue-closed" />Closed</span></div></div> : <div className="empty-state"><strong>No issue data</strong><p>No issue records match the selected filters.</p></div>}</section></>}
     </div>{metric && <IssueReportDialog metric={metric} issues={filteredIssues} projects={projects} onClose={closeMetric} onOpenIssue={openIssue} onProjectSettings={openProjectEditor} />}{projectDialog && <IssueReportDialog metric="all" projectCode={projectDialog} issues={issues.filter((issue) => issue.projectCode === projectDialog)} projects={projects} onClose={closeProjectIssues} onOpenIssue={openIssue} onProjectSettings={openProjectEditor} />}
   </section>;
 }
@@ -555,8 +585,15 @@ function IssueReportDialog({ metric, issues, projects, projectCode = "", onClose
   const labels: Record<IssueReportMetric, string> = { all: "All Issues", open: "Open Issues", re_open: "Re-Opened Issues", closed: "Closed Issues" };
   const project = projects.find((item) => item.code === projectCode);
   const dialogTitle = projectCode ? `${project?.name || projectCode} Issues` : labels[metric];
-  const displayedIssues = projectCode ? issues.filter((issue) => statusView === "closed" ? issue.status === "closed" : issue.status === "open" || issue.status === "re_open") : issues;
-  const groups = useMemo(() => projects.map((item) => ({ project: item, issues: displayedIssues.filter((issue) => issue.projectCode === item.code) })).filter((group) => group.issues.length > 0), [displayedIssues, projects]);
+  const displayedIssues = useMemo(() => projectCode ? issues.filter((issue) => statusView === "closed" ? issue.status === "closed" : issue.status === "open" || issue.status === "re_open") : issues, [issues, projectCode, statusView]);
+  const groups = useMemo(() => {
+    const issuesByProject = new Map<string, Issue[]>();
+    for (const issue of displayedIssues) {
+      const rows = issuesByProject.get(issue.projectCode);
+      if (rows) rows.push(issue); else issuesByProject.set(issue.projectCode, [issue]);
+    }
+    return projects.map((item) => ({ project: item, issues: issuesByProject.get(item.code) || [] })).filter((group) => group.issues.length > 0);
+  }, [displayedIssues, projects]);
   useEffect(() => {
     const closeOnEscape = (event: KeyboardEvent) => { if (event.key === "Escape") onClose(); };
     window.addEventListener("keydown", closeOnEscape);
@@ -585,7 +622,7 @@ function IssueReportDialog({ metric, issues, projects, projectCode = "", onClose
         <div className="employee-task-table-wrap"><table className="employee-task-table issue-report-table"><thead><tr><th>Issue Number</th><th>Description</th><th>Raised By</th><th>Discipline</th><th>Status</th><th>Priority</th><th>Issue Date</th><th>Resolved Date</th>{projectCode && <th>Attachments</th>}</tr></thead><tbody>{projectIssues.map((issue) => {
           const href = `/?view=projects&project=${encodeURIComponent(issue.projectCode)}&section=issues`;
           const openLink = (event: React.MouseEvent<HTMLAnchorElement>) => { if (event.ctrlKey || event.metaKey || event.shiftKey || event.button !== 0) return; event.preventDefault(); onOpenIssue(issue); };
-          return <tr className="employee-task-clickable-row" key={issue.id} onClick={(event) => { if (event.ctrlKey || event.metaKey || event.shiftKey || event.button !== 0 || (event.target as HTMLElement).closest("a, button")) return; onOpenIssue(issue); }}><td><a href={href} onClick={openLink}><strong>{issue.issueNumber}</strong></a></td><td><a href={href} onClick={openLink}>{issue.description}</a></td><td><a href={href} onClick={openLink}>{issue.raisedByName || issue.raisedByEmail}</a></td><td><a href={href} onClick={openLink}>{issue.discipline}</a></td><td><a href={href} onClick={openLink}><span className={`issue-pill issue-status-${issue.status}`}>{issue.status === "re_open" ? "Re-Opened" : issue.status === "open" ? "Open" : "Closed"}</span></a></td><td><a href={href} onClick={openLink}><span className={`issue-pill issue-priority-${issue.priority}`}>{issue.priority[0].toUpperCase() + issue.priority.slice(1)}</span></a></td><td dir="ltr"><a href={href} onClick={openLink}>{dateLabel(issue.issueDate)}</a></td><td dir="ltr"><a href={href} onClick={openLink}>{dateLabel(issue.resolvedDate)}</a></td>{projectCode && <td><a href={href} onClick={openLink}>{issue.attachments.length}</a></td>}</tr>;
+          return <tr className="employee-task-clickable-row" key={issue.id} onClick={(event) => { if (event.ctrlKey || event.metaKey || event.shiftKey || event.button !== 0 || (event.target as HTMLElement).closest("a, button")) return; onOpenIssue(issue); }}><td><a href={href} onClick={openLink}><strong>{issue.issueNumber}</strong></a></td><td><a href={href} onClick={openLink}>{issue.description}</a></td><td><a href={href} onClick={openLink}>{issue.raisedByName || issue.raisedByEmail}</a></td><td><a href={href} onClick={openLink}>{issue.discipline}</a></td><td><a href={href} onClick={openLink}><span className={`issue-pill issue-status-${issue.status}`}>{issue.status === "re_open" ? "Re-Opened" : issue.status === "open" ? "Open" : "Closed"}</span></a></td><td><a href={href} onClick={openLink}><span className={`issue-pill issue-priority-${issue.priority}`}>{issue.priority[0].toUpperCase() + issue.priority.slice(1)}</span></a></td><td dir="ltr"><a href={href} onClick={openLink}>{dateLabel(issue.issueDate)}</a></td><td dir="ltr"><a href={href} onClick={openLink}>{dateLabel(issue.resolvedDate)}</a></td>{projectCode && <td><a href={href} onClick={openLink}>{issue.attachmentCount ?? issue.attachments.length}</a></td>}</tr>;
         })}</tbody></table></div>
       </section>)}</div></div>
     </section>

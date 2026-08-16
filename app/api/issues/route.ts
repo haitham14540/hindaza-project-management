@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gt, inArray, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, gt, inArray, sql } from "drizzle-orm";
 import { getBucket, getDb } from "@/db";
 import { activityLogs, issueAttachments, issueCategories, issueComments, notifications, projectIssues, projectMembers, projects, tasks, users } from "@/db/schema";
 import { getCurrentUser, isManagement, unauthorizedResponse } from "@/lib/auth";
@@ -11,6 +11,7 @@ export const dynamic = "force-dynamic";
 const disciplines = ["Architecture", "ID", "Structure", "Mechanical", "Electrical", "Infrastructure"] as const;
 const statuses = ["open", "re_open", "closed"] as const;
 const priorities = ["low", "medium", "high", "critical"] as const;
+const ISSUE_QUERY_CHUNK_SIZE = 85;
 const disciplineCodes: Record<string, string> = {
   Manager: "MGR",
   Architecture: "ARC",
@@ -23,6 +24,12 @@ const disciplineCodes: Record<string, string> = {
 
 function cleanText(value: unknown, max = 1_000) {
   return typeof value === "string" ? value.trim().slice(0, max) : "";
+}
+
+function chunks<T>(values: T[], size: number) {
+  const result: T[][] = [];
+  for (let index = 0; index < values.length; index += size) result.push(values.slice(index, index + size));
+  return result;
 }
 
 function enumValue<T extends readonly string[]>(value: unknown, values: T, fallback: T[number]) {
@@ -105,43 +112,55 @@ async function renumberAfter(db: Awaited<ReturnType<typeof getDb>>, projectCode:
   }
 }
 
-async function issueRows() {
+async function issueRows(projectCode = "") {
   await ensureIssueCommentsStorage();
   const db = await getDb();
-  // Keep D1 reads in bounded batches. The categories request runs alongside
-  // this function, so adding every issue dependency to one Promise.all can
-  // exhaust the Worker's concurrent subrequest allowance and leave the client
-  // waiting indefinitely.
   const issues = await db.select().from(projectIssues)
+    .where(projectCode ? eq(projectIssues.projectCode, projectCode) : undefined)
     .orderBy(asc(projectIssues.projectCode), asc(projectIssues.discipline), asc(projectIssues.sequence), asc(projectIssues.id));
-  const [attachments, notes, createdActivities] = await Promise.all([
-    db.select().from(issueAttachments).orderBy(asc(issueAttachments.createdAt), asc(issueAttachments.id)),
-    db.select().from(issueComments).orderBy(asc(issueComments.createdAt), asc(issueComments.id)),
-    db.select({ issueId: activityLogs.entityId, actorEmail: activityLogs.actorEmail }).from(activityLogs)
-      .where(and(eq(activityLogs.entityType, "issue"), eq(activityLogs.action, "created"))).orderBy(asc(activityLogs.id)),
-  ]);
+
+  const attachments: (typeof issueAttachments.$inferSelect)[] = [];
+  const notes: (typeof issueComments.$inferSelect)[] = [];
+  const createdActivities: { issueId: number | null; actorEmail: string }[] = [];
+  for (const issueIds of chunks(issues.map((issue) => issue.id), ISSUE_QUERY_CHUNK_SIZE)) {
+    const [chunkAttachments, chunkNotes, chunkActivities] = await db.batch([
+      db.select().from(issueAttachments).where(inArray(issueAttachments.issueId, issueIds)).orderBy(asc(issueAttachments.createdAt), asc(issueAttachments.id)),
+      db.select().from(issueComments).where(inArray(issueComments.issueId, issueIds)).orderBy(asc(issueComments.createdAt), asc(issueComments.id)),
+      db.select({ issueId: activityLogs.entityId, actorEmail: activityLogs.actorEmail }).from(activityLogs)
+        .where(and(eq(activityLogs.entityType, "issue"), eq(activityLogs.action, "created"), inArray(activityLogs.entityId, issueIds)))
+        .orderBy(asc(activityLogs.id)),
+    ]);
+    attachments.push(...chunkAttachments);
+    notes.push(...chunkNotes);
+    createdActivities.push(...chunkActivities);
+  }
+
   const raisedByEmails = Array.from(new Set(issues.map((issue) => issue.raisedByEmail.toLowerCase()).filter(Boolean)));
-  const raisedByAccounts = raisedByEmails.length
-    ? await db.select({ email: users.email, displayName: users.displayName, profileImageKey: users.profileImageKey })
-      .from(users).where(inArray(users.email, raisedByEmails))
-    : [];
-  const linkedTaskRows = await db.select({ id: tasks.id, createdAt: tasks.createdAt }).from(tasks);
+  const raisedByAccounts: { email: string; displayName: string; profileImageKey: string }[] = [];
+  for (const emailChunk of chunks(raisedByEmails, ISSUE_QUERY_CHUNK_SIZE)) {
+    raisedByAccounts.push(...await db.select({ email: users.email, displayName: users.displayName, profileImageKey: users.profileImageKey })
+      .from(users).where(inArray(users.email, emailChunk)));
+  }
+  const linkedTaskRows: { id: number; createdAt: string }[] = [];
+  const linkedTaskIds = Array.from(new Set(issues.map((issue) => issue.convertedTaskId).filter((id): id is number => Boolean(id))));
+  for (const taskIds of chunks(linkedTaskIds, ISSUE_QUERY_CHUNK_SIZE)) {
+    linkedTaskRows.push(...await db.select({ id: tasks.id, createdAt: tasks.createdAt }).from(tasks).where(inArray(tasks.id, taskIds)));
+  }
   const linkedTaskCreatedAt = new Map(linkedTaskRows.map((task) => [task.id, task.createdAt]));
   const byIssue = new Map<number, typeof attachments>();
-  for (const attachment of attachments) byIssue.set(attachment.issueId, [...(byIssue.get(attachment.issueId) || []), attachment]);
+  for (const attachment of attachments) {
+    const rows = byIssue.get(attachment.issueId);
+    if (rows) rows.push(attachment); else byIssue.set(attachment.issueId, [attachment]);
+  }
   const notesByIssue = new Map<number, typeof notes>();
-  for (const note of notes) notesByIssue.set(note.issueId, [...(notesByIssue.get(note.issueId) || []), note]);
+  for (const note of notes) {
+    const rows = notesByIssue.get(note.issueId);
+    if (rows) rows.push(note); else notesByIssue.set(note.issueId, [note]);
+  }
   const creatorByIssue = new Map<number, string>();
   for (const activity of createdActivities) if (activity.issueId && !creatorByIssue.has(activity.issueId)) creatorByIssue.set(activity.issueId, activity.actorEmail);
   const raisedByAccount = new Map(raisedByAccounts.map((account) => [account.email.toLowerCase(), account]));
-  const normalizedIssues = [];
-  for (const issue of issues) {
-    const normalizedNumber = issueNumber(issue.projectCode, issue.discipline, issue.sequence);
-    if (issue.issueNumber !== normalizedNumber) {
-      await db.update(projectIssues).set({ issueNumber: normalizedNumber, updatedAt: sql`CURRENT_TIMESTAMP` }).where(eq(projectIssues.id, issue.id));
-    }
-    normalizedIssues.push({ ...issue, issueNumber: normalizedNumber });
-  }
+  const normalizedIssues = issues.map((issue) => ({ ...issue, issueNumber: issueNumber(issue.projectCode, issue.discipline, issue.sequence) }));
   return normalizedIssues.map((issue) => {
     const account = raisedByAccount.get(issue.raisedByEmail.toLowerCase());
     return {
@@ -160,12 +179,62 @@ export async function GET(request: Request) {
   try {
     const currentUser = await getCurrentUser(request);
     const db = await getDb();
-    const [allIssues, savedCategories] = await Promise.all([
-      issueRows(),
-      db.select({ name: issueCategories.name }).from(issueCategories).orderBy(asc(issueCategories.name)),
-    ]);
+    const url = new URL(request.url);
+    const requestedProject = cleanText(url.searchParams.get("project"), 80).toUpperCase();
+    const summaryOnly = url.searchParams.get("summary") === "1";
+    const reportOnly = url.searchParams.get("report") === "1";
     const memberships = currentUser.role === "owner" ? [] : await db.select({ code: projects.code }).from(projectMembers).innerJoin(projects, eq(projectMembers.projectId, projects.id)).where(eq(projectMembers.employeeEmail, currentUser.email));
     const allowedCodes = new Set(memberships.map((row) => row.code));
+    if (requestedProject && currentUser.role !== "owner" && !allowedCodes.has(requestedProject)) {
+      return Response.json({ error: "You do not have access to this project." }, { status: 403 });
+    }
+
+    if (summaryOnly || reportOnly) {
+      const summaryRows = await db.select({
+        id: projectIssues.id,
+        issueNumber: projectIssues.issueNumber,
+        sequence: projectIssues.sequence,
+        projectCode: projectIssues.projectCode,
+        status: projectIssues.status,
+        discipline: projectIssues.discipline,
+        description: projectIssues.description,
+        priority: projectIssues.priority,
+        issueDate: projectIssues.issueDate,
+        resolvedDate: projectIssues.resolvedDate,
+        raisedByEmail: projectIssues.raisedByEmail,
+        raisedByName: projectIssues.raisedByName,
+        createdAt: projectIssues.createdAt,
+        updatedAt: projectIssues.updatedAt,
+      }).from(projectIssues)
+        .where(requestedProject ? eq(projectIssues.projectCode, requestedProject) : undefined)
+        .orderBy(asc(projectIssues.projectCode), asc(projectIssues.discipline), asc(projectIssues.sequence), asc(projectIssues.id));
+      const visibleSummary = currentUser.role === "owner" ? summaryRows : summaryRows.filter((issue) => allowedCodes.has(issue.projectCode));
+      if (reportOnly) {
+        const attachmentCountByIssue = new Map<number, number>();
+        for (const issueIds of chunks(visibleSummary.map((issue) => issue.id), ISSUE_QUERY_CHUNK_SIZE)) {
+          const counts = await db.select({ issueId: issueAttachments.issueId, total: count() })
+            .from(issueAttachments)
+            .where(inArray(issueAttachments.issueId, issueIds))
+            .groupBy(issueAttachments.issueId);
+          for (const row of counts) attachmentCountByIssue.set(row.issueId, row.total);
+        }
+        return Response.json({
+          issues: visibleSummary.map((issue) => ({
+            ...issue,
+            issueNumber: issueNumber(issue.projectCode, issue.discipline, issue.sequence),
+            attachmentCount: attachmentCountByIssue.get(issue.id) || 0,
+            attachments: [],
+            notes: [],
+          })),
+        }, { headers: { "Cache-Control": "private, no-store" } });
+      }
+      return Response.json({
+        issues: visibleSummary.map((issue) => ({ ...issue, issueNumber: issueNumber(issue.projectCode, issue.discipline, issue.sequence) })),
+      }, { headers: { "Cache-Control": "private, no-store" } });
+    }
+
+    const allIssues = await issueRows(requestedProject);
+    const savedCategories = await db.select({ name: issueCategories.name }).from(issueCategories).orderBy(asc(issueCategories.name));
     const issues = currentUser.role === "owner" ? allIssues : allIssues.filter((issue) => allowedCodes.has(issue.projectCode));
     const categories = Array.from(new Set(["Coordination", "Design Issue", "Site Issue", "Client Comment", "Clash", ...savedCategories.map((item) => item.name), ...issues.map((issue) => issue.category).filter(Boolean)])).sort((a, b) => a.localeCompare(b));
     return Response.json({ issues, categories });
@@ -310,11 +379,14 @@ export async function PATCH(request: Request) {
     }).where(eq(projectIssues.id, id)).returning();
     await rememberCategory(db, category, currentUser.email);
     await recordActivity(db, currentUser, { action: "updated", entityType: "issue", entityId: id, entityLabel: updated[0].issueNumber, projectCode, details: description });
-    const [attachments, notes] = await Promise.all([
+    const [attachments, notes, createdActivities] = await db.batch([
       db.select().from(issueAttachments).where(eq(issueAttachments.issueId, id)).orderBy(asc(issueAttachments.createdAt)),
       db.select().from(issueComments).where(eq(issueComments.issueId, id)).orderBy(asc(issueComments.createdAt), asc(issueComments.id)),
+      db.select({ actorEmail: activityLogs.actorEmail }).from(activityLogs)
+        .where(and(eq(activityLogs.entityType, "issue"), eq(activityLogs.entityId, id), eq(activityLogs.action, "created")))
+        .orderBy(asc(activityLogs.id)).limit(1),
     ]);
-    return Response.json({ issue: { ...updated[0], createdByEmail: existing.id ? (await db.select({ actorEmail: activityLogs.actorEmail }).from(activityLogs).where(and(eq(activityLogs.entityType, "issue"), eq(activityLogs.entityId, existing.id), eq(activityLogs.action, "created"))).orderBy(asc(activityLogs.id)).limit(1))[0]?.actorEmail || "" : "", attachments, notes } });
+    return Response.json({ issue: { ...updated[0], createdByEmail: createdActivities[0]?.actorEmail || "", attachments, notes } });
   } catch (error) {
     const unauthorized = unauthorizedResponse(error);
     if (unauthorized) return unauthorized;
@@ -347,7 +419,7 @@ export async function DELETE(request: Request) {
     await db.delete(projectIssues).where(eq(projectIssues.id, id));
     await renumberAfter(db, existing.projectCode, existing.discipline, existing.sequence);
     await recordActivity(db, currentUser, { action: "deleted", entityType: "issue", entityId: id, entityLabel: existing.issueNumber, projectCode: existing.projectCode, details: existing.description });
-    return Response.json({ ok: true, issues: await issueRows() });
+    return Response.json({ ok: true, issues: await issueRows(existing.projectCode) });
   } catch (error) {
     const unauthorized = unauthorizedResponse(error);
     if (unauthorized) return unauthorized;

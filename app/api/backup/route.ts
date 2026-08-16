@@ -413,7 +413,7 @@ export async function GET(request: Request) {
     if (currentUser.role !== "owner") return Response.json({ error: "Owner access required." }, { status: 403 });
     const db = await getDb();
     await recordActivity(db, currentUser, { action: "downloaded", entityType: "backup", entityLabel: "Full system backup", details: "Owner downloaded a backup" });
-    const [userRows, projectRows, membershipRows, taskRows, commentRows, subtaskRows, taskAttachmentRows, timeRows, notificationRows, issueRows, issueAttachmentRows, issueCategoryRows, issueCommentRows, activityRows] = await Promise.all([
+    const [userRows, projectRows, membershipRows, taskRows, commentRows, subtaskRows, taskAttachmentRows, timeRows, notificationRows, issueRows, issueAttachmentRows, issueCategoryRows, issueCommentRows, activityRows] = await db.batch([
       db.select().from(users).orderBy(asc(users.createdAt), asc(users.email)),
       db.select().from(projects).orderBy(asc(projects.id)),
       db.select().from(projectMembers).orderBy(asc(projectMembers.id)),
