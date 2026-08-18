@@ -182,7 +182,7 @@ test("project issue client response notes, closure dates, and single-save behavi
   assert.match(issuesModule, /setFiles\(\[\]\); setClientFiles\(\[\]\);/);
   assert.match(issuesModule, /if \(!selectedId\) setDrawerOpen\(false\)/);
   assert.match(dashboard, /Task Details & Update/);
-  assert.match(backupApi, /const SCHEMA_VERSION = 9/);
+  assert.match(backupApi, /const SCHEMA_VERSION = 10/);
   assert.match(backupApi, /issueComments/);
   assert.match(backupApi, /item\.source === undefined \? "internal"/);
 });
@@ -214,7 +214,7 @@ test("task table count, clear filters, and header emphasis follow the review not
     source("app/task-dashboard.tsx"),
     source("app/globals.css"),
   ]);
-  assert.match(dashboard, /filteredCount === 1 \? "Task" : "Tasks"/);
+  assert.match(dashboard, /props\.filteredCount === 1 \? "Task" : "Tasks"/);
   assert.match(dashboard, /className="clear-filters-button"/);
   assert.match(dashboard, /className="filter-clear-icon" aria-hidden="true"/);
   assert.doesNotMatch(dashboard, /<ButtonLabel en="Clear filters"/);
@@ -332,7 +332,7 @@ test("the application shell and filters use a left-to-right layout", async () =>
   assert.match(styles, /\.drawer-layer \{[^}]*justify-content: flex-end;/);
   assert.match(styles, /\.drawer-actions \.primary-button \{ margin-left: auto; \}/);
   assert.match(styles, /\.issue-filters \{[^}]*direction: ltr;/);
-  assert.match(dashboard, /className="filters"/);
+  assert.match(dashboard, /className="filters task-filters-with-views"/);
   assert.match(issuesModule, /Clear all project issue filters/);
   assert.match(issuesModule, /setPriorityFilter\("all"\)/);
 });
@@ -1508,7 +1508,7 @@ test("V115 uses calendar reports and dedicated task and issue project dialogs", 
     source("app/issues-module.tsx"),
     source("app/globals.css"),
   ]);
-  assert.match(dashboard, /useState<"week" \| "month" \| "custom">\("week"\)/);
+  assert.match(dashboard, /useState<"week" \| "month" \| "custom">\("month"\)/);
   assert.match(dashboard, /<span>Calendar Period<\/span>/);
   assert.match(dashboard, /<option value="custom">Custom Range<\/option>/);
   assert.match(dashboard, /type=\{reportPeriod === "week" \? "week" : "month"\}/);
@@ -1605,14 +1605,17 @@ test("V119 ignores cleared or invalid report calendar values without crashing", 
   assert.doesNotMatch(dashboard, /setReportAnchor\(`\$\{event\.target\.value\}-01`\)/);
 });
 
-test("V120 uses project names in task reports and expands small report dialogs", async () => {
+test("V120 uses project names and codes in task reports and expands small report dialogs", async () => {
   const [dashboard, styles] = await Promise.all([
     source("app/task-dashboard.tsx"),
     source("app/globals.css"),
   ]);
-  assert.match(dashboard, /label: reportGroup === "project" \? projects\.find\(\(project\) => project\.code === key\)\?\.name \|\| key : key/);
-  assert.match(dashboard, /<option key=\{code\} value=\{code\}>\{projects\.find\(\(project\) => project\.code === code\)\?\.name \|\| code\}<\/option>/);
-  assert.match(dashboard, /title=\{reportGroup === "project" \? projects\.find\(\(project\) => project\.code === reportRowKey\)\?\.name \|\| reportRowKey : reportRowKey\}/);
+  assert.match(dashboard, /function projectReportLabel\(projects: Project\[\], code: string\)/);
+  assert.match(dashboard, /return project \? `\$\{project\.name\} \(\$\{project\.code\}\)` : code/);
+  assert.match(dashboard, /label: reportGroup === "project" \? projectReportLabel\(projects, key\) : key/);
+  assert.match(dashboard, /<option key=\{code\} value=\{code\}>\{projectReportLabel\(projects, code\)\}<\/option>/);
+  assert.match(dashboard, /title=\{reportGroup === "project" \? projectReportLabel\(projects, reportRowKey\) : reportRowKey\}/);
+  assert.match(dashboard, /useState<"week" \| "month" \| "custom">\("month"\)/);
   assert.match(dashboard, /report-task-group-count-\$\{Math\.min\(groups\.length, 3\)\}/);
   assert.match(dashboard, /className="report-date-warning"/);
   assert.match(styles, /\.report-tasks-dialog \.report-task-group-count-1 \.employee-task-table-wrap\.has-more-tasks \{ max-height: calc\(90vh - 245px\); \}/);
@@ -1737,7 +1740,7 @@ test("V132 moves progress into the task field and restores it when review is ret
   assert.match(init, /ALTER TABLE tasks ADD COLUMN completion_before_review INTEGER DEFAULT 0 NOT NULL/);
   assert.match(migration, /ADD `completion_before_review` integer DEFAULT 0 NOT NULL/);
   assert.match(timerApi, /completionBeforeReview: submitForReview \? task\.completionPercent : task\.completionBeforeReview/);
-  assert.match(tasksApi, /requestedCheck === "returned" && \["pending", "approved"\]\.includes\(existing\[0\]\.managerCheck\)/);
+  assert.match(tasksApi, /const returningForRevision = movingToReturned && \["pending", "approved"\]\.includes\(existing\[0\]\.managerCheck\)/);
   assert.match(tasksApi, /\? existing\[0\]\.completionBeforeReview/);
   assert.match(tasksApi, /Task completion is locked during or after manager review/);
 });
@@ -1775,7 +1778,7 @@ test("V134 separates task completion, defaults projects to unapproved, reorders 
   ]);
   assert.match(dashboard, /reviewFilter === "unapproved" \? task\.managerCheck !== "approved"/);
   assert.match(dashboard, /setReviewFilter\("unapproved"\)/);
-  assert.match(dashboard, /<option value="unapproved">Unapproved · غير معتمدة<\/option>/);
+  assert.match(dashboard, /<option value="unapproved">Unapproved<\/option>/);
   assert.match(dashboard, /const allProjectTasks = useMemo/);
   assert.match(dashboard, /\["new", "pending", "returned", "approved"\] as const/);
   assert.match(dashboard, /<div className="wide task-title-field"><label htmlFor="task-title-input">/);
@@ -2019,4 +2022,254 @@ test("V148 converts paused management private work safely and tightens manager p
   assert.match(dashboard, /Only a project manager can remove another manager · مدير المشروع فقط يستطيع إزالة مسؤول آخر/);
   assert.match(bootstrap, /task\.visibility !== "private" && activeTaskIds\.has\(task\.id\)/);
   assert.match(dashboard, /Project updated successfully · تم تحديث المشروع بنجاح/);
+});
+
+test("V151 adds guarded task start dates and table, Kanban, calendar, and Gantt views", async () => {
+  const [dashboard, tasksApi, schema, migration, backup, styles] = await Promise.all([
+    source("app/task-dashboard.tsx"),
+    source("app/api/tasks/route.ts"),
+    source("db/schema.ts"),
+    source("drizzle/0022_bouncy_norrin_radd.sql"),
+    source("app/api/backup/route.ts"),
+    source("app/globals.css"),
+  ]);
+  assert.match(schema, /startDate: text\("start_date"\)/);
+  assert.match(migration, /ALTER TABLE `tasks` ADD `start_date`/);
+  assert.match(tasksApi, /Start Date must be on or before Due Date/);
+  assert.match(backup, /startDate: optionalStringField\(item, "startDate", 10\)/);
+  assert.match(dashboard, /type TaskViewMode = "table" \| "kanban" \| "calendar" \| "gantt"/);
+  assert.match(dashboard, /Kanban by manager review/);
+  assert.match(dashboard, /Manager Review/);
+  assert.match(dashboard, /Start to Due Date/);
+  assert.match(dashboard, /30-day timeline/);
+  assert.match(styles, /\.task-kanban-board/);
+  assert.match(styles, /\.task-calendar-grid/);
+  assert.match(styles, /\.task-gantt-chart/);
+});
+
+test("V152 keeps project metadata and date on one compact line below the project name", async () => {
+  const styles = await source("app/globals.css");
+  assert.match(styles, /\.project-context-topbar \{ min-height: 60px; margin-bottom: 11px;/);
+  assert.match(styles, /grid-template-areas: "project-title project-title" "project-meta project-date"/);
+  assert.match(styles, /\.project-context-topbar \.project-heading-meta \{ grid-area: project-meta; min-width: 0; margin-top: 0; flex-wrap: nowrap;/);
+  assert.match(styles, /\.project-context-topbar \.subhead \{ grid-area: project-date; margin: 0; padding-left: 10px;/);
+});
+
+test("V153 compacts task statistics and keeps filters and view controls on one toolbar", async () => {
+  const [dashboard, styles] = await Promise.all([
+    source("app/task-dashboard.tsx"),
+    source("app/globals.css"),
+  ]);
+  assert.match(dashboard, /className="filters task-filters-with-views"/);
+  assert.match(dashboard, /<option value="all">All employees<\/option>/);
+  assert.match(dashboard, /employeeStatusKeys\.map/);
+  assert.match(dashboard, /Object\.entries\(tableCheckLabel\)/);
+  assert.doesNotMatch(dashboard, /All employee statuses · كل حالات الموظف/);
+  assert.match(styles, /\.task-stats-ltr \.stat-card \{ min-height: 66px;/);
+  assert.match(styles, /\.task-filter-cluster > \.task-search-box \{ flex: 0 1 205px;/);
+  assert.match(styles, /\.task-filter-cluster > \.clear-filters-button \{ flex: 0 0 38px;/);
+  assert.match(styles, /\.task-view-cluster \{ min-width: 0; display: flex;/);
+});
+
+test("V154 uses reference-style view icons and stable filter and view regions", async () => {
+  const [dashboard, styles] = await Promise.all([
+    source("app/task-dashboard.tsx"),
+    source("app/globals.css"),
+  ]);
+  assert.match(dashboard, /function TaskViewIcon/);
+  assert.match(dashboard, /<TaskViewIcon view="kanban" \/>/);
+  assert.match(dashboard, /className="task-filter-cluster"/);
+  assert.match(dashboard, /className="task-view-cluster"/);
+  assert.doesNotMatch(dashboard, /gantt-range-hint|Start Date → End Date/);
+  assert.doesNotMatch(dashboard, /className="task-gantt-note"/);
+  assert.match(styles, /grid-template-columns: minmax\(0, 1fr\) minmax\(310px, \.55fr\) auto/);
+  assert.match(styles, /\.task-view-icon { width: 17px; height: 15px;/);
+});
+
+test("V155 makes management Kanban review-only, draggable, and timer-safe", async () => {
+  const [dashboard, tasksApi, styles] = await Promise.all([
+    source("app/task-dashboard.tsx"),
+    source("app/api/tasks/route.ts"),
+    source("app/globals.css"),
+  ]);
+  assert.doesNotMatch(dashboard, /KanbanGroupMode|kanbanGroupMode|kanban-group-select/);
+  assert.match(dashboard, /draggable=\{canDrag && !saving\}/);
+  assert.match(dashboard, /aria-label="Kanban by manager review"/);
+  assert.match(dashboard, /hideApproved=\{props\.reviewFilter === "unapproved"\}/);
+  assert.match(dashboard, /reviewColumns\.filter\(\(column\) => column\.key !== "approved"\)/);
+  assert.match(dashboard, /action: "kanban_review"/);
+  assert.match(tasksApi, /const kanbanReviewUpdate = payload\.action === "kanban_review"/);
+  assert.match(tasksApi, /Only authorized management can move this task in Kanban/);
+  assert.match(tasksApi, /activeReviewSessions[\s\S]*?isNull\(taskTimeEntries\.endedAt\)/);
+  assert.match(tasksApi, /timerPausedByReview \? "paused"/);
+  assert.match(tasksApi, /timeEntries: refreshedTimeEntries,\s*timerPaused: timerPausedByReview/);
+  assert.match(styles, /\.task-kanban-column\.is-drop-target/);
+});
+
+test("V156 labels private tasks in Kanban, calendar, and Gantt views", async () => {
+  const [dashboard, styles] = await Promise.all([
+    source("app/task-dashboard.tsx"),
+    source("app/globals.css"),
+  ]);
+  assert.match(dashboard, /task-board-card-person[\s\S]*?task\.visibility === "private"[\s\S]*?task-private-indicator/);
+  assert.match(dashboard, /calendar-task-signals[\s\S]*?task\.visibility === "private"[\s\S]*?task-private-indicator/);
+  assert.match(dashboard, /task-gantt-details[\s\S]*?task\.visibility === "private"[\s\S]*?task-private-indicator/);
+  assert.match(dashboard, /Private Task/);
+  assert.match(styles, /\.task-private-indicator/);
+  assert.match(styles, /\.calendar-task-signals/);
+  assert.match(styles, /\.task-gantt-details/);
+});
+
+test("V157 gives employees a draggable status Kanban while management keeps review Kanban", async () => {
+  const [dashboard, timerApi] = await Promise.all([
+    source("app/task-dashboard.tsx"),
+    source("app/api/task-timer/route.ts"),
+  ]);
+  assert.match(dashboard, /function EmployeeTaskKanbanBoard/);
+  assert.match(dashboard, /aria-label="Kanban by employee status"/);
+  assert.match(dashboard, /employeeStatusKanban = props\.currentUser\?\.role === "member"/);
+  assert.match(dashboard, /employeeStatusKanban && props\.currentUser \? <EmployeeTaskKanbanBoard/);
+  assert.match(dashboard, /task\.employeeEmail\.toLowerCase\(\) === currentUser\.email\.toLowerCase\(\)/);
+  assert.match(dashboard, /in_progress: "start"[\s\S]*?paused: "pause"[\s\S]*?done: "finish"/);
+  assert.doesNotMatch(dashboard, /not_started: "reset"/);
+  assert.match(dashboard, /managerControlled: true/);
+  assert.match(timerApi, /type TimerAction = "start" \| "pause" \| "finish"/);
+  assert.doesNotMatch(timerApi, /action === "reset"/);
+});
+
+test("V158 removes Blocked while the unified management Kanban shows every filtered task", async () => {
+  const [dashboard, timerApi, styles] = await Promise.all([
+    source("app/task-dashboard.tsx"),
+    source("app/api/task-timer/route.ts"),
+    source("app/globals.css"),
+  ]);
+  assert.match(dashboard, /const employeeStatusKeys: Task\["status"\]\[\] = \["not_started", "in_progress", "paused", "needs_revision", "done"\]/);
+  assert.match(dashboard, /filter === "paused"[\s\S]*?status === "paused" \|\| status === "blocked"/);
+  assert.doesNotMatch(dashboard, /\{ key: "blocked", label: "Blocked" \}/);
+  assert.doesNotMatch(timerApi, /\| "block"/);
+  assert.doesNotMatch(dashboard, /managementKanbanScope|Employee Task Reviews|Management Private Tasks/);
+  assert.match(dashboard, /<TaskKanbanBoard tasks=\{props\.tasks\}/);
+  assert.doesNotMatch(styles, /\.kanban-scope-select/);
+});
+
+test("V159 keeps Kanban dragging separate from opening and synchronizes employee status with management review", async () => {
+  const [dashboard, timerApi] = await Promise.all([
+    source("app/task-dashboard.tsx"),
+    source("app/api/task-timer/route.ts"),
+  ]);
+  assert.match(dashboard, /const suppressClickAfterDrag = useRef\(false\)/);
+  assert.match(dashboard, /if \(suppressClickAfterDrag\.current\) \{ event\.preventDefault\(\); return; \}/);
+  assert.match(dashboard, /Revision \(from Manager\)/);
+  assert.match(timerApi, /assignedUserAction \? \{ managerCheck: "new" as const \} : \{\}/);
+  assert.doesNotMatch(timerApi, /status: "not_started", managerCheck: "new"/);
+  assert.match(dashboard, /onDoubleClick=\{\(event\) => \{ if \(!canReorder \|\| \(event\.target as HTMLElement\)\.closest\("\.task-board-card"\)\) return; createTask\(\); \}\}/);
+  assert.match(dashboard, /createTask=\{\(\) => props\.createTask\(props\.lockedProjectCode \|\| ""\)\}/);
+  assert.match(dashboard, /props\.tasks\.length === 0 && viewMode !== "kanban"/);
+});
+
+test("V160 keeps Not Started management-owned in the employee Kanban", async () => {
+  const [dashboard, timerApi, styles] = await Promise.all([
+    source("app/task-dashboard.tsx"),
+    source("app/api/task-timer/route.ts"),
+    source("app/globals.css"),
+  ]);
+  assert.match(dashboard, /Not Started \(New from Manager\)/);
+  assert.match(dashboard, /key: "not_started"[\s\S]*?managerControlled: true/);
+  assert.match(dashboard, /event\.dataTransfer\.dropEffect = acceptsDrop \? "move" : "none"/);
+  assert.match(dashboard, /managerControlled \|\| !task/);
+  assert.doesNotMatch(dashboard, /not_started: "reset"/);
+  assert.doesNotMatch(timerApi, /"reset"/);
+  assert.match(styles, /employee-status-kanban\.drag-active \.manager-controlled-column[\s\S]*?cursor: not-allowed !important/);
+});
+
+test("V161 synchronizes review status, preserves views, and makes calendar and Gantt timeline-aware", async () => {
+  const [dashboard, tasksApi, styles] = await Promise.all([
+    source("app/task-dashboard.tsx"),
+    source("app/api/tasks/route.ts"),
+    source("app/globals.css"),
+  ]);
+  assert.match(tasksApi, /const movingToPending = management && kanbanReviewUpdate && requestedCheck === "pending"/);
+  assert.match(tasksApi, /const movingToReturned = management && kanbanReviewUpdate && requestedCheck === "returned"/);
+  assert.match(tasksApi, /movingToReturned \? "needs_revision" : movingToPending \? "done"/);
+  assert.match(dashboard, /\{ key: "done", label: "Done" \}/);
+  assert.match(dashboard, /window\.sessionStorage\.getItem\(taskViewModeSessionKey\)/);
+  assert.match(dashboard, /window\.sessionStorage\.setItem\(taskViewModeSessionKey, viewMode\)/);
+  assert.doesNotMatch(dashboard, /managementKanbanScope|gantt-range-hint|Start Date → End Date/);
+  assert.match(dashboard, /gridColumn: `\$\{startColumn \+ 1\} \/ \$\{endColumn \+ 2\}`/);
+  assert.match(dashboard, /className="task-calendar-events"/);
+  assert.match(dashboard, /const totalDays = 30/);
+  assert.match(dashboard, /const visibleStart = addTaskViewDays\(anchorDate, -7\)/);
+  assert.match(dashboard, /className="task-gantt-today-line"/);
+  assert.match(dashboard, /task-gantt-resize-handle start/);
+  assert.match(dashboard, /onDoubleClick=\{\(event\) => \{ if \(\(event\.target as HTMLElement\)\.closest\("\.task-gantt-resize-handle"\)\) return; openTask\(task\); \}\}/);
+  assert.match(tasksApi, /payload\.action === "gantt_dates"/);
+  assert.match(tasksApi, /canManageTask\(db, currentUser, existing\[0\]\)/);
+  assert.match(styles, /\.task-gantt-resize-handle/);
+  assert.match(styles, /\.task-gantt-today-line/);
+});
+
+test("V162 refines employee Kanban ordering, centers views, and adds weekly calendar navigation", async () => {
+  const [dashboard, styles] = await Promise.all([
+    source("app/task-dashboard.tsx"),
+    source("app/globals.css"),
+  ]);
+  assert.match(dashboard, /key: "paused", label: "Paused"[\s\S]*?key: "done", label: "Done"[\s\S]*?key: "needs_revision", label: "Revision \(from Manager\)"/);
+  assert.match(dashboard, /className="task-view-cluster"><div className="task-view-switcher"[\s\S]*?<\/div><\/div><span className="count-badge filter-count"/);
+  assert.match(styles, /\.task-filters-with-views \{[^}]*grid-template-columns: minmax\(0, 1fr\) minmax\(310px, \.55fr\) auto/);
+  assert.match(styles, /\.task-view-cluster \{[^}]*justify-content: center/);
+  assert.match(styles, /\.task-filters-with-views > \.filter-count \{[^}]*justify-self: end/);
+  assert.match(dashboard, /function shiftCalendarWeek/);
+  assert.match(dashboard, /aria-label="Previous month"/);
+  assert.match(dashboard, /aria-label="Next month"/);
+  assert.match(dashboard, /const gridStart = new Date\(monthStart\)/);
+  assert.match(dashboard, /onMouseDown=\{\(event\) => \{ if \(event\.detail > 1\) event\.preventDefault\(\); \}\}/);
+  assert.match(dashboard, /className=\{`task-gantt-row[\s\S]*?onDoubleClick=\{\(event\) =>/);
+  assert.match(styles, /\.task-calendar-day > header span \{[^}]*font-size: 12px/);
+  assert.match(styles, /\.task-calendar-week-nav button \{[^}]*width: 27px/);
+  assert.match(styles, /\.task-gantt-row \{[^}]*user-select: none/);
+});
+
+test("V163 renders continuous calendar ranges, navigates Gantt weekly, and delivers authorized task mentions", async () => {
+  const [dashboard, commentsApi, schema, styles] = await Promise.all([
+    source("app/task-dashboard.tsx"),
+    source("app/api/task-comments/route.ts"),
+    source("db/schema.ts"),
+    source("app/globals.css"),
+  ]);
+  assert.match(dashboard, /className="task-calendar-week"[\s\S]*?--calendar-lanes/);
+  assert.match(dashboard, /gridColumn: `\$\{startColumn \+ 1\} \/ \$\{endColumn \+ 2\}`/);
+  assert.match(dashboard, /aria-label="Navigate calendar by month"/);
+  assert.match(dashboard, /aria-label="Navigate Gantt by week"/);
+  assert.match(dashboard, /shiftCalendarWeek\(anchor, -1\)/);
+  assert.match(dashboard, /shiftCalendarWeek\(anchor, 1\)/);
+  assert.doesNotMatch(dashboard, /<b>Today<\/b>/);
+  assert.match(styles, /\.task-gantt-axis \.task-gantt-track > span \{[^}]*font-size: 8px/);
+  assert.match(dashboard, /Type @ to mention/);
+  assert.match(dashboard, /mentionedEmails/);
+  assert.match(commentsApi, /permittedMentions/);
+  assert.match(commentsApi, /canViewTask\(db, safeUser\(candidate\), task\)/);
+  assert.match(commentsApi, /type: "task_mentioned"/);
+  assert.match(commentsApi, /await createNotifications\(db, notificationPayloads\)/);
+  assert.match(schema, /"task_mentioned"/);
+  assert.match(styles, /\.comment-mention-menu/);
+});
+
+test("V164 shows active-work pulse in Gantt and compacts issue summary cards like task cards", async () => {
+  const [dashboard, issuesModule, styles] = await Promise.all([
+    source("app/task-dashboard.tsx"),
+    source("app/issues-module.tsx"),
+    source("app/globals.css"),
+  ]);
+  assert.match(dashboard, /className="task-gantt-title"[\s\S]*?task\.status === "in_progress"[\s\S]*?employee-task-live-pulse/);
+  assert.match(styles, /\.task-gantt-title \.employee-task-live-pulse/);
+  assert.match(issuesModule, /className="issue-stats task-stats-ltr"/);
+  assert.match(styles, /\.issue-stats\.task-stats-ltr article \{[^}]*min-height: 66px[^}]*display: flex/);
+  assert.match(styles, /\.issue-stats\.task-stats-ltr article > strong \{[^}]*font-size: 24px/);
+});
+
+test("V165 keeps Kanban task drawers closed after drag and drop", async () => {
+  const dashboard = await source("app/task-dashboard.tsx");
+  assert.match(dashboard, /onDragStart=\{\(event\) => \{ suppressClickAfterDrag\.current = true;/);
+  assert.match(dashboard, /window\.setTimeout\(\(\) => \{ suppressClickAfterDrag\.current = false; \}, 350\)/);
+  assert.match(dashboard, /if \(suppressClickAfterDrag\.current\) \{ event\.preventDefault\(\); return; \}/);
 });

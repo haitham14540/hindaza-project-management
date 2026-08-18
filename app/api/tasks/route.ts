@@ -132,10 +132,16 @@ export async function POST(request: Request) {
     if (!requestedPrivate && !selfAssigned && !(await isProjectMember(db, project, employeeEmail))) {
       return Response.json({ error: "Select an employee assigned to this project." }, { status: 400 });
     }
+    const startDate = text(payload.startDate, 10);
+    const taskDate = text(payload.taskDate, 10) || new Date().toISOString().slice(0, 10);
+    if (startDate && taskDate && startDate > taskDate) {
+      return Response.json({ error: "Start Date must be on or before Due Date. · يجب أن يكون تاريخ البداية قبل أو في تاريخ الإنجاز المتوقع." }, { status: 400 });
+    }
     const inserted = await db
       .insert(tasks)
       .values({
-        taskDate: text(payload.taskDate, 10) || new Date().toISOString().slice(0, 10),
+        startDate,
+        taskDate,
         employeeName,
         employeeEmail,
         project,
@@ -232,6 +238,19 @@ export async function PATCH(request: Request) {
       await recordActivity(db, currentUser, { action: "updated", entityType: "task", entityId: id, entityLabel: updatedTask.title, projectCode: updatedTask.project, details: `Completion updated to ${completionPercent}%` });
       return Response.json({ task: updatedTask });
     }
+    if (payload.action === "gantt_dates") {
+      if (!(await canManageTask(db, currentUser, existing[0]))) {
+        return Response.json({ error: "Only authorized management can adjust this task timeline." }, { status: 403 });
+      }
+      const startDate = text(payload.startDate, 10);
+      const taskDate = text(payload.taskDate, 10);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(startDate) || !/^\d{4}-\d{2}-\d{2}$/.test(taskDate) || startDate > taskDate) {
+        return Response.json({ error: "Start Date must be on or before Due Date." }, { status: 400 });
+      }
+      const [updatedTask] = await db.update(tasks).set({ startDate, taskDate, updatedAt: sql`CURRENT_TIMESTAMP` }).where(eq(tasks.id, id)).returning();
+      await recordActivity(db, currentUser, { action: "updated", entityType: "task", entityId: id, entityLabel: updatedTask.title, projectCode: updatedTask.project, details: `Gantt dates changed to ${startDate} — ${taskDate}` });
+      return Response.json({ task: updatedTask });
+    }
     if (payload.action === "submit_to_manager") {
       const canSubmit = currentUser.role === "member"
         && existing[0].visibility === "private"
@@ -267,6 +286,10 @@ export async function PATCH(request: Request) {
     }
     const adoptingSubmittedTask = await canAdoptSubmittedTask(db, currentUser, existing[0]);
     const scopedManagement = await canManageExistingTask(db, currentUser, existing[0]) || adoptingSubmittedTask;
+    const kanbanReviewUpdate = payload.action === "kanban_review";
+    if (kanbanReviewUpdate && !scopedManagement) {
+      return Response.json({ error: "Only authorized management can move this task in Kanban." }, { status: 403 });
+    }
     const canEdit =
       (scopedManagement && (existing[0].visibility === "team" || existing[0].submittedToManager || existing[0].createdBy === currentUser.email)) ||
       existing[0].employeeEmail === currentUser.email;
@@ -344,6 +367,17 @@ export async function PATCH(request: Request) {
     let approvalActualHours = existing[0].actualHours;
     let approvalStartTime = existing[0].startTime;
     let approvalEndTime = existing[0].endTime;
+    let timerPausedByReview = false;
+    if (management && kanbanReviewUpdate && requestedCheck !== "approved") {
+      const now = new Date().toISOString();
+      const activeReviewSessions = await db.select().from(taskTimeEntries)
+        .where(and(eq(taskTimeEntries.taskId, id), isNull(taskTimeEntries.endedAt)));
+      for (const session of activeReviewSessions) {
+        const durationSeconds = session.durationSeconds + elapsedSeconds(session.resumedAt || session.startedAt, now);
+        await db.update(taskTimeEntries).set({ endedAt: now, resumedAt: null, durationSeconds }).where(eq(taskTimeEntries.id, session.id));
+      }
+      timerPausedByReview = activeReviewSessions.length > 0;
+    }
     let taskSessions = management && requestedCheck === "approved"
       ? await db.select().from(taskTimeEntries).where(eq(taskTimeEntries.taskId, id))
       : [];
@@ -363,6 +397,7 @@ export async function PATCH(request: Request) {
         taskSessions = insertedSession;
       } else {
         for (const session of taskSessions.filter((entry) => !entry.endedAt)) {
+          timerPausedByReview = true;
           const durationSeconds = session.durationSeconds + elapsedSeconds(session.resumedAt || session.startedAt, now);
           await db.update(taskTimeEntries).set({ endedAt: now, resumedAt: null, durationSeconds }).where(eq(taskTimeEntries.id, session.id));
           session.endedAt = now;
@@ -377,12 +412,20 @@ export async function PATCH(request: Request) {
       approvalStartTime = firstSession?.startedAt.slice(11, 16) || approvalStartTime;
       approvalEndTime = lastSession?.endedAt?.slice(11, 16) || approvalEndTime;
     }
-    const returningForRevision = management && requestedCheck === "returned" && ["pending", "approved"].includes(existing[0].managerCheck);
+    const movingToPending = management && kanbanReviewUpdate && requestedCheck === "pending";
+    const movingToReturned = management && kanbanReviewUpdate && requestedCheck === "returned";
+    const returningForRevision = movingToReturned && ["pending", "approved"].includes(existing[0].managerCheck);
     const approving = management && requestedCheck === "approved";
+    const nextStartDate = management || canEditPrivateDetails ? text(payload.startDate, 10) : existing[0].startDate;
+    const nextTaskDate = management || canEditPrivateDetails ? text(payload.taskDate, 10) || existing[0].taskDate : existing[0].taskDate;
+    if (nextStartDate && nextTaskDate && nextStartDate > nextTaskDate) {
+      return Response.json({ error: "Start Date must be on or before Due Date. · يجب أن يكون تاريخ البداية قبل أو في تاريخ الإنجاز المتوقع." }, { status: 400 });
+    }
     const updated = await db
       .update(tasks)
       .set({
-        taskDate: management || canEditPrivateDetails ? text(payload.taskDate, 10) || existing[0].taskDate : existing[0].taskDate,
+        startDate: nextStartDate,
+        taskDate: nextTaskDate,
         employeeName,
         employeeEmail,
         project: management || canEditPrivateDetails ? project : existing[0].project,
@@ -398,13 +441,17 @@ export async function PATCH(request: Request) {
         completionPercent:
           approving
             ? 100
+            : movingToPending
+            ? 100
             : returningForRevision
             ? existing[0].completionBeforeReview
             : existing[0].completionPercent,
-        completionBeforeReview: approving && existing[0].managerCheck !== "pending"
+        completionBeforeReview: movingToPending && existing[0].managerCheck !== "pending"
+          ? existing[0].completionPercent
+          : approving && existing[0].managerCheck !== "pending"
           ? existing[0].completionPercent
           : existing[0].completionBeforeReview,
-        status: approving ? "done" : employeeChanged && reassignmentAfterSubmission ? "not_started" : returningForRevision ? "needs_revision" : existing[0].status,
+        status: approving ? "done" : employeeChanged && reassignmentAfterSubmission ? "not_started" : movingToReturned ? "needs_revision" : movingToPending ? "done" : timerPausedByReview ? "paused" : existing[0].status,
         managerCheck:
           management
             ? employeeChanged && reassignmentAfterSubmission ? "new" : requestedCheck
@@ -419,7 +466,7 @@ export async function PATCH(request: Request) {
         createdBy: currentUser.role === "owner"
           ? requestedCreatedBy
           : adoptingSubmittedTask ? currentUser.email : existing[0].createdBy,
-        workCycle: employeeChanged && reassignmentAfterSubmission ? existing[0].workCycle + 1 : returningForRevision && existing[0].managerCheck !== "returned" ? existing[0].workCycle + 1 : existing[0].workCycle,
+        workCycle: employeeChanged && reassignmentAfterSubmission ? existing[0].workCycle + 1 : movingToReturned && existing[0].managerCheck !== "returned" ? existing[0].workCycle + 1 : existing[0].workCycle,
         updatedAt: sql`CURRENT_TIMESTAMP`,
       })
       .where(eq(tasks.id, id))
@@ -454,8 +501,11 @@ export async function PATCH(request: Request) {
       .from(users)
       .where(eq(users.email, updated[0].createdBy))
       .limit(1);
+    const refreshedTimeEntries = kanbanReviewUpdate
+      ? await db.select().from(taskTimeEntries).where(eq(taskTimeEntries.taskId, id))
+      : undefined;
 
-    return Response.json({ task: { ...updated[0], createdByName: creatorDetails?.displayName || "Unknown user", createdByProfileImageKey: creatorDetails?.profileImageKey || "" } });
+    return Response.json({ task: { ...updated[0], createdByName: creatorDetails?.displayName || "Unknown user", createdByProfileImageKey: creatorDetails?.profileImageKey || "" }, timeEntries: refreshedTimeEntries, timerPaused: timerPausedByReview });
   } catch (error) {
     const unauthorized = unauthorizedResponse(error);
     if (unauthorized) return unauthorized;

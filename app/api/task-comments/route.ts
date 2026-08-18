@@ -1,10 +1,10 @@
-import { eq, sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { getDb } from "@/db";
-import { taskComments, tasks } from "@/db/schema";
-import { getCurrentUser, unauthorizedResponse } from "@/lib/auth";
+import { taskComments, tasks, users } from "@/db/schema";
+import { getCurrentUser, safeUser, unauthorizedResponse } from "@/lib/auth";
 import { recordActivity } from "@/lib/activity";
-import { createNotifications } from "@/lib/notification-delivery";
-import { canManageTask } from "@/lib/task-access";
+import { createNotifications, type NotificationPayload } from "@/lib/notification-delivery";
+import { canManageTask, canViewTask } from "@/lib/task-access";
 
 export const dynamic = "force-dynamic";
 const COMMENT_EDIT_WINDOW_MS = 15 * 60 * 1000;
@@ -14,12 +14,38 @@ function timestampMs(value: string) {
   return new Date(normalized).getTime();
 }
 
+function requestedMentionEmails(value: unknown) {
+  if (!Array.isArray(value)) return [];
+  return [...new Set(value
+    .filter((email): email is string => typeof email === "string")
+    .map((email) => email.trim().toLowerCase())
+    .filter((email) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)))]
+    .slice(0, 20);
+}
+
+async function permittedMentions(
+  db: Awaited<ReturnType<typeof getDb>>,
+  task: typeof tasks.$inferSelect,
+  requestedEmails: string[],
+  authorEmail: string,
+) {
+  const emails = requestedEmails.filter((email) => email !== authorEmail.toLowerCase());
+  if (!emails.length) return [];
+  const candidates = await db.select().from(users).where(and(eq(users.active, true), inArray(users.email, emails)));
+  const allowed = [] as Array<{ email: string; displayName: string }>;
+  for (const candidate of candidates) {
+    if (await canViewTask(db, safeUser(candidate), task)) allowed.push({ email: candidate.email, displayName: candidate.displayName });
+  }
+  return allowed;
+}
+
 export async function POST(request: Request) {
   try {
     const currentUser = await getCurrentUser(request);
     const payload = (await request.json()) as Record<string, unknown>;
     const taskId = Number(payload.taskId);
     const body = typeof payload.body === "string" ? payload.body.trim().slice(0, 2000) : "";
+    const mentionEmails = requestedMentionEmails(payload.mentionedEmails);
 
     if (!Number.isInteger(taskId)) {
       return Response.json({ error: "Invalid task id." }, { status: 400 });
@@ -54,16 +80,27 @@ export async function POST(request: Request) {
     await db.update(tasks).set({ updatedAt: sql`CURRENT_TIMESTAMP` }).where(eq(tasks.id, taskId));
     const taskDetails = task[0];
     const recipientEmail = currentUser.role === "member" ? taskDetails.createdBy : taskDetails.employeeEmail;
-    if (recipientEmail && recipientEmail.toLowerCase() !== currentUser.email.toLowerCase()) {
-      await createNotifications(db, {
+    const mentionRecipients = await permittedMentions(db, taskDetails, mentionEmails, currentUser.email);
+    const mentioned = new Set(mentionRecipients.map((recipient) => recipient.email.toLowerCase()));
+    const notificationPayloads: NotificationPayload[] = mentionRecipients.map((recipient) => ({
+      recipientEmail: recipient.email,
+      type: "task_mentioned" as const,
+      taskId,
+      title: "Mentioned in a task note · تمت الإشارة إليك في ملاحظة مهمة",
+      message: `${currentUser.displayName} mentioned you in ${taskDetails.title} · أشار إليك في ملاحظة المهمة`,
+      actorName: currentUser.displayName,
+    }));
+    if (recipientEmail && recipientEmail.toLowerCase() !== currentUser.email.toLowerCase() && !mentioned.has(recipientEmail.toLowerCase())) {
+      notificationPayloads.push({
         recipientEmail,
-        type: "task_note_added",
+        type: "task_note_added" as const,
         taskId,
         title: "Task note added · تمت إضافة ملاحظة على المهمة",
         message: `${taskDetails.title} · ${currentUser.displayName} · ملاحظة جديدة`,
         actorName: currentUser.displayName,
       });
     }
+    if (notificationPayloads.length) await createNotifications(db, notificationPayloads);
     await recordActivity(db, currentUser, { action: "note_added", entityType: "task", entityId: taskId, entityLabel: taskDetails.title, projectCode: taskDetails.project, details: body });
     return Response.json({ comment: inserted[0] }, { status: 201 });
   } catch (error) {

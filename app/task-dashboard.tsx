@@ -1,7 +1,7 @@
 /* eslint-disable @next/next/no-img-element */
 "use client";
 
-import { CSSProperties, ChangeEvent, ClipboardEvent, FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { CSSProperties, ChangeEvent, ClipboardEvent, DragEvent, FormEvent, PointerEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { IssueReportPanel, IssuesModule, type IssuesModuleHandle } from "./issues-module";
 import { useAppConfirm } from "./confirm-dialog";
 import PasswordInput from "./password-input";
@@ -31,6 +31,7 @@ type Project = {
 
 type Task = {
   id: number;
+  startDate: string;
   taskDate: string;
   employeeName: string;
   employeeEmail: string;
@@ -138,7 +139,7 @@ type ProjectRemovalWarning = {
 type Notification = {
   id: number;
   recipientEmail: string;
-  type: "task_assigned" | "review_updated" | "private_task_submitted" | "task_ready_for_review" | "subtask_completed" | "task_note_added" | "issue_created" | "issue_updated" | "issue_note_added" | "project_member_added";
+  type: "task_assigned" | "review_updated" | "private_task_submitted" | "task_ready_for_review" | "subtask_completed" | "task_note_added" | "task_mentioned" | "issue_created" | "issue_updated" | "issue_note_added" | "project_member_added";
   taskId: number | null;
   issueId: number | null;
   title: string;
@@ -349,7 +350,7 @@ const statusLabel: Record<Task["status"], string> = {
   not_started: "Not started · لم تبدأ",
   in_progress: "In progress · قيد التنفيذ",
   paused: "Paused · متوقفة مؤقتًا",
-  blocked: "Blocked · متوقفة",
+  blocked: "Paused · متوقفة مؤقتًا",
   needs_revision: "Revision · تحتاج تعديل",
   done: "Done · مكتملة",
 };
@@ -371,10 +372,18 @@ const tableStatusLabel: Record<Task["status"], string> = {
   not_started: "Not started",
   in_progress: "In progress",
   paused: "Paused",
-  blocked: "Blocked",
+  blocked: "Paused",
   needs_revision: "Revision",
   done: "Done",
 };
+
+const employeeStatusKeys: Task["status"][] = ["not_started", "in_progress", "paused", "needs_revision", "done"];
+
+function matchesEmployeeStatus(status: Task["status"], filter: string) {
+  if (filter === "all") return true;
+  if (filter === "paused") return status === "paused" || status === "blocked";
+  return status === filter;
+}
 
 const tablePriorityLabel: Record<Task["priority"], string> = { high: "High", medium: "Medium", low: "Low" };
 const tableCheckLabel: Record<Task["managerCheck"], string> = { new: "New/WIP", pending: "Pending", approved: "Approved", returned: "Returned" };
@@ -395,6 +404,7 @@ function localToday() {
 
 function blankTask(user?: User, visibility: Task["visibility"] = "team"): TaskForm {
   return {
+    startDate: localToday(),
     taskDate: localToday(),
     employeeName: user?.displayName || "",
     employeeEmail: user?.email || "",
@@ -606,6 +616,11 @@ function reportRange(anchor: string, period: "week" | "month") {
   };
 }
 
+function projectReportLabel(projects: Project[], code: string) {
+  const project = projects.find((item) => item.code === code);
+  return project ? `${project.name} (${project.code})` : code;
+}
+
 function escapeXml(value: unknown) {
   return String(value ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
@@ -666,6 +681,9 @@ export default function TaskDashboard() {
   const [taskAttachmentProgress, setTaskAttachmentProgress] = useState<AttachmentUploadProgress | null>(null);
   const [savingTimer, setSavingTimer] = useState(false);
   const [completionSavingTaskId, setCompletionSavingTaskId] = useState<number | null>(null);
+  const [kanbanReviewSavingTaskId, setKanbanReviewSavingTaskId] = useState<number | null>(null);
+  const [kanbanStatusSavingTaskId, setKanbanStatusSavingTaskId] = useState<number | null>(null);
+  const [ganttDateSavingTaskId, setGanttDateSavingTaskId] = useState<number | null>(null);
   const [backupBusy, setBackupBusy] = useState<"download" | "restore" | null>(null);
   const [profileImageBusy, setProfileImageBusy] = useState(false);
   const [profileImageProgress, setProfileImageProgress] = useState(0);
@@ -704,7 +722,7 @@ export default function TaskDashboard() {
   const [projectStatusFilter, setProjectStatusFilter] = useState("active");
   const [teamView, setTeamView] = useState<DirectoryView>("table");
   const [projectView, setProjectView] = useState<DirectoryView>("table");
-  const [reportPeriod, setReportPeriod] = useState<"week" | "month" | "custom">("week");
+  const [reportPeriod, setReportPeriod] = useState<"week" | "month" | "custom">("month");
   const [reportType, setReportType] = useState<"tasks" | "issues" | "rfi">("tasks");
   const [reportGroup, setReportGroup] = useState<"project" | "employee">("project");
   const [reportAnchor, setReportAnchor] = useState(localToday());
@@ -1200,7 +1218,7 @@ export default function TaskDashboard() {
       return (!term || searchable.includes(term)) &&
         (employeeFilter === "all" || task.employeeName === employeeFilter) &&
         (tab === "projects" && selectedProjectCode ? task.project === selectedProjectCode : projectFilter === "all" || task.project === projectFilter) &&
-        (statusFilter === "all" || task.status === statusFilter) &&
+        matchesEmployeeStatus(task.status, statusFilter) &&
         (reviewFilter === "all" || (reviewFilter === "unapproved" ? task.managerCheck !== "approved" : task.managerCheck === reviewFilter)) &&
         (!dueDateFilter || task.taskDate === dueDateFilter) &&
         (disciplineFilter === "all" || task.employeeDiscipline === disciplineFilter || userByIdentity.get(task.employeeEmail.toLowerCase())?.discipline === disciplineFilter || userByIdentity.get(task.employeeName)?.discipline === disciplineFilter);
@@ -1329,7 +1347,7 @@ export default function TaskDashboard() {
       const rows = reportTasks.filter((task) => reportGroup === "project" ? task.project === key : task.employeeName === key);
       return {
         key,
-        label: reportGroup === "project" ? projects.find((project) => project.code === key)?.name || key : key,
+        label: reportGroup === "project" ? projectReportLabel(projects, key) : key,
         total: rows.length,
         projectCount: new Set(rows.map((task) => task.project)).size,
         employeeCount: new Set(rows.map((task) => task.employeeEmail || task.employeeName).filter(Boolean)).size,
@@ -1412,7 +1430,7 @@ export default function TaskDashboard() {
   function openTask(task: Task) {
     setSelectedTaskId(task.id);
     setTaskForm({
-      taskDate: task.taskDate, employeeName: task.employeeName, employeeEmail: task.employeeEmail,
+      startDate: task.startDate || "", taskDate: task.taskDate, employeeName: task.employeeName, employeeEmail: task.employeeEmail,
       project: task.project, title: task.title, expectedOutput: task.expectedOutput, priority: task.priority,
       plannedHours: task.plannedHours, startTime: task.startTime, endTime: task.endTime,
       actualHours: task.actualHours, status: task.status, managerCheck: task.managerCheck,
@@ -1708,22 +1726,24 @@ export default function TaskDashboard() {
     finally { setSaving(false); }
   }
 
-  async function addComment() {
-    if (!selectedTaskId || !commentDraft.trim()) return;
+  async function addComment(mentionedEmails: string[] = []) {
+    if (!selectedTaskId || !commentDraft.trim()) return false;
     setSavingComment(true); setError("");
     try {
       const response = await fetch("/api/task-comments", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ taskId: selectedTaskId, body: commentDraft }),
+        body: JSON.stringify({ taskId: selectedTaskId, body: commentDraft, mentionedEmails }),
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || "Unable to post comment");
       setComments((current) => [...current, data.comment]);
       setCommentDraft("");
       setToast("Task note added successfully · تمت إضافة الملاحظة إلى سجل المهمة");
+      return true;
     } catch (commentError) {
       setError(commentError instanceof Error ? commentError.message : "تعذر إضافة الملاحظة");
+      return false;
     } finally {
       setSavingComment(false);
     }
@@ -1968,6 +1988,80 @@ export default function TaskDashboard() {
       setError(completionError instanceof Error ? completionError.message : "Unable to update task completion.");
     } finally {
       setCompletionSavingTaskId(null);
+    }
+  }
+
+  async function updateTaskReviewFromKanban(taskId: number, managerCheck: Task["managerCheck"]) {
+    setKanbanReviewSavingTaskId(taskId); setError("");
+    try {
+      const response = await fetch("/api/tasks", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: taskId, action: "kanban_review", managerCheck }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "Unable to move the task in Kanban.");
+      setTasks((current) => current.map((task) => task.id === taskId ? { ...task, ...data.task } : task));
+      if (Array.isArray(data.timeEntries)) {
+        setTimeEntries((current) => [...current.filter((entry) => entry.taskId !== taskId), ...data.timeEntries]);
+      }
+      if (selectedTaskId === taskId) setTaskForm((current) => ({ ...current, managerCheck: data.task.managerCheck, status: data.task.status, completionPercent: data.task.completionPercent }));
+      setClock(Date.now());
+      setToast(data.timerPaused
+        ? `Task moved to ${tableCheckLabel[managerCheck]} and the employee timer was paused · تم نقل المهمة وإيقاف العداد`
+        : `Task moved to ${tableCheckLabel[managerCheck]} · تم تحديث مراجعة المسؤول`);
+    } catch (reviewError) {
+      setError(reviewError instanceof Error ? reviewError.message : "Unable to move the task in Kanban.");
+    } finally {
+      setKanbanReviewSavingTaskId(null);
+    }
+  }
+
+  async function updateTaskStatusFromKanban(taskId: number, status: Task["status"]) {
+    const actionByStatus: Partial<Record<Task["status"], "start" | "pause" | "finish">> = {
+      in_progress: "start",
+      paused: "pause",
+      done: "finish",
+    };
+    const action = actionByStatus[status];
+    if (!action) return;
+    setKanbanStatusSavingTaskId(taskId); setError("");
+    try {
+      const response = await fetch("/api/task-timer", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ taskId, action }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "Unable to move the task in Kanban.");
+      mergeTimerResponse(data);
+      setToast(action === "finish" && data.submittedForReview
+        ? "Task completed and submitted for review · اكتملت المهمة وأُرسلت للمراجعة"
+        : `Task moved to ${tableStatusLabel[status]} · تم تحديث حالة المهمة`);
+    } catch (statusError) {
+      setError(statusError instanceof Error ? statusError.message : "Unable to move the task in Kanban.");
+    } finally {
+      setKanbanStatusSavingTaskId(null);
+    }
+  }
+
+  async function updateTaskDatesFromGantt(taskId: number, startDate: string, taskDate: string) {
+    setGanttDateSavingTaskId(taskId); setError("");
+    try {
+      const response = await fetch("/api/tasks", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: taskId, action: "gantt_dates", startDate, taskDate }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "Unable to update the task timeline.");
+      setTasks((current) => current.map((task) => task.id === taskId ? { ...task, ...data.task } : task));
+      if (selectedTaskId === taskId) setTaskForm((current) => ({ ...current, startDate, taskDate }));
+      setToast("Task timeline updated · تم تحديث الفترة الزمنية للمهمة");
+    } catch (timelineError) {
+      setError(timelineError instanceof Error ? timelineError.message : "Unable to update the task timeline.");
+    } finally {
+      setGanttDateSavingTaskId(null);
     }
   }
 
@@ -2530,7 +2624,7 @@ export default function TaskDashboard() {
               <button className={`notification-bell${unreadNotifications ? " unread" : ""}`} onClick={() => { setAccountMenuOpen(false); setNotificationMenuOpen((open) => !open); }} aria-label="Notifications"><span className="bell-icon" aria-hidden="true" />{unreadNotifications > 0 && <em>{unreadNotifications > 99 ? "99+" : unreadNotifications}</em>}</button>
               {notificationMenuOpen && <div className="notification-popover">
                 <div className="notification-popover-head"><div><strong>Notifications</strong><span>الإشعارات</span></div>{notifications.length > 0 && <button onClick={() => markNotification()}><ButtonLabel en="Read all" ar="قراءة الكل" /></button>}</div>
-                {notifications.length === 0 ? <div className="notification-popover-empty">لا توجد إشعارات جديدة</div> : <div className="notification-popover-list">{notifications.map((notification) => <button key={notification.id} className={notification.read ? "" : "unread"} onClick={() => markNotification(notification)}><i>{notification.issueId ? "!" : notification.type === "task_assigned" ? "+" : "✓"}</i><span><strong>{notification.title}</strong><small>{notification.message}</small><time dir="ltr">{formatDateTime(notification.createdAt)}</time></span></button>)}</div>}
+                {notifications.length === 0 ? <div className="notification-popover-empty">لا توجد إشعارات جديدة</div> : <div className="notification-popover-list">{notifications.map((notification) => <button key={notification.id} className={notification.read ? "" : "unread"} onClick={() => markNotification(notification)}><i>{notification.issueId ? "!" : notification.type === "task_mentioned" ? "@" : notification.type === "task_assigned" ? "+" : "✓"}</i><span><strong>{notification.title}</strong><small>{notification.message}</small><time dir="ltr">{formatDateTime(notification.createdAt)}</time></span></button>)}</div>}
               </div>}
             </div>
           </div>
@@ -2572,7 +2666,7 @@ export default function TaskDashboard() {
               <article className="stat-card amber"><span>Returned · مُعادة</span><strong>{projectStats.returned}</strong></article>
               <article className="stat-card green"><span>Approved · معتمدة</span><strong>{projectStats.approved}</strong></article>
             </section>
-            <TaskTable loading={loading} tasks={projectTasks} filteredCount={projectTasks.length} tab={tab} employees={employeeOptions} users={users} projects={[selectedProject.code]} lockedProjectCode={selectedProject.code} search={search} employeeFilter={employeeFilter} projectFilter={projectFilter} statusFilter={statusFilter} reviewFilter={reviewFilter} dueDateFilter={dueDateFilter} disciplineFilter={disciplineFilter} showEmployeeFilter={currentUser?.role !== "member" || currentUserIsProjectManager} showDisciplineColumn={currentUser?.role === "owner" || currentUser?.role === "manager" || currentUserIsProjectManager} setSearch={setSearch} setEmployeeFilter={setEmployeeFilter} setProjectFilter={setProjectFilter} setStatusFilter={setStatusFilter} setReviewFilter={setReviewFilter} setDueDateFilter={setDueDateFilter} setDisciplineFilter={setDisciplineFilter} openTask={openTask} showAll={() => undefined} timeEntries={timeEntries} clock={clock} commentCounts={taskCommentCounts} detailsLoadedTaskIds={taskDetailsLoadedIds} subtasks={subtasks} attachments={taskAttachments} issueLinks={taskIssueLinks} openIssue={openLinkedIssue} currentUser={currentUser} completionSavingTaskId={completionSavingTaskId} updateCompletion={updateTaskCompletion} />
+            <TaskTable loading={loading} tasks={projectTasks} filteredCount={projectTasks.length} tab={tab} employees={employeeOptions} users={users} projects={[selectedProject.code]} projectRecords={[selectedProject]} lockedProjectCode={selectedProject.code} search={search} employeeFilter={employeeFilter} projectFilter={projectFilter} statusFilter={statusFilter} reviewFilter={reviewFilter} dueDateFilter={dueDateFilter} disciplineFilter={disciplineFilter} showEmployeeFilter={currentUser?.role !== "member" || currentUserIsProjectManager} showDisciplineColumn={currentUser?.role === "owner" || currentUser?.role === "manager" || currentUserIsProjectManager} setSearch={setSearch} setEmployeeFilter={setEmployeeFilter} setProjectFilter={setProjectFilter} setStatusFilter={setStatusFilter} setReviewFilter={setReviewFilter} setDueDateFilter={setDueDateFilter} setDisciplineFilter={setDisciplineFilter} openTask={openTask} createTask={openNewTask} showAll={() => undefined} timeEntries={timeEntries} clock={clock} commentCounts={taskCommentCounts} detailsLoadedTaskIds={taskDetailsLoadedIds} subtasks={subtasks} attachments={taskAttachments} issueLinks={taskIssueLinks} openIssue={openLinkedIssue} currentUser={currentUser} completionSavingTaskId={completionSavingTaskId} updateCompletion={updateTaskCompletion} kanbanReviewSavingTaskId={kanbanReviewSavingTaskId} updateReviewFromKanban={updateTaskReviewFromKanban} kanbanStatusSavingTaskId={kanbanStatusSavingTaskId} updateStatusFromKanban={updateTaskStatusFromKanban} ganttDateSavingTaskId={ganttDateSavingTaskId} updateDatesFromGantt={updateTaskDatesFromGantt} />
           </>}
           {projectWorkspaceTab === "issues" && currentUser && <IssuesModule key={selectedProject.code} ref={issuesModuleRef} currentUser={currentUser} users={users} projects={[selectedProject]} lockedProjectCode={selectedProject.code} onTaskCreated={(task) => setTasks((current) => [task as Task, ...current])} onIssueChanged={syncIssueLink} onOpenTask={(id) => void openLinkedTask(id)} onOpenProjectSettings={(project) => openProjectFromTask(project as Project)} onToast={setToast} />}
           {projectWorkspaceTab === "rfi" && <section className="panel module-placeholder"><div className="module-icon">RFI</div><p>REQUEST FOR INFORMATION</p><h2>{selectedProject.name}</h2><span>This RFI workspace is limited to {selectedProject.code}.</span><div className="module-status">Ready for configuration</div></section>}
@@ -2588,7 +2682,7 @@ export default function TaskDashboard() {
             <article className="stat-card amber"><span>Returned · مُعادة</span><strong>{stats.returned}</strong><small>تحتاج إجراء من الموظف</small></article>
             <article className="stat-card green"><span>Approved · معتمدة</span><strong>{stats.approved}</strong><small>تم اعتمادها من المسؤول</small></article>
           </section>
-          <TaskTable loading={loading} tasks={filteredTasks} filteredCount={filteredTasks.length} tab={tab} employees={employeeOptions} users={users} projects={projectCodes} search={search} employeeFilter={employeeFilter} projectFilter={projectFilter} statusFilter={statusFilter} reviewFilter={reviewFilter} dueDateFilter={dueDateFilter} disciplineFilter={disciplineFilter} showEmployeeFilter={currentUser?.role !== "member"} showDisciplineColumn={currentUser?.role === "owner" || currentUser?.role === "manager"} setSearch={setSearch} setEmployeeFilter={setEmployeeFilter} setProjectFilter={setProjectFilter} setStatusFilter={setStatusFilter} setReviewFilter={setReviewFilter} setDueDateFilter={setDueDateFilter} setDisciplineFilter={setDisciplineFilter} openTask={openTask} showAll={() => setTab("tasks")} timeEntries={timeEntries} clock={clock} commentCounts={taskCommentCounts} detailsLoadedTaskIds={taskDetailsLoadedIds} subtasks={subtasks} attachments={taskAttachments} issueLinks={taskIssueLinks} openIssue={openLinkedIssue} currentUser={currentUser} completionSavingTaskId={completionSavingTaskId} updateCompletion={updateTaskCompletion} />
+          <TaskTable loading={loading} tasks={filteredTasks} filteredCount={filteredTasks.length} tab={tab} employees={employeeOptions} users={users} projects={projectCodes} projectRecords={projects} search={search} employeeFilter={employeeFilter} projectFilter={projectFilter} statusFilter={statusFilter} reviewFilter={reviewFilter} dueDateFilter={dueDateFilter} disciplineFilter={disciplineFilter} showEmployeeFilter={currentUser?.role !== "member"} showDisciplineColumn={currentUser?.role === "owner" || currentUser?.role === "manager"} setSearch={setSearch} setEmployeeFilter={setEmployeeFilter} setProjectFilter={setProjectFilter} setStatusFilter={setStatusFilter} setReviewFilter={setReviewFilter} setDueDateFilter={setDueDateFilter} setDisciplineFilter={setDisciplineFilter} openTask={openTask} createTask={openNewTask} showAll={() => setTab("tasks")} timeEntries={timeEntries} clock={clock} commentCounts={taskCommentCounts} detailsLoadedTaskIds={taskDetailsLoadedIds} subtasks={subtasks} attachments={taskAttachments} issueLinks={taskIssueLinks} openIssue={openLinkedIssue} currentUser={currentUser} completionSavingTaskId={completionSavingTaskId} updateCompletion={updateTaskCompletion} kanbanReviewSavingTaskId={kanbanReviewSavingTaskId} updateReviewFromKanban={updateTaskReviewFromKanban} kanbanStatusSavingTaskId={kanbanStatusSavingTaskId} updateStatusFromKanban={updateTaskStatusFromKanban} ganttDateSavingTaskId={ganttDateSavingTaskId} updateDatesFromGantt={updateTaskDatesFromGantt} />
         </>}
 
         {tab === "rfi" && <section className="panel module-placeholder">
@@ -2628,7 +2722,7 @@ export default function TaskDashboard() {
               <label><span>Calendar Period</span><select value={reportPeriod} onChange={(event) => { setReportPeriod(event.target.value as "week" | "month" | "custom"); setReportScope("all"); }}><option value="week">Week</option><option value="month">Month</option><option value="custom">Custom Range</option></select></label>
               {reportPeriod !== "custom" ? <label><span>{reportPeriod === "week" ? "Select Week" : "Select Month"}</span><input type={reportPeriod === "week" ? "week" : "month"} value={reportPeriod === "week" ? (() => { const start = new Date(`${range.start}T12:00:00`); const firstThursday = new Date(start); firstThursday.setDate(start.getDate() + 4 - (start.getDay() || 7)); const yearStart = new Date(firstThursday.getFullYear(), 0, 1); const week = Math.ceil((((firstThursday.getTime() - yearStart.getTime()) / 86400000) + 1) / 7); return `${firstThursday.getFullYear()}-W${String(week).padStart(2, "0")}`; })() : reportAnchor.slice(0, 7)} onChange={(event) => changeReportCalendar(event.currentTarget.value)} /></label> : <><label><span>From</span><input type="date" value={reportCustomStart} onChange={(event) => setReportCustomStart(event.target.value)} /></label><label><span>To</span><input type="date" min={reportCustomStart || undefined} value={reportCustomEnd} onChange={(event) => setReportCustomEnd(event.target.value)} /></label></>}
               <label><span>Group By</span><select value={reportGroup} onChange={(event) => { setReportGroup(event.target.value as "project" | "employee"); setReportScope("all"); }}><option value="project">Project</option><option value="employee">Employee</option></select></label>
-              <label><span>{reportGroup === "project" ? "Project" : "Employee"}</span><select value={reportScope} onChange={(event) => setReportScope(event.target.value)}><option value="all">All</option>{reportGroup === "project" ? projectCodes.map((code) => <option key={code} value={code}>{projects.find((project) => project.code === code)?.name || code}</option>) : reportEmployees.map((employeeName) => <option key={employeeName} value={employeeName}>{employeeName}</option>)}</select></label>
+              <label><span>{reportGroup === "project" ? "Project" : "Employee"}</span><select value={reportScope} onChange={(event) => setReportScope(event.target.value)}><option value="all">All</option>{reportGroup === "project" ? projectCodes.map((code) => <option key={code} value={code}>{projectReportLabel(projects, code)}</option>) : reportEmployees.map((employeeName) => <option key={employeeName} value={employeeName}>{employeeName}</option>)}</select></label>
             </div>
             {reportPeriod !== "custom" ? <div className="period-nav"><button type="button" onClick={() => moveReport(-1)}>← Previous</button><div><strong>{formatDate(range.start)} — {formatDate(range.end)}</strong><small>{reportPeriodLabel}</small></div><button type="button" onClick={() => moveReport(1)}>Next →</button></div> : <div className="report-range-summary"><strong>{formatDate(range.start)} — {formatDate(range.end)}</strong></div>}
             <div className="export-actions"><button className="report-download-icon-button excel-button" onClick={exportExcel} disabled={!reportRows.length} aria-label="Download Excel report" title="Download Excel"><ActionIcon kind="excel" /></button><button className="report-download-icon-button pdf-button" onClick={exportPdf} disabled={!reportRows.length} aria-label="Download PDF report" title="Download PDF"><ActionIcon kind="pdf" /></button></div>
@@ -2650,7 +2744,7 @@ export default function TaskDashboard() {
 
       {userRemovalWarning && <div className="drawer-layer dependency-warning-layer" role="dialog" aria-modal="true" aria-label="Employee assigned tasks warning"><button className="drawer-backdrop" onClick={() => setUserRemovalWarning(null)} aria-label="Close warning" /><section className="dependency-warning-dialog"><div className="dependency-warning-icon">!</div><h2>Employee has assigned tasks</h2><h3>لدى الموظف مهام موكلة إليه</h3><p><strong>{userRemovalWarning.employeeName}</strong> has {userRemovalWarning.taskCount} assigned task(s). Reassign these tasks before deleting the employee.</p><p dir="rtl">يجب تغيير الموظف المسؤول عن هذه المهام قبل حذف الموظف من النظام.</p><div className="dependency-project-links">{userRemovalWarning.projects.map((item) => <button key={item.project} onClick={() => reviewEmployeeTasks(userRemovalWarning.employeeName, item.project)}><span>↗</span><strong>Open {item.project} tasks</strong><small>{item.taskCount} tasks</small></button>)}</div><button className="secondary-button dependency-close" onClick={() => setUserRemovalWarning(null)}><ButtonLabel en="Cancel" ar="إلغاء" /></button></section></div>}
       {reportDialogMetric && <ReportTasksDialog metric={reportDialogMetric} groupBy={reportGroup} tasks={reportDialogTasks} projects={projects} users={users} timeEntries={timeEntries} clock={clock} currentUser={currentUser} updateCompletion={updateTaskCompletion} completionSavingTaskId={completionSavingTaskId} onClose={closeReportTasks} onOpenTask={openReportTask} />}
-      {reportRowKey && <ReportTasksDialog metric="all" title={reportGroup === "project" ? projects.find((project) => project.code === reportRowKey)?.name || reportRowKey : reportRowKey} groupBy="project" tasks={reportRowTasks} projects={projects} users={users} timeEntries={timeEntries} clock={clock} currentUser={currentUser} updateCompletion={updateTaskCompletion} completionSavingTaskId={completionSavingTaskId} projectCode={reportGroup === "project" ? reportRowKey : ""} employee={reportGroup === "employee" ? users.find((user) => user.displayName === reportRowKey) || null : null} hideEmployeeColumn={reportGroup === "employee"} onOpenProject={openReportProjectTasks} onProjectSettings={openReportProjectSettings} onEmployeeSettings={openReportEmployeeSettings} onClose={closeReportRow} onOpenTask={openReportTask} />}
+      {reportRowKey && <ReportTasksDialog metric="all" title={reportGroup === "project" ? projectReportLabel(projects, reportRowKey) : reportRowKey} groupBy="project" tasks={reportRowTasks} projects={projects} users={users} timeEntries={timeEntries} clock={clock} currentUser={currentUser} updateCompletion={updateTaskCompletion} completionSavingTaskId={completionSavingTaskId} projectCode={reportGroup === "project" ? reportRowKey : ""} employee={reportGroup === "employee" ? users.find((user) => user.displayName === reportRowKey) || null : null} hideEmployeeColumn={reportGroup === "employee"} onOpenProject={openReportProjectTasks} onProjectSettings={openReportProjectSettings} onEmployeeSettings={openReportEmployeeSettings} onClose={closeReportRow} onOpenTask={openReportTask} />}
       {employeeTasksEmail && <EmployeeTasksDialog employee={users.find((user) => user.email === employeeTasksEmail) || null} tasks={tasks.filter((task) => task.employeeEmail === employeeTasksEmail)} projects={projects} timeEntries={timeEntries} clock={clock} currentUser={currentUser} updateCompletion={updateTaskCompletion} completionSavingTaskId={completionSavingTaskId} onClose={() => setEmployeeTasksEmail(null)} onOpenTask={openEmployeeTask} onEditEmployee={openUserFromEmployeeTasks} />}
       {taskDrawerOpen && <TaskDrawer selectedId={selectedTaskId} form={taskForm} setOpen={setTaskDrawerOpen} saveTask={saveTask} deleteTask={deleteTask} saving={saving} currentUser={currentUser} users={users} projects={tab === "projects" && selectedProject ? [selectedProject] : projects} openProjectSettings={openProjectFromTask} updateForm={updateTaskForm} comments={comments.filter((comment) => comment.taskId === selectedTaskId)} commentDraft={commentDraft} setCommentDraft={setCommentDraft} addComment={addComment} updateComment={updateComment} deleteComment={deleteComment} savingComment={savingComment} task={tasks.find((task) => task.id === selectedTaskId) || null} timeEntries={timeEntries.filter((entry) => entry.taskId === selectedTaskId)} clock={clock} updateTimer={updateTimer} updateCompletion={updateTaskCompletion} completionSavingTaskId={completionSavingTaskId} updateWorkSession={updateWorkSession} deleteWorkSession={deleteWorkSession} savingTimer={savingTimer} submitPrivateTask={submitPrivateTask} subtasks={subtasks.filter((subtask) => subtask.taskId === selectedTaskId)} draftSubtasks={draftSubtasks} updateDraftSubtask={updateDraftSubtask} deleteDraftSubtask={deleteDraftSubtask} subtaskDraft={subtaskDraft} setSubtaskDraft={setSubtaskDraft} addSubtask={addSubtask} toggleSubtask={toggleSubtask} updateSubtaskTitle={updateSubtaskTitle} deleteSubtask={deleteSubtask} subtaskBusy={subtaskBusy} attachments={taskAttachments.filter((attachment) => attachment.taskId === selectedTaskId)} draftAttachments={draftTaskAttachments} addDraftAttachments={addDraftTaskAttachments} deleteDraftAttachment={deleteDraftTaskAttachment} uploadAttachment={uploadTaskAttachment} deleteAttachment={deleteTaskAttachment} attachmentBusy={taskAttachmentBusy} attachmentProgress={taskAttachmentProgress} issueLink={taskIssueLinks.find((link) => link.convertedTaskId === selectedTaskId) || null} onOpenIssue={(link) => { setTaskDrawerOpen(false); setSelectedTaskId(null); window.setTimeout(() => openLinkedIssue(link), 0); }} onIssueCreated={syncIssueLink} />}
       {projectDrawerOpen && <ProjectDrawer selectedId={selectedProjectId} form={projectForm} setForm={setProjectForm} setOpen={(open) => { if (!open && (projectDrawerReturnToReport || projectDrawerReturnToUserEmail)) { window.history.back(); return; } setProjectDrawerOpen(open); if (!open) { setProjectDrawerReturnToTask(false); setProjectDrawerReturnToReport(false); setProjectDrawerReturnToUserEmail(null); } }} saveProject={saveProject} deleteProject={deleteProject} saving={saving} users={users} tasks={tasks} currentUser={currentUser} projectCode={projects.find((project) => project.id === selectedProjectId)?.code || projectForm.code} onResolveMemberTasks={reviewMemberProjectTasks} onEditUser={openUserFromProject} />}
@@ -2694,7 +2788,7 @@ function ReportTasksDialog({ metric, title, groupBy, tasks, projects, users, tim
   const taskDisciplines = useMemo(() => Array.from(new Set(tasks.map((task) => task.employeeDiscipline).filter(Boolean))).sort(), [tasks]);
   const timeEntriesByTaskId = useMemo(() => rowsByTaskId(timeEntries), [timeEntries]);
   const activeTaskIds = useMemo(() => new Set(timeEntries.filter((entry) => !entry.endedAt).map((entry) => entry.taskId)), [timeEntries]);
-  const visibleTasks = useMemo(() => tasks.filter((task) => (employeeFilter === "all" || task.employeeName === employeeFilter) && (statusFilter === "all" || task.status === statusFilter) && (reviewFilter === "all" || task.managerCheck === reviewFilter) && (disciplineFilter === "all" || task.employeeDiscipline === disciplineFilter) && (!dueDateFilter || task.taskDate === dueDateFilter)), [tasks, employeeFilter, statusFilter, reviewFilter, disciplineFilter, dueDateFilter]);
+  const visibleTasks = useMemo(() => tasks.filter((task) => (employeeFilter === "all" || task.employeeName === employeeFilter) && matchesEmployeeStatus(task.status, statusFilter) && (reviewFilter === "all" || task.managerCheck === reviewFilter) && (disciplineFilter === "all" || task.employeeDiscipline === disciplineFilter) && (!dueDateFilter || task.taskDate === dueDateFilter)), [tasks, employeeFilter, statusFilter, reviewFilter, disciplineFilter, dueDateFilter]);
   const groups = useMemo(() => {
     const grouped = new Map<string, Task[]>();
     visibleTasks.forEach((task) => {
@@ -2745,7 +2839,7 @@ function ReportTasksDialog({ metric, title, groupBy, tasks, projects, users, tim
     <button className="drawer-backdrop" onClick={onClose} aria-label="Close report tasks" />
     <section className={`employee-tasks-dialog report-tasks-dialog${hideEmployeeColumn ? " employee-specific-report" : ""}`}>
       <header><div className={employee ? "employee-cell" : "report-dialog-heading"}>{employee && <UserAvatar user={employee} name={employee.displayName} className="employee-dialog-avatar" />}<div className="report-dialog-heading"><p>REPORT TASKS</p><h2>{dialogTitle}</h2><span>{visibleTasks.length} of {tasks.length} tasks</span></div></div><div className="employee-tasks-header-actions">{employee && onEmployeeSettings && <button type="button" className="employee-tasks-settings" onClick={() => onEmployeeSettings(employee)} aria-label={`Edit ${employee.displayName}`} title="Employee settings">⚙</button>}{dialogProject && onProjectSettings && <button type="button" className="employee-tasks-settings" onClick={() => onProjectSettings(dialogProject)} aria-label={`Edit ${dialogProject.name}`} title="Project settings">⚙</button>}<button type="button" className="employee-tasks-print" onClick={printReportTasks} aria-label="Print report tasks as PDF" title="Print / Save as PDF"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 8V3h10v5M7 17H5a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2M7 13h10v8H7z" /><path d="M17.5 11h.01" /></svg></button><button type="button" className="employee-tasks-close" onClick={onClose} aria-label="Close">×</button></div></header>
-      <div className="report-dialog-filterbar">{!hideEmployeeColumn && <select value={employeeFilter} onChange={(event) => setEmployeeFilter(event.target.value)} aria-label="Filter report tasks by employee"><option value="all">All Employees</option>{employeeNames.map((name) => <option key={name} value={name}>{name}</option>)}</select>}<select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)} aria-label="Filter report tasks by status"><option value="all">All Statuses</option>{Object.entries(tableStatusLabel).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select><select value={reviewFilter} onChange={(event) => setReviewFilter(event.target.value)} aria-label="Filter report tasks by manager review"><option value="all">All Manager Reviews</option>{Object.entries(tableCheckLabel).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select><select value={disciplineFilter} onChange={(event) => setDisciplineFilter(event.target.value)} aria-label="Filter report tasks by discipline"><option value="all">All Disciplines</option>{taskDisciplines.map((discipline) => <option key={discipline} value={discipline}>{discipline}</option>)}</select><label><span>Due Date</span><input type="date" value={dueDateFilter} onChange={(event) => setDueDateFilter(event.target.value)} /></label>{projectCode && onOpenProject && <button type="button" className="report-open-project-button" onClick={() => onOpenProject(projectCode)}>Open Project Tasks</button>}<small>Click a task row to open it. Use Back to return.</small></div>
+      <div className="report-dialog-filterbar">{!hideEmployeeColumn && <select value={employeeFilter} onChange={(event) => setEmployeeFilter(event.target.value)} aria-label="Filter report tasks by employee"><option value="all">All Employees</option>{employeeNames.map((name) => <option key={name} value={name}>{name}</option>)}</select>}<select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)} aria-label="Filter report tasks by status"><option value="all">All Statuses</option>{employeeStatusKeys.map((value) => <option key={value} value={value}>{tableStatusLabel[value]}</option>)}</select><select value={reviewFilter} onChange={(event) => setReviewFilter(event.target.value)} aria-label="Filter report tasks by manager review"><option value="all">All Manager Reviews</option>{Object.entries(tableCheckLabel).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select><select value={disciplineFilter} onChange={(event) => setDisciplineFilter(event.target.value)} aria-label="Filter report tasks by discipline"><option value="all">All Disciplines</option>{taskDisciplines.map((discipline) => <option key={discipline} value={discipline}>{discipline}</option>)}</select><label><span>Due Date</span><input type="date" value={dueDateFilter} onChange={(event) => setDueDateFilter(event.target.value)} /></label>{projectCode && onOpenProject && <button type="button" className="report-open-project-button" onClick={() => onOpenProject(projectCode)}>Open Project Tasks</button>}<small>Click a task row to open it. Use Back to return.</small></div>
       <div className={`employee-project-groups report-task-group-count-${Math.min(groups.length, 3)}`} ref={groupsRef} onWheel={handleWheel}><div className="employee-project-groups-content">{groups.length === 0 ? <div className="comments-empty">No tasks match this report filter.</div> : groups.map(([key, groupTasks]) => {
         const project = groupBy === "project" ? projects.find((item) => item.code === key) : null;
         const groupEmployee = groupBy === "employee" ? users.find((item) => item.displayName === key) : null;
@@ -2929,11 +3023,11 @@ function ProjectOverviewDashboard(props: {
 }
 
 type TaskTableProps = {
-  loading: boolean; tasks: Task[]; filteredCount: number; tab: Tab; employees: { name: string; discipline: string }[]; users: User[]; projects: string[];
+  loading: boolean; tasks: Task[]; filteredCount: number; tab: Tab; employees: { name: string; discipline: string }[]; users: User[]; projects: string[]; projectRecords: Project[];
   lockedProjectCode?: string;
   search: string; employeeFilter: string; projectFilter: string; statusFilter: string; reviewFilter: string; dueDateFilter: string; disciplineFilter: string; showEmployeeFilter: boolean; showDisciplineColumn: boolean;
   setSearch: (value: string) => void; setEmployeeFilter: (value: string) => void; setProjectFilter: (value: string) => void; setStatusFilter: (value: string) => void; setReviewFilter: (value: string) => void; setDueDateFilter: (value: string) => void; setDisciplineFilter: (value: string) => void;
-  openTask: (task: Task) => void; showAll: () => void;
+  openTask: (task: Task) => void; createTask: (projectCode?: string) => void; showAll: () => void;
   timeEntries: TaskTimeEntry[]; clock: number;
   commentCounts: Map<number, number>;
   detailsLoadedTaskIds: Set<number>;
@@ -2944,6 +3038,12 @@ type TaskTableProps = {
   currentUser: User | null;
   completionSavingTaskId: number | null;
   updateCompletion: (taskId: number, completionPercent: number) => void;
+  kanbanReviewSavingTaskId: number | null;
+  updateReviewFromKanban: (taskId: number, managerCheck: Task["managerCheck"]) => Promise<void>;
+  kanbanStatusSavingTaskId: number | null;
+  updateStatusFromKanban: (taskId: number, status: Task["status"]) => Promise<void>;
+  ganttDateSavingTaskId: number | null;
+  updateDatesFromGantt: (taskId: number, startDate: string, taskDate: string) => Promise<void>;
 };
 
 const taskCompletionOptions = [0, 25, 50, 75, 100] as const;
@@ -2955,6 +3055,21 @@ function canEditTaskCompletion(currentUser: User | null, task: Task) {
     task.managerCheck !== "pending" &&
     task.managerCheck !== "approved",
   );
+}
+
+function canManageTaskTimeline(currentUser: User | null, task: Task, users: User[], projects: Project[]) {
+  if (!currentUser) return false;
+  if (currentUser.role === "owner") return true;
+  if (currentUser.role !== "manager" || !currentUser.discipline) return false;
+  const employee = users.find((user) => user.email.toLowerCase() === task.employeeEmail.toLowerCase());
+  if (task.project === "PERSONAL") {
+    return task.createdBy === currentUser.email || Boolean(task.originatedByEmail && task.submittedToManager && employee?.discipline === currentUser.discipline);
+  }
+  const project = projects.find((item) => item.code === task.project);
+  if (!project?.memberEmails.some((email) => email.toLowerCase() === currentUser.email.toLowerCase())) return false;
+  if (task.createdBy === currentUser.email) return true;
+  if (employee?.discipline !== currentUser.discipline) return false;
+  return project.projectManagerEmails.some((email) => email.toLowerCase() === currentUser.email.toLowerCase()) || Boolean(task.originatedByEmail) || task.submittedToManager;
 }
 
 function TaskProgressControl({ task, canEdit, busy, onChange }: { task: Task; canEdit: boolean; busy: boolean; onChange: (completionPercent: number) => void; }) {
@@ -2971,7 +3086,248 @@ function TaskProgressControl({ task, canEdit, busy, onChange }: { task: Task; ca
   </details>{livePulse}</span>;
 }
 
+type TaskViewMode = "table" | "kanban" | "calendar" | "gantt";
+const taskViewModeSessionKey = "hindaza-task-view-mode";
+
+function TaskViewIcon({ view }: { view: TaskViewMode }) {
+  if (view === "table") return <svg className="task-view-icon" viewBox="0 0 24 20" aria-hidden="true"><rect x="1.5" y="1.5" width="21" height="17" rx="2.5" /><path d="M1.5 6.5h21M1.5 11.5h21M8 1.5v17" /></svg>;
+  if (view === "kanban") return <svg className="task-view-icon" viewBox="0 0 24 20" aria-hidden="true"><rect x="1.5" y="1.5" width="21" height="17" rx="2.5" /><path d="M8.5 1.5v17M15.5 1.5v17" /><rect x="3.5" y="4" width="3" height="8" rx=".7" /><rect x="10.5" y="7" width="3" height="6" rx=".7" /><rect x="17.5" y="4.5" width="3" height="9" rx=".7" /></svg>;
+  if (view === "calendar") return <svg className="task-view-icon" viewBox="0 0 24 20" aria-hidden="true"><rect x="1.5" y="3" width="21" height="15.5" rx="2.5" /><path d="M1.5 7h21M6 1v4M12 1v4M18 1v4" /><path className="task-view-icon-fill" d="M5 9h3v2H5zM10.5 9h3v2h-3zM16 9h3v2h-3zM5 13h3v2H5zM10.5 13h3v2h-3zM16 13h3v2h-3z" /></svg>;
+  return <svg className="task-view-icon gantt" viewBox="0 0 24 20" aria-hidden="true"><rect className="task-view-icon-fill" x="1.5" y="2" width="9" height="3.5" rx=".8" /><rect className="task-view-icon-fill" x="7.5" y="8.25" width="9" height="3.5" rx=".8" /><rect className="task-view-icon-fill" x="13.5" y="14.5" width="9" height="3.5" rx=".8" /></svg>;
+}
+
+function taskViewDate(value: string) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
+  const [year, month, day] = value.split("-").map(Number);
+  return new Date(year, month - 1, day);
+}
+
+function taskDateKey(date: Date) {
+  const offset = date.getTimezoneOffset();
+  return new Date(date.getTime() - offset * 60_000).toISOString().slice(0, 10);
+}
+
+function shiftCalendarMonth(value: string, amount: number) {
+  const date = taskViewDate(value) || new Date();
+  return taskDateKey(new Date(date.getFullYear(), date.getMonth() + amount, 1));
+}
+
+function shiftCalendarWeek(value: string, amount: number) {
+  const date = taskViewDate(value) || new Date();
+  return taskDateKey(addTaskViewDays(date, amount * 7));
+}
+
+function daysBetween(from: Date, to: Date) {
+  return Math.round((Date.UTC(to.getFullYear(), to.getMonth(), to.getDate()) - Date.UTC(from.getFullYear(), from.getMonth(), from.getDate())) / 86_400_000);
+}
+
+function addTaskViewDays(value: Date, amount: number) {
+  const date = new Date(value);
+  date.setDate(date.getDate() + amount);
+  return date;
+}
+
+function taskViewRange(task: Task) {
+  const fallback = task.createdAt?.slice(0, 10) || task.taskDate || localToday();
+  const start = taskViewDate(task.startDate || fallback) || taskViewDate(fallback) || new Date();
+  const parsedDue = taskViewDate(task.taskDate) || start;
+  const due = parsedDue < start ? start : parsedDue;
+  return { start, due, automatic: !task.startDate };
+}
+
+function TaskBoardCard({ task, openTask, canDrag, dragging, saving, onDragStart, onDragEnd }: { task: Task; openTask: (task: Task) => void; canDrag: boolean; dragging: boolean; saving: boolean; onDragStart: (event: DragEvent<HTMLButtonElement>, task: Task) => void; onDragEnd: () => void; }) {
+  const flag = taskFlag(task);
+  const active = task.status === "in_progress";
+  const suppressClickAfterDrag = useRef(false);
+  return <button type="button" draggable={canDrag && !saving} className={`task-board-card priority-${task.priority}${canDrag ? " can-drag" : ""}${dragging ? " dragging" : ""}${saving ? " saving" : ""}`} onDragStart={(event) => { suppressClickAfterDrag.current = true; onDragStart(event, task); }} onDragEnd={() => { onDragEnd(); window.setTimeout(() => { suppressClickAfterDrag.current = false; }, 350); }} onClick={(event) => { if (suppressClickAfterDrag.current) { event.preventDefault(); return; } openTask(task); }} aria-grabbed={dragging}>
+    <span className="task-board-card-title"><strong dir="auto">{task.title}</strong>{active && <i className="employee-task-live-pulse" title="Working now" aria-label="Working now" />}</span>
+    <span className="task-board-card-person"><span>{task.employeeName}</span>{task.visibility === "private" && <span className="task-private-indicator">Private</span>}</span>
+    <span className="task-board-card-meta"><time dir="ltr">{formatDueDate(task.taskDate)}</time><span className={`flag flag-${flag.key}`}>{flag.label}</span></span>
+    <span className="task-board-card-footer"><span>{saving ? "Updating..." : task.project}</span><span>{task.completionPercent}%</span></span>
+  </button>;
+}
+
+function TaskKanbanBoard({ tasks: rows, openTask, createTask, canReorder, hideApproved, savingTaskId, onReviewChange }: { tasks: Task[]; openTask: (task: Task) => void; createTask: () => void; canReorder: boolean; hideApproved: boolean; savingTaskId: number | null; onReviewChange: (taskId: number, managerCheck: Task["managerCheck"]) => Promise<void>; }) {
+  const [draggedTaskId, setDraggedTaskId] = useState<number | null>(null);
+  const [dropTarget, setDropTarget] = useState<Task["managerCheck"] | null>(null);
+  const reviewColumns: Array<{ key: Task["managerCheck"]; label: string }> = [
+    { key: "new", label: "New / WIP" }, { key: "pending", label: "Pending" }, { key: "returned", label: "Returned" }, { key: "approved", label: "Approved" },
+  ];
+  const columns = hideApproved ? reviewColumns.filter((column) => column.key !== "approved") : reviewColumns;
+  const startDragging = (event: DragEvent<HTMLButtonElement>, task: Task) => {
+    if (!canReorder || savingTaskId !== null) { event.preventDefault(); return; }
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("text/plain", String(task.id));
+    setDraggedTaskId(task.id);
+  };
+  const stopDragging = () => { setDraggedTaskId(null); setDropTarget(null); };
+  const dropTask = (event: DragEvent<HTMLElement>, managerCheck: Task["managerCheck"]) => {
+    event.preventDefault();
+    const taskId = Number(event.dataTransfer.getData("text/plain") || draggedTaskId);
+    const task = rows.find((row) => row.id === taskId);
+    stopDragging();
+    if (!canReorder || !task || task.managerCheck === managerCheck || savingTaskId !== null) return;
+    void onReviewChange(task.id, managerCheck);
+  };
+  return <div className="task-kanban-board review" aria-label="Kanban by manager review">
+    {columns.map((column) => {
+      const columnTasks = rows.filter((task) => task.managerCheck === column.key);
+      return <section className={`task-kanban-column column-${column.key}${dropTarget === column.key ? " is-drop-target" : ""}`} key={column.key} onDragEnter={() => canReorder && setDropTarget(column.key)} onDragOver={(event) => { if (!canReorder) return; event.preventDefault(); event.dataTransfer.dropEffect = "move"; }} onDrop={(event) => dropTask(event, column.key)}>
+        <header><strong>{column.label}</strong><span>{columnTasks.length}</span></header>
+        <div onDoubleClick={(event) => { if (!canReorder || (event.target as HTMLElement).closest(".task-board-card")) return; createTask(); }} title={canReorder ? "Double-click an empty space to add a new task" : undefined}>{columnTasks.map((task) => <TaskBoardCard key={task.id} task={task} openTask={openTask} canDrag={canReorder} dragging={draggedTaskId === task.id} saving={savingTaskId === task.id} onDragStart={startDragging} onDragEnd={stopDragging} />)}{columnTasks.length === 0 && <p>{dropTarget === column.key && draggedTaskId ? "Drop task here" : "No tasks"}</p>}</div>
+      </section>;
+    })}
+  </div>;
+}
+
+function EmployeeTaskKanbanBoard({ tasks: rows, openTask, currentUser, savingTaskId, onStatusChange }: { tasks: Task[]; openTask: (task: Task) => void; currentUser: User; savingTaskId: number | null; onStatusChange: (taskId: number, status: Task["status"]) => Promise<void>; }) {
+  const [draggedTaskId, setDraggedTaskId] = useState<number | null>(null);
+  const [dropTarget, setDropTarget] = useState<Task["status"] | null>(null);
+  const statusColumns: Array<{ key: Task["status"]; label: string; managerControlled?: boolean; lockedHint?: string; emptyText?: string }> = [
+    { key: "not_started", label: "Not Started (New from Manager)", managerControlled: true, lockedHint: "New tasks are assigned here by management and cannot be moved back to this status.", emptyText: "New tasks from management appear here" },
+    { key: "in_progress", label: "In Progress" },
+    { key: "paused", label: "Paused" },
+    { key: "done", label: "Done" },
+    { key: "needs_revision", label: "Revision (from Manager)", managerControlled: true, lockedHint: "This status is assigned when management returns the task.", emptyText: "Returned tasks appear here" },
+  ];
+  const canMoveTask = (task: Task) => task.employeeEmail.toLowerCase() === currentUser.email.toLowerCase() && task.managerCheck !== "approved";
+  const startDragging = (event: DragEvent<HTMLButtonElement>, task: Task) => {
+    if (!canMoveTask(task) || savingTaskId !== null) { event.preventDefault(); return; }
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("text/plain", String(task.id));
+    setDraggedTaskId(task.id);
+  };
+  const stopDragging = () => { setDraggedTaskId(null); setDropTarget(null); };
+  const dropTask = (event: DragEvent<HTMLElement>, status: Task["status"], managerControlled = false) => {
+    event.preventDefault();
+    const taskId = Number(event.dataTransfer.getData("text/plain") || draggedTaskId);
+    const task = rows.find((row) => row.id === taskId);
+    stopDragging();
+    if (managerControlled || !task || !canMoveTask(task) || task.status === status || savingTaskId !== null) return;
+    void onStatusChange(task.id, status);
+  };
+  return <div className={`task-kanban-board employee-status-kanban${draggedTaskId !== null ? " drag-active" : ""}`} aria-label="Kanban by employee status">
+    {statusColumns.map((column) => {
+      const columnTasks = rows.filter((task) => column.key === "paused" ? task.status === "paused" || task.status === "blocked" : task.status === column.key);
+      const acceptsDrop = !column.managerControlled;
+      return <section className={`task-kanban-column column-${column.key}${dropTarget === column.key && acceptsDrop ? " is-drop-target" : ""}${column.managerControlled ? " manager-controlled-column" : ""}`} key={column.key} onDragEnter={() => acceptsDrop ? setDropTarget(column.key) : setDropTarget(null)} onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = acceptsDrop ? "move" : "none"; }} onDrop={(event) => dropTask(event, column.key, column.managerControlled)}>
+        <header title={column.lockedHint}><strong>{column.label}</strong><span>{columnTasks.length}</span></header>
+        <div>{columnTasks.map((task) => <TaskBoardCard key={task.id} task={task} openTask={openTask} canDrag={canMoveTask(task)} dragging={draggedTaskId === task.id} saving={savingTaskId === task.id} onDragStart={startDragging} onDragEnd={stopDragging} />)}{columnTasks.length === 0 && <p>{dropTarget === column.key && draggedTaskId ? "Drop task here" : column.emptyText || "No tasks"}</p>}</div>
+      </section>;
+    })}
+  </div>;
+}
+
+function TaskCalendarView({ tasks: rows, anchor, setAnchor, openTask }: { tasks: Task[]; anchor: string; setAnchor: (value: string) => void; openTask: (task: Task) => void }) {
+  const anchorDate = taskViewDate(anchor) || new Date();
+  const monthStart = new Date(anchorDate.getFullYear(), anchorDate.getMonth(), 1);
+  const gridStart = new Date(monthStart);
+  gridStart.setDate(monthStart.getDate() - ((monthStart.getDay() + 6) % 7));
+  const days = Array.from({ length: 42 }, (_, index) => addTaskViewDays(gridStart, index));
+  const gridEnd = days.at(-1)!;
+  const periods = rows.map((task) => ({ task, ...taskViewRange(task) }));
+  const monthLabel = new Intl.DateTimeFormat("en-GB", { month: "long", year: "numeric" }).format(monthStart);
+  const taskCountForDate = (date: Date) => periods.filter(({ start, due }) => start <= date && due >= date).length;
+  const weeks = Array.from({ length: 6 }, (_, weekIndex) => {
+    const weekDays = days.slice(weekIndex * 7, weekIndex * 7 + 7);
+    const weekStart = weekDays[0];
+    const weekEnd = weekDays[6];
+    const laneEnds: number[] = [];
+    const segments = periods
+      .filter(({ start, due }) => due >= weekStart && start <= weekEnd)
+      .map(({ task, start, due }) => {
+        const segmentStart = start < weekStart ? weekStart : start;
+        const segmentEnd = due > weekEnd ? weekEnd : due;
+        return { task, start, due, startColumn: daysBetween(weekStart, segmentStart), endColumn: daysBetween(weekStart, segmentEnd) };
+      })
+      .sort((left, right) => left.startColumn - right.startColumn || right.endColumn - left.endColumn || left.task.id - right.task.id)
+      .map((segment) => {
+        let lane = laneEnds.findIndex((endColumn) => endColumn < segment.startColumn);
+        if (lane < 0) lane = laneEnds.length;
+        laneEnds[lane] = segment.endColumn;
+        return { ...segment, lane };
+      });
+    return { weekDays, segments, laneCount: Math.max(1, laneEnds.length) };
+  });
+  return <div className="task-calendar-view">
+    <div className="task-calendar-toolbar"><div className="task-calendar-month-nav"><button type="button" onClick={() => setAnchor(taskDateKey(new Date()).slice(0, 7) + "-01")}>Today</button></div><strong>{monthLabel}</strong><div className="task-calendar-toolbar-right"><span>Start to Due Date</span><div className="task-calendar-week-nav" role="group" aria-label="Navigate calendar by month"><button type="button" onClick={() => setAnchor(shiftCalendarMonth(anchor, -1))} aria-label="Previous month" title="Previous month">‹</button><button type="button" onClick={() => setAnchor(shiftCalendarMonth(anchor, 1))} aria-label="Next month" title="Next month">›</button></div></div></div>
+    <div className="task-calendar-scroll"><div className="task-calendar-grid">
+      {['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].map((day) => <div className="task-calendar-weekday" key={day}>{day}</div>)}
+      <div className="task-calendar-weeks">{weeks.map(({ weekDays, segments, laneCount }) => <section className="task-calendar-week" style={{ "--calendar-lanes": laneCount } as CSSProperties} key={taskDateKey(weekDays[0])}>
+        <div className="task-calendar-days">{weekDays.map((date) => { const key = taskDateKey(date); const dayTaskCount = taskCountForDate(date); const outside = date.getMonth() !== monthStart.getMonth(); return <div className={`task-calendar-day${outside ? " outside" : ""}${key === localToday() ? " today" : ""}`} key={key}><header><span>{date.getDate()}</span>{dayTaskCount > 0 && <small>{dayTaskCount}</small>}</header></div>; })}</div>
+        <div className="task-calendar-events">{segments.map(({ task, start, due, startColumn, endColumn, lane }) => <button type="button" key={`${task.id}-${taskDateKey(weekDays[0])}`} className={`calendar-task priority-${task.priority}${start >= weekDays[0] ? " range-start" : " range-middle"}${due <= weekDays[6] ? " range-end" : ""}`} style={{ gridColumn: `${startColumn + 1} / ${endColumn + 2}`, gridRow: lane + 1 }} onClick={() => openTask(task)} title={`${task.title} · ${formatDueDate(task.startDate || task.createdAt.slice(0, 10))} → ${formatDueDate(task.taskDate)} · ${task.employeeName}${task.visibility === "private" ? " · Private Task" : ""}`}><span className="calendar-task-title" dir="auto">{task.title}</span><span className="calendar-task-signals">{task.visibility === "private" && <span className="task-private-indicator">Private</span>}{task.status === "in_progress" && <i className="employee-task-live-pulse" title="Working now" aria-label="Working now" />}</span></button>)}</div>
+      </section>)}</div>
+    </div></div>
+  </div>;
+}
+
+type GanttResizeState = { task: Task; edge: "start" | "end"; pointerId: number; originX: number; start: Date; due: Date; previewStart: Date; previewDue: Date };
+
+function TaskGanttView({ tasks: rows, anchor, setAnchor, openTask, canEditTask, savingTaskId, onUpdateDates }: { tasks: Task[]; anchor: string; setAnchor: (value: string) => void; openTask: (task: Task) => void; canEditTask: (task: Task) => boolean; savingTaskId: number | null; onUpdateDates: (taskId: number, startDate: string, taskDate: string) => Promise<void>; }) {
+  const totalDays = 30;
+  const dayWidth = 38;
+  const timelineWidth = totalDays * dayWidth;
+  const today = taskViewDate(localToday()) || new Date();
+  const anchorDate = taskViewDate(anchor) || today;
+  const visibleStart = addTaskViewDays(anchorDate, -7);
+  const visibleEnd = addTaskViewDays(visibleStart, totalDays - 1);
+  const todayLeft = (daysBetween(visibleStart, today) + .5) * dayWidth;
+  const todayVisible = today >= visibleStart && today <= visibleEnd;
+  const periods = rows.map((task) => ({ task, ...taskViewRange(task) }));
+  const [resizeState, setResizeState] = useState<GanttResizeState | null>(null);
+  const resizeRef = useRef<GanttResizeState | null>(null);
+  if (!periods.length) return null;
+
+  const beginResize = (event: PointerEvent<HTMLSpanElement>, task: Task, edge: "start" | "end", start: Date, due: Date) => {
+    event.preventDefault(); event.stopPropagation();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    const next = { task, edge, pointerId: event.pointerId, originX: event.clientX, start, due, previewStart: start, previewDue: due };
+    resizeRef.current = next; setResizeState(next);
+  };
+  const moveResize = (event: PointerEvent<HTMLSpanElement>) => {
+    const current = resizeRef.current;
+    if (!current || current.pointerId !== event.pointerId) return;
+    event.preventDefault(); event.stopPropagation();
+    const delta = Math.round((event.clientX - current.originX) / dayWidth);
+    const next = current.edge === "start"
+      ? { ...current, previewStart: addTaskViewDays(current.start, Math.min(delta, daysBetween(current.start, current.due))) }
+      : { ...current, previewDue: addTaskViewDays(current.due, Math.max(delta, -daysBetween(current.start, current.due))) };
+    resizeRef.current = next; setResizeState(next);
+  };
+  const finishResize = (event: PointerEvent<HTMLSpanElement>) => {
+    const current = resizeRef.current;
+    if (!current || current.pointerId !== event.pointerId) return;
+    event.preventDefault(); event.stopPropagation();
+    resizeRef.current = null; setResizeState(null);
+    const startDate = taskDateKey(current.previewStart);
+    const taskDate = taskDateKey(current.previewDue);
+    if (startDate !== taskDateKey(current.start) || taskDate !== taskDateKey(current.due)) void onUpdateDates(current.task.id, startDate, taskDate);
+  };
+  const ticks = Array.from({ length: totalDays }, (_, index) => index);
+  return <div className="task-gantt-view"><div className="task-gantt-scroll"><div className="task-gantt-chart" style={{ "--gantt-width": `${timelineWidth}px` } as CSSProperties}>
+    <div className="task-gantt-axis"><div className="task-gantt-label"><strong>Task</strong><span>30-day timeline</span></div><div className="task-gantt-track" style={{ width: timelineWidth }}>{ticks.map((offset) => { const date = addTaskViewDays(visibleStart, offset); return <span key={offset} className={taskDateKey(date) === localToday() ? "today-label" : ""} style={{ left: offset * dayWidth }}>{new Intl.DateTimeFormat("en-GB", { day: "2-digit", month: "short" }).format(date)}</span>; })}{todayVisible && <i className="task-gantt-today-line" style={{ left: todayLeft }} />}<div className="task-gantt-week-nav" role="group" aria-label="Navigate Gantt by week"><button type="button" onClick={() => setAnchor(shiftCalendarWeek(anchor, -1))} aria-label="Previous week" title="Previous week">‹</button><button type="button" onClick={() => setAnchor(shiftCalendarWeek(anchor, 1))} aria-label="Next week" title="Next week">›</button></div></div></div>
+    {periods.map(({ task, start, due, automatic }) => {
+      const resizing = resizeState?.task.id === task.id ? resizeState : null;
+      const rowStart = resizing?.previewStart || start;
+      const rowDue = resizing?.previewDue || due;
+      const intersects = rowDue >= visibleStart && rowStart <= visibleEnd;
+      const clippedStart = rowStart < visibleStart ? visibleStart : rowStart;
+      const clippedDue = rowDue > visibleEnd ? visibleEnd : rowDue;
+      const left = Math.max(0, daysBetween(visibleStart, clippedStart) * dayWidth);
+      const width = Math.max(dayWidth, (daysBetween(clippedStart, clippedDue) + 1) * dayWidth);
+      const canResize = canEditTask(task) && savingTaskId === null;
+      return <div className={`task-gantt-row${savingTaskId === task.id ? " saving" : ""}`} key={task.id} onMouseDown={(event) => { if (event.detail > 1) event.preventDefault(); }} onDoubleClick={(event) => { if ((event.target as HTMLElement).closest(".task-gantt-resize-handle")) return; openTask(task); }}><button type="button" className="task-gantt-label" onClick={() => openTask(task)}><span className="task-gantt-title"><strong dir="auto">{task.title}</strong>{task.status === "in_progress" && <i className="employee-task-live-pulse" title="Working now" aria-label="Working now" />}</span><span className="task-gantt-details"><span>{task.employeeName}{automatic ? " · Auto start" : ""}</span>{task.visibility === "private" && <span className="task-private-indicator">Private</span>}</span></button><span className="task-gantt-track" style={{ width: timelineWidth }}>{todayVisible && <i className="task-gantt-today-line" style={{ left: todayLeft }} />}{intersects ? <span className={`task-gantt-bar review-${task.managerCheck}${canResize ? " can-resize" : ""}${resizing ? " resizing" : ""}`} style={{ left, width }} role="button" tabIndex={0} title={canResize ? "Drag either edge to change dates. Double-click the row to open the task." : "Double-click the row to open the task."} onClick={(event) => event.stopPropagation()} onKeyDown={(event) => { if (event.key === "Enter") openTask(task); }}><span>{task.completionPercent}%</span>{canResize && <><span className="task-gantt-resize-handle start" onPointerDown={(event) => beginResize(event, task, "start", start, due)} onPointerMove={moveResize} onPointerUp={finishResize} onPointerCancel={finishResize} aria-label="Adjust task start date" /><span className="task-gantt-resize-handle end" onPointerDown={(event) => beginResize(event, task, "end", start, due)} onPointerMove={moveResize} onPointerUp={finishResize} onPointerCancel={finishResize} aria-label="Adjust task due date" /></>}</span> : <span className="task-gantt-outside-range">Outside 30-day range</span>}</span></div>;
+    })}
+  </div></div></div>;
+}
+
 function TaskTable(props: TaskTableProps) {
+  const [viewMode, setViewMode] = useState<TaskViewMode>("table");
+  const [viewModeRestored, setViewModeRestored] = useState(false);
+  const [calendarAnchor, setCalendarAnchor] = useState(() => `${localToday().slice(0, 7)}-01`);
+  const [ganttAnchor, setGanttAnchor] = useState(localToday);
+  const managementCanReorderKanban = props.currentUser?.role === "owner" || props.currentUser?.role === "manager";
+  const employeeStatusKanban = props.currentUser?.role === "member";
   const filtersActive = Boolean(props.search.trim()) || props.employeeFilter !== "all" || (!props.lockedProjectCode && props.projectFilter !== "all") || props.statusFilter !== "all" || props.reviewFilter !== "all" || Boolean(props.dueDateFilter) || (props.showDisciplineColumn && props.disciplineFilter !== "all");
   const timeEntriesByTaskId = useMemo(() => rowsByTaskId(props.timeEntries), [props.timeEntries]);
   const subtasksByTaskId = useMemo(() => rowsByTaskId(props.subtasks), [props.subtasks]);
@@ -2979,6 +3335,14 @@ function TaskTable(props: TaskTableProps) {
   const issueLinkByTaskId = useMemo(() => new Map(props.issueLinks.map((link) => [link.convertedTaskId, link])), [props.issueLinks]);
   const usersByEmail = useMemo(() => new Map(props.users.map((user) => [user.email.toLowerCase(), user])), [props.users]);
   const usersByName = useMemo(() => new Map(props.users.map((user) => [user.displayName, user])), [props.users]);
+  useEffect(() => {
+    const saved = window.sessionStorage.getItem(taskViewModeSessionKey);
+    if (saved === "table" || saved === "kanban" || saved === "calendar" || saved === "gantt") setViewMode(saved);
+    setViewModeRestored(true);
+  }, []);
+  useEffect(() => {
+    if (viewModeRestored) window.sessionStorage.setItem(taskViewModeSessionKey, viewMode);
+  }, [viewMode, viewModeRestored]);
   const clearFilters = () => {
     props.setSearch("");
     props.setEmployeeFilter("all");
@@ -2988,9 +3352,9 @@ function TaskTable(props: TaskTableProps) {
     props.setDueDateFilter("");
     props.setDisciplineFilter("all");
   };
-  return <section className="panel">
-    <div className="filters"><label className="search-box"><span>⌕</span><input value={props.search} onChange={(event) => props.setSearch(event.target.value)} placeholder={props.lockedProjectCode ? "Search tasks in this project..." : "Search for a task or project..."} /></label>{props.showEmployeeFilter && <select value={props.employeeFilter} onChange={(event) => props.setEmployeeFilter(event.target.value)} aria-label="Filter by employee"><option value="all">All employees · كل الموظفين</option>{props.employees.map((employee) => <option key={employee.name} value={employee.name}>{employee.name} ({employee.discipline})</option>)}</select>}{props.showDisciplineColumn && <select value={props.disciplineFilter} onChange={(event) => props.setDisciplineFilter(event.target.value)} aria-label="Filter by discipline"><option value="all">All disciplines · كل التخصصات</option>{disciplines.map((discipline) => <option key={discipline} value={discipline}>{discipline}</option>)}</select>}{!props.lockedProjectCode && <select value={props.projectFilter} onChange={(event) => props.setProjectFilter(event.target.value)} aria-label="Filter by project"><option value="all">All projects · كل المشاريع</option>{props.projects.map((project) => <option key={project}>{project}</option>)}</select>}<select value={props.statusFilter} onChange={(event) => props.setStatusFilter(event.target.value)} aria-label="Filter by status"><option value="all">All employee statuses · كل حالات الموظف</option>{Object.entries(statusLabel).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select><select value={props.reviewFilter} onChange={(event) => props.setReviewFilter(event.target.value)} aria-label="Filter by manager review">{props.lockedProjectCode && <option value="unapproved">Unapproved · غير معتمدة</option>}<option value="all">All manager reviews · كل مراجعات المسؤول</option>{Object.entries(checkLabel).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select><label className="due-date-filter"><span>Due Date</span><input type="date" value={props.dueDateFilter} onChange={(event) => props.setDueDateFilter(event.target.value)} aria-label="Filter by due date" /></label><button type="button" className="clear-filters-button" onClick={clearFilters} disabled={!filtersActive} aria-label="Clear all task filters" title="Clear filters · مسح الفلاتر"><span className="filter-clear-icon" aria-hidden="true" /></button><span className="count-badge filter-count" dir="ltr">{props.filteredCount} {props.filteredCount === 1 ? "Task" : "Tasks"}</span></div>
-    {props.loading ? <div className="loading-state"><div className="spinner" /><p>جاري تحميل المهام...</p></div> : props.tasks.length === 0 ? <div className="empty-state"><strong>لا توجد مهام مطابقة</strong><p>غيّر خيارات البحث أو أضف مهمة جديدة.</p></div> : <><div className="task-table-wrap"><table className={`task-table task-data-table task-table-ltr${props.showEmployeeFilter ? "" : " member-task-table"}`}><thead><tr><th>Task</th>{props.showEmployeeFilter && <th>Employee</th>}<th>Created By</th>{props.showDisciplineColumn && <th>Discipline</th>}<th>Created Date</th><th>Due Date</th><th>Priority</th><th>Hours</th><th>Status</th><th>Manager Review</th><th>Indicator</th><th>Issue Link</th></tr></thead><tbody>{props.tasks.map((task) => {
+  return <section className="panel task-results-panel">
+    <div className="filters task-filters-with-views"><div className="task-filter-cluster"><label className="search-box task-search-box"><span>⌕</span><input value={props.search} onChange={(event) => props.setSearch(event.target.value)} placeholder={props.lockedProjectCode ? "Search tasks..." : "Search tasks or projects..."} /></label>{props.showEmployeeFilter && <select value={props.employeeFilter} onChange={(event) => props.setEmployeeFilter(event.target.value)} aria-label="Filter by employee"><option value="all">All employees</option>{props.employees.map((employee) => <option key={employee.name} value={employee.name}>{employee.name} ({employee.discipline})</option>)}</select>}{props.showDisciplineColumn && <select value={props.disciplineFilter} onChange={(event) => props.setDisciplineFilter(event.target.value)} aria-label="Filter by discipline"><option value="all">All disciplines</option>{disciplines.map((discipline) => <option key={discipline} value={discipline}>{discipline}</option>)}</select>}{!props.lockedProjectCode && <select value={props.projectFilter} onChange={(event) => props.setProjectFilter(event.target.value)} aria-label="Filter by project"><option value="all">All projects</option>{props.projects.map((project) => <option key={project}>{project}</option>)}</select>}<select value={props.statusFilter} onChange={(event) => props.setStatusFilter(event.target.value)} aria-label="Filter by status"><option value="all">All employee statuses</option>{employeeStatusKeys.map((value) => <option key={value} value={value}>{tableStatusLabel[value]}</option>)}</select><select value={props.reviewFilter} onChange={(event) => props.setReviewFilter(event.target.value)} aria-label="Filter by manager review">{props.lockedProjectCode && <option value="unapproved">Unapproved</option>}<option value="all">All manager reviews</option>{Object.entries(tableCheckLabel).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select><label className="due-date-filter"><span>Due Date</span><input type="date" value={props.dueDateFilter} onChange={(event) => props.setDueDateFilter(event.target.value)} aria-label="Filter by due date" /></label><button type="button" className="clear-filters-button" onClick={clearFilters} disabled={!filtersActive} aria-label="Clear all task filters" title="Clear filters"><span className="filter-clear-icon" aria-hidden="true" /></button></div><div className="task-view-cluster"><div className="task-view-switcher" role="group" aria-label="Task view"><button type="button" className={viewMode === "table" ? "active" : ""} onClick={() => setViewMode("table")}><TaskViewIcon view="table" />Table</button><button type="button" className={viewMode === "kanban" ? "active" : ""} onClick={() => setViewMode("kanban")}><TaskViewIcon view="kanban" />Kanban</button><button type="button" className={viewMode === "calendar" ? "active" : ""} onClick={() => setViewMode("calendar")}><TaskViewIcon view="calendar" />Calendar</button><button type="button" className={viewMode === "gantt" ? "active" : ""} onClick={() => setViewMode("gantt")}><TaskViewIcon view="gantt" />Gantt</button></div></div><span className="count-badge filter-count" dir="ltr">{props.filteredCount} {props.filteredCount === 1 ? "Task" : "Tasks"}</span></div>
+    {props.loading ? <div className="loading-state"><div className="spinner" /><p>جاري تحميل المهام...</p></div> : props.tasks.length === 0 && viewMode !== "kanban" ? <div className="empty-state"><strong>لا توجد مهام مطابقة</strong><p>غيّر خيارات البحث أو أضف مهمة جديدة.</p></div> : viewMode === "kanban" ? employeeStatusKanban && props.currentUser ? <EmployeeTaskKanbanBoard tasks={props.tasks} openTask={props.openTask} currentUser={props.currentUser} savingTaskId={props.kanbanStatusSavingTaskId} onStatusChange={props.updateStatusFromKanban} /> : <TaskKanbanBoard tasks={props.tasks} openTask={props.openTask} createTask={() => props.createTask(props.lockedProjectCode || "")} canReorder={managementCanReorderKanban} hideApproved={props.reviewFilter === "unapproved"} savingTaskId={props.kanbanReviewSavingTaskId} onReviewChange={props.updateReviewFromKanban} /> : viewMode === "calendar" ? <TaskCalendarView tasks={props.tasks} anchor={calendarAnchor} setAnchor={setCalendarAnchor} openTask={props.openTask} /> : viewMode === "gantt" ? <TaskGanttView tasks={props.tasks} anchor={ganttAnchor} setAnchor={setGanttAnchor} openTask={props.openTask} canEditTask={(task) => canManageTaskTimeline(props.currentUser, task, props.users, props.projectRecords)} savingTaskId={props.ganttDateSavingTaskId} onUpdateDates={props.updateDatesFromGantt} /> : <><div className="task-table-wrap"><table className={`task-table task-data-table task-table-ltr${props.showEmployeeFilter ? "" : " member-task-table"}`}><thead><tr><th>Task</th>{props.showEmployeeFilter && <th>Employee</th>}<th>Created By</th>{props.showDisciplineColumn && <th>Discipline</th>}<th>Created Date</th><th>Start Date</th><th>Due Date</th><th>Priority</th><th>Hours</th><th>Status</th><th>Manager Review</th><th>Indicator</th><th>Issue Link</th></tr></thead><tbody>{props.tasks.map((task) => {
 	      const flag = taskFlag(task);
 	      const entries = timeEntriesByTaskId.get(task.id) || [];
 	      const taskSubtasks = subtasksByTaskId.get(task.id) || [];
@@ -3006,9 +3370,9 @@ function TaskTable(props: TaskTableProps) {
       const employee = usersByEmail.get(task.employeeEmail.toLowerCase()) || usersByName.get(task.employeeName);
       const creatorName = task.createdByName || creator?.displayName || "Unknown user";
       const canEditProgress = canEditTaskCompletion(props.currentUser, task);
-      return <tr key={task.id} onClick={() => props.openTask(task)} tabIndex={0} onKeyDown={(event) => event.key === "Enter" && props.openTask(task)}><td><div className="task-cell"><div className="task-title-progress"><TaskProgressControl task={task} canEdit={canEditProgress} busy={props.completionSavingTaskId === task.id} onChange={(value) => props.updateCompletion(task.id, value)} /><strong>{task.title}</strong></div><div className="task-tags">{task.originatedByName && <span className="employee-origin-tag">From employee · {task.originatedByName}</span>}{task.visibility === "private" && <span className="private-badge">Private</span>}{subtaskCount > 0 && <span className="subtask-indicator" title={`${completedSubtaskCount}/${subtaskCount} subtasks completed`} aria-label={`${subtaskCount} subtasks`}>☑ <small>{subtaskCount}</small></span>}{noteCount > 0 && <span className="note-indicator" title={`${noteCount} notes`} aria-label={`${noteCount} notes`}>▰ <small>{noteCount}</small></span>}{attachmentCount > 0 && <span className="attachment-count task-attachment-indicator" title={`${attachmentCount} attachments`} aria-label={`${attachmentCount} attachments`}>📎 <small>{attachmentCount}</small></span>}</div><small>{task.expectedOutput}</small></div></td>{props.showEmployeeFilter && <td><div className="employee-cell"><UserAvatar user={employee} name={task.employeeName} /><strong>{task.employeeName}</strong></div></td>}<td><div className="employee-cell creator-person-cell" title={creatorName}><UserAvatar user={creator} name={creatorName} /><strong>{creatorName}</strong></div></td>{props.showDisciplineColumn && <td><span className="task-discipline">{task.employeeDiscipline || employee?.discipline || "—"}</span></td>}<td><span className="due-date" dir="ltr">{formatCreatedDate(task.createdAt)}</span></td><td><span className="due-date" dir="ltr">{formatDueDate(task.taskDate)}</span></td><td><span className={`pill priority-${task.priority}`}>{tablePriorityLabel[task.priority]}</span></td><td><strong className={active ? "live-hours" : ""}>{logged ? logged.toFixed(2) : "—"}{active && <i />}</strong><small className="hours-note"> / {task.plannedHours || "—"}h</small></td><td><span className={`pill status-${task.status}`}>{tableStatusLabel[task.status]}</span></td><td><span className={`pill check-${task.managerCheck}`}>{tableCheckLabel[task.managerCheck]}</span></td><td><span className={`flag flag-${flag.key}`}>{flag.label}</span></td><td>{issueLink ? <button type="button" className={`record-link-button ${task.createdAt <= issueLink.createdAt ? "task-first" : "issue-first"}`} onClick={(event) => { event.stopPropagation(); props.openIssue(issueLink); }}>{issueLink.issueNumber}</button> : <span>—</span>}</td></tr>;
+      return <tr key={task.id} onClick={() => props.openTask(task)} tabIndex={0} onKeyDown={(event) => event.key === "Enter" && props.openTask(task)}><td><div className="task-cell"><div className="task-title-progress"><TaskProgressControl task={task} canEdit={canEditProgress} busy={props.completionSavingTaskId === task.id} onChange={(value) => props.updateCompletion(task.id, value)} /><strong>{task.title}</strong></div><div className="task-tags">{task.originatedByName && <span className="employee-origin-tag">From employee · {task.originatedByName}</span>}{task.visibility === "private" && <span className="private-badge">Private</span>}{subtaskCount > 0 && <span className="subtask-indicator" title={`${completedSubtaskCount}/${subtaskCount} subtasks completed`} aria-label={`${subtaskCount} subtasks`}>☑ <small>{subtaskCount}</small></span>}{noteCount > 0 && <span className="note-indicator" title={`${noteCount} notes`} aria-label={`${noteCount} notes`}>▰ <small>{noteCount}</small></span>}{attachmentCount > 0 && <span className="attachment-count task-attachment-indicator" title={`${attachmentCount} attachments`} aria-label={`${attachmentCount} attachments`}>📎 <small>{attachmentCount}</small></span>}</div><small>{task.expectedOutput}</small></div></td>{props.showEmployeeFilter && <td><div className="employee-cell"><UserAvatar user={employee} name={task.employeeName} /><strong>{task.employeeName}</strong></div></td>}<td><div className="employee-cell creator-person-cell" title={creatorName}><UserAvatar user={creator} name={creatorName} /><strong>{creatorName}</strong></div></td>{props.showDisciplineColumn && <td><span className="task-discipline">{task.employeeDiscipline || employee?.discipline || "—"}</span></td>}<td><span className="due-date" dir="ltr">{formatCreatedDate(task.createdAt)}</span></td><td><span className="due-date" dir="ltr">{task.startDate ? formatDueDate(task.startDate) : "—"}</span></td><td><span className="due-date" dir="ltr">{formatDueDate(task.taskDate)}</span></td><td><span className={`pill priority-${task.priority}`}>{tablePriorityLabel[task.priority]}</span></td><td><strong className={active ? "live-hours" : ""}>{logged ? logged.toFixed(2) : "—"}{active && <i />}</strong><small className="hours-note"> / {task.plannedHours || "—"}h</small></td><td><span className={`pill status-${task.status}`}>{tableStatusLabel[task.status]}</span></td><td><span className={`pill check-${task.managerCheck}`}>{tableCheckLabel[task.managerCheck]}</span></td><td><span className={`flag flag-${flag.key}`}>{flag.label}</span></td><td>{issueLink ? <button type="button" className={`record-link-button ${task.createdAt <= issueLink.createdAt ? "task-first" : "issue-first"}`} onClick={(event) => { event.stopPropagation(); props.openIssue(issueLink); }}>{issueLink.issueNumber}</button> : <span>—</span>}</td></tr>;
     })}</tbody></table></div>
-      <div className="mobile-task-list">{props.tasks.map((task) => { const flag = taskFlag(task); const entries = timeEntriesByTaskId.get(task.id) || []; const taskSubtasks = subtasksByTaskId.get(task.id) || []; const detailsLoaded = props.detailsLoadedTaskIds.has(task.id); const subtaskCount = detailsLoaded ? taskSubtasks.length : task.subtaskCount || taskSubtasks.length; const attachmentCount = detailsLoaded ? attachmentsByTaskId.get(task.id)?.length || 0 : task.attachmentCount || 0; const noteCount = detailsLoaded ? props.commentCounts.get(task.id) || 0 : task.commentCount || 0; const logged = taskLoggedHours(task, entries, props.clock); const creatorName = task.createdByName || usersByEmail.get(task.createdBy.toLowerCase())?.displayName || "Unknown user"; return <button className="mobile-task" key={task.id} onClick={() => props.openTask(task)}><div className="mobile-task-top"><div className="task-tags">{task.originatedByName && <span className="employee-origin-tag">From employee · {task.originatedByName}</span>}{task.visibility === "private" && <span className="private-badge">Private</span>}{subtaskCount > 0 && <span className="subtask-indicator">☑ <small>{subtaskCount}</small></span>}{noteCount > 0 && <span className="note-indicator">▰ <small>{noteCount}</small></span>}{attachmentCount > 0 && <span className="attachment-count task-attachment-indicator">📎 <small>{attachmentCount}</small></span>}</div><span className={`flag flag-${flag.key}`}>{flag.label}</span></div><strong>{task.title}</strong><small>{props.showEmployeeFilter ? `${task.employeeName} · ` : ""}<span className="mobile-date-label">Created by</span> {creatorName} · <span className="mobile-date-label">Created</span> <span className="due-date" dir="ltr">{formatCreatedDate(task.createdAt)}</span> · <span className="mobile-date-label">Due</span> <span className="due-date" dir="ltr">{formatDueDate(task.taskDate)}</span></small><div className="mobile-task-bottom"><span className={`pill status-${task.status}`}>{tableStatusLabel[task.status]}</span><span>{task.completionPercent}% · {logged.toFixed(2)}/{task.plannedHours}h</span></div></button>; })}</div>
+      <div className="mobile-task-list">{props.tasks.map((task) => { const flag = taskFlag(task); const entries = timeEntriesByTaskId.get(task.id) || []; const taskSubtasks = subtasksByTaskId.get(task.id) || []; const detailsLoaded = props.detailsLoadedTaskIds.has(task.id); const subtaskCount = detailsLoaded ? taskSubtasks.length : task.subtaskCount || taskSubtasks.length; const attachmentCount = detailsLoaded ? attachmentsByTaskId.get(task.id)?.length || 0 : task.attachmentCount || 0; const noteCount = detailsLoaded ? props.commentCounts.get(task.id) || 0 : task.commentCount || 0; const logged = taskLoggedHours(task, entries, props.clock); const creatorName = task.createdByName || usersByEmail.get(task.createdBy.toLowerCase())?.displayName || "Unknown user"; return <button className="mobile-task" key={task.id} onClick={() => props.openTask(task)}><div className="mobile-task-top"><div className="task-tags">{task.originatedByName && <span className="employee-origin-tag">From employee · {task.originatedByName}</span>}{task.visibility === "private" && <span className="private-badge">Private</span>}{subtaskCount > 0 && <span className="subtask-indicator">☑ <small>{subtaskCount}</small></span>}{noteCount > 0 && <span className="note-indicator">▰ <small>{noteCount}</small></span>}{attachmentCount > 0 && <span className="attachment-count task-attachment-indicator">📎 <small>{attachmentCount}</small></span>}</div><span className={`flag flag-${flag.key}`}>{flag.label}</span></div><strong>{task.title}</strong><small>{props.showEmployeeFilter ? `${task.employeeName} · ` : ""}<span className="mobile-date-label">Created by</span> {creatorName} · <span className="mobile-date-label">Created</span> <span className="due-date" dir="ltr">{formatCreatedDate(task.createdAt)}</span>{task.startDate && <> · <span className="mobile-date-label">Start</span> <span className="due-date" dir="ltr">{formatDueDate(task.startDate)}</span></>} · <span className="mobile-date-label">Due</span> <span className="due-date" dir="ltr">{formatDueDate(task.taskDate)}</span></small><div className="mobile-task-bottom"><span className={`pill status-${task.status}`}>{tableStatusLabel[task.status]}</span><span>{task.completionPercent}% · {logged.toFixed(2)}/{task.plannedHours}h</span></div></button>; })}</div>
       {props.tab === "overview" && props.filteredCount > 7 && <button className="text-button" onClick={props.showAll}><ButtonLabel en="View all tasks →" ar="عرض جميع المهام" /></button>}</>}
   </section>;
 }
@@ -3029,7 +3393,7 @@ type TaskDrawerProps = {
   comments: TaskComment[];
   commentDraft: string;
   setCommentDraft: (value: string) => void;
-  addComment: () => void;
+  addComment: (mentionedEmails?: string[]) => Promise<boolean>;
   updateComment: (commentId: number, body: string) => Promise<boolean>;
   deleteComment: (comment: TaskComment) => void;
   savingComment: boolean;
@@ -3155,6 +3519,11 @@ function TaskAttachmentTable({ attachments, onUpload, onDelete, busy, compact = 
 function TaskDrawer({ selectedId, form, setOpen, saveTask, deleteTask, saving, currentUser, users, projects, lockedProjectCode = "", openProjectSettings, updateForm, comments, commentDraft, setCommentDraft, addComment, updateComment, deleteComment, savingComment, task, timeEntries, clock, updateTimer, updateCompletion, completionSavingTaskId, updateWorkSession, deleteWorkSession, savingTimer, submitPrivateTask, subtasks, draftSubtasks, updateDraftSubtask, deleteDraftSubtask, subtaskDraft, setSubtaskDraft, addSubtask, toggleSubtask, updateSubtaskTitle, deleteSubtask, subtaskBusy, attachments, draftAttachments, addDraftAttachments, deleteDraftAttachment, uploadAttachment, deleteAttachment, attachmentBusy, attachmentProgress, issueLink, onOpenIssue, onIssueCreated }: TaskDrawerProps) {
   const [editingCommentId, setEditingCommentId] = useState<number | null>(null);
   const [editingCommentBody, setEditingCommentBody] = useState("");
+  const [mentionQuery, setMentionQuery] = useState<string | null>(null);
+  const [mentionStart, setMentionStart] = useState(-1);
+  const [mentionActiveIndex, setMentionActiveIndex] = useState(0);
+  const [mentionedEmails, setMentionedEmails] = useState<string[]>([]);
+  const mentionTextareaRef = useRef<HTMLTextAreaElement>(null);
   const [issueDescription, setIssueDescription] = useState(task?.expectedOutput ? `${task.title} — ${task.expectedOutput}` : task?.title || "");
   const [issueDiscipline, setIssueDiscipline] = useState<Discipline | "">(task?.employeeDiscipline && task.employeeDiscipline !== "Manager" ? task.employeeDiscipline : currentUser?.discipline !== "Manager" ? currentUser?.discipline || "Architecture" : "Architecture");
   const [issueCategory, setIssueCategory] = useState("Task Follow-up");
@@ -3164,6 +3533,53 @@ function TaskDrawer({ selectedId, form, setOpen, saveTask, deleteTask, saving, c
   const selectedProject = projects.find((project) => project.code === form.project);
   const canOpenProjectSettings = Boolean(selectedProject && currentUser && (currentUser.role === "owner" || currentUser.role === "manager"));
   const employee = users.find((user) => user.email.toLowerCase() === (task?.employeeEmail || form.employeeEmail).toLowerCase());
+  const mentionCandidates = useMemo(() => {
+    if (!task || !currentUser) return [];
+    const allowedEmails = new Set<string>([task.employeeEmail.toLowerCase(), task.createdBy.toLowerCase()]);
+    users.filter((user) => user.role === "owner").forEach((user) => allowedEmails.add(user.email.toLowerCase()));
+    if (selectedProject) {
+      selectedProject.projectManagerEmails.forEach((email) => allowedEmails.add(email.toLowerCase()));
+      users.filter((user) => user.role === "manager" && selectedProject.memberEmails.includes(user.email) && (!employee?.discipline || user.discipline === employee.discipline)).forEach((user) => allowedEmails.add(user.email.toLowerCase()));
+    } else if (task.submittedToManager && employee?.discipline) {
+      users.filter((user) => user.role === "manager" && user.discipline === employee.discipline).forEach((user) => allowedEmails.add(user.email.toLowerCase()));
+    }
+    return users
+      .filter((user) => allowedEmails.has(user.email.toLowerCase()) && user.email.toLowerCase() !== currentUser.email.toLowerCase())
+      .sort((left, right) => left.displayName.localeCompare(right.displayName));
+  }, [currentUser, employee?.discipline, selectedProject, task, users]);
+  const filteredMentionCandidates = mentionQuery === null ? [] : mentionCandidates.filter((user) => {
+    const query = mentionQuery.trim().toLowerCase();
+    return !query || `${user.displayName} ${user.email} ${user.discipline}`.toLowerCase().includes(query);
+  }).slice(0, 8);
+  const updateMentionSearch = (value: string, caret: number) => {
+    const beforeCaret = value.slice(0, caret);
+    const match = beforeCaret.match(/(?:^|[\s(])@([^@\n]{0,60})$/);
+    if (!match) { setMentionQuery(null); setMentionStart(-1); return; }
+    setMentionQuery(match[1]);
+    setMentionStart(caret - match[1].length - 1);
+    setMentionActiveIndex(0);
+  };
+  const insertMention = (user: User) => {
+    if (mentionStart < 0) return;
+    const caret = mentionTextareaRef.current?.selectionStart ?? commentDraft.length;
+    const token = `@${user.displayName}`;
+    const next = `${commentDraft.slice(0, mentionStart)}${token} ${commentDraft.slice(caret)}`.slice(0, 2000);
+    setCommentDraft(next);
+    setMentionedEmails((current) => current.includes(user.email) ? current : [...current, user.email]);
+    setMentionQuery(null);
+    setMentionStart(-1);
+    requestAnimationFrame(() => {
+      const nextCaret = Math.min(next.length, mentionStart + token.length + 1);
+      mentionTextareaRef.current?.focus();
+      mentionTextareaRef.current?.setSelectionRange(nextCaret, nextCaret);
+    });
+  };
+  useEffect(() => {
+    setMentionQuery(null);
+    setMentionStart(-1);
+    setMentionActiveIndex(0);
+    setMentionedEmails([]);
+  }, [selectedId]);
   const managerSameDiscipline = Boolean(currentUser?.role === "manager" && currentUser.discipline && employee?.discipline === currentUser.discipline);
   const managerProjectMember = Boolean(currentUser?.role === "manager" && selectedProject?.memberEmails.includes(currentUser.email));
   const projectManager = Boolean(managerSameDiscipline && managerProjectMember && selectedProject?.projectManagerEmails.includes(currentUser!.email));
@@ -3232,7 +3648,7 @@ function TaskDrawer({ selectedId, form, setOpen, saveTask, deleteTask, saving, c
       <form onSubmit={saveTask} className="task-form" dir="ltr">
         {selectedId && management && task?.visibility === "private" && form.visibility === "private" && task.createdBy === currentUser?.email && <div className="private-convert-bar"><button type="button" disabled={privateConversionLocked} title={privateConversionLocked ? "Pause the private task timer before converting it." : undefined} onClick={() => { updateForm("visibility", "team"); updateForm("project", task.project !== "PERSONAL" ? task.project : projects.find((project) => project.status === "active")?.code || ""); updateForm("employeeEmail", ""); updateForm("employeeName", ""); }}>Convert to Employee Task · تحويل إلى مهمة موظف</button>{privateConversionLocked && <small>Pause the timer before conversion · أوقف العداد مؤقتًا قبل التحويل</small>}</div>}
         {acceptingEmployeeTask && task && <div className="employee-origin-banner"><strong>Created By · أنشأها الموظف: {task.originatedByName || task.employeeName}</strong><span>Opened by · فُتحت بواسطة: {currentUser?.displayName}</span></div>}
-        <div className="form-section"><h3>Task Information <span>معلومات المهمة</span></h3><div className="wide task-title-field"><label htmlFor="task-title-input">Task · اسم المهمة</label><div className="task-title-input-row"><input id="task-title-input" required disabled={!canEditDetails} value={form.title} onChange={(event) => updateForm("title", event.target.value)} placeholder="مثال: تدقيق موديل المنطقة 02" />{selectedId && task && <span className="task-title-drawer-progress"><TaskProgressControl task={task} canEdit={canEditProgress} busy={completionSavingTaskId === task.id} onChange={(value) => updateCompletion(task.id, value)} /></span>}</div></div><label className="wide"><span>Expected Output · المخرج المتوقع</span><textarea disabled={!canEditDetails} value={form.expectedOutput} onChange={(event) => updateForm("expectedOutput", event.target.value)} rows={3} placeholder="ما المطلوب تسليمه عند اكتمال المهمة؟" /></label><div className="form-grid task-project-date-grid"><label><span className="task-project-label"><span>Project · المشروع</span>{canOpenProjectSettings && selectedProject && <button type="button" className="task-project-settings" onClick={() => openProjectSettings(selectedProject)} aria-label="Project settings" title="Project settings">⚙</button>}</span><select required disabled={!canEditDetails || managementPrivateProjectLocked} value={form.project} onChange={(event) => { const code = event.target.value; updateForm("project", code); const project = projects.find((item) => item.code === code); if (management && !project?.memberEmails.includes(form.employeeEmail)) { updateForm("employeeEmail", ""); updateForm("employeeName", ""); } }}><option value="">اختر المشروع</option>{projectOptions.map((project) => <option key={project}>{project}</option>)}</select></label><label><span>Due Date · تاريخ الإنجاز المتوقع</span><input type="date" lang="en-GB" disabled={!canEditDetails} value={form.taskDate} onChange={(event) => updateForm("taskDate", event.target.value)} /></label><label><span>Priority · الأولوية</span><select disabled={!canEditDetails} value={form.priority} onChange={(event) => updateForm("priority", event.target.value as Task["priority"])}>{Object.entries(priorityLabel).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></label><label><span>Status · الحالة</span><select disabled value={form.status}>{Object.entries(statusLabel).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></label></div></div>
+        <div className="form-section"><h3>Task Information <span>معلومات المهمة</span></h3><div className="wide task-title-field"><label htmlFor="task-title-input">Task · اسم المهمة</label><div className="task-title-input-row"><input id="task-title-input" required disabled={!canEditDetails} value={form.title} onChange={(event) => updateForm("title", event.target.value)} placeholder="مثال: تدقيق موديل المنطقة 02" />{selectedId && task && <span className="task-title-drawer-progress"><TaskProgressControl task={task} canEdit={canEditProgress} busy={completionSavingTaskId === task.id} onChange={(value) => updateCompletion(task.id, value)} /></span>}</div></div><label className="wide"><span>Expected Output · المخرج المتوقع</span><textarea disabled={!canEditDetails} value={form.expectedOutput} onChange={(event) => updateForm("expectedOutput", event.target.value)} rows={3} placeholder="ما المطلوب تسليمه عند اكتمال المهمة؟" /></label><div className="form-grid task-project-date-grid"><label><span className="task-project-label"><span>Project · المشروع</span>{canOpenProjectSettings && selectedProject && <button type="button" className="task-project-settings" onClick={() => openProjectSettings(selectedProject)} aria-label="Project settings" title="Project settings">⚙</button>}</span><select required disabled={!canEditDetails || managementPrivateProjectLocked} value={form.project} onChange={(event) => { const code = event.target.value; updateForm("project", code); const project = projects.find((item) => item.code === code); if (management && !project?.memberEmails.includes(form.employeeEmail)) { updateForm("employeeEmail", ""); updateForm("employeeName", ""); } }}><option value="">اختر المشروع</option>{projectOptions.map((project) => <option key={project}>{project}</option>)}</select></label><label><span>Start Date · تاريخ البداية</span><input type="date" lang="en-GB" disabled={!canEditDetails} value={form.startDate} max={form.taskDate || undefined} onChange={(event) => updateForm("startDate", event.target.value)} /></label><label><span>Due Date · تاريخ الإنجاز المتوقع</span><input type="date" lang="en-GB" disabled={!canEditDetails} value={form.taskDate} min={form.startDate || undefined} onChange={(event) => updateForm("taskDate", event.target.value)} /></label><label><span>Priority · الأولوية</span><select disabled={!canEditDetails} value={form.priority} onChange={(event) => updateForm("priority", event.target.value as Task["priority"])}>{Object.entries(priorityLabel).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></label><label><span>Status · الحالة</span><select disabled value={form.status}>{Object.entries(statusLabel).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></label></div></div>
         <div className="form-section assignment-time-section"><h3>Assignment & Time</h3><div className={`assignment-time-grid ${management ? "management" : "member"}`}>{management && (form.visibility !== "private" || acceptingEmployeeTask) && <label className="assignment-employee" title={assignmentLocked ? assignmentLockHint : undefined}><span>Employee</span><select required disabled={assignmentLocked} title={assignmentLocked ? assignmentLockHint : undefined} value={form.employeeEmail} onChange={(event) => { const user = users.find((item) => item.email === event.target.value); updateForm("employeeEmail", event.target.value); if (user) updateForm("employeeName", user.displayName); }}><option value="">{form.project ? "Select a project employee" : "Select a project first"}</option>{assignmentOptions.map((user) => <option key={user.email} value={user.email}>{user.displayName}{user.discipline ? ` · ${user.discipline}` : ""}</option>)}</select></label>}{selectedId && currentUser?.role === "owner" && <label className="assignment-created-by"><span>Created By</span><select required value={form.createdBy} onChange={(event) => { const creator = users.find((user) => user.email === event.target.value); updateForm("createdBy", event.target.value); if (creator?.role === "manager" && form.employeeEmail && users.find((user) => user.email === form.employeeEmail)?.discipline !== creator.discipline) { updateForm("employeeEmail", ""); updateForm("employeeName", ""); } }}>{createdByOptions.map((user) => <option key={user.email} value={user.email}>{user.displayName}{user.discipline ? ` · ${user.discipline}` : ""}</option>)}</select></label>}<label><span>Planned Hours</span><input type="number" disabled={!canEditDetails} min="0" step="0.25" value={form.plannedHours} onChange={(event) => updateForm("plannedHours", Number(event.target.value))} /></label><label><span>Logged Hours</span><input disabled value={formatDuration(loggedSeconds)} /></label></div></div>
         <div className="form-section task-attachments-section"><div className="comments-heading"><h3>Task Attachments <span>مرفقات المهمة</span></h3><span>{selectedId ? attachments.filter((attachment) => attachment.subtaskId === null).length : draftAttachments.length}/10</span></div>{selectedId ? <TaskAttachmentTable attachments={attachments.filter((attachment) => attachment.subtaskId === null)} onUpload={(file) => uploadAttachment(file, null)} onDelete={deleteAttachment} busy={attachmentBusy} progress={attachmentProgress?.subtaskId === null ? attachmentProgress : null} readOnly={!canCollaborate} /> : <><label className="task-attachment-add draft-task-attachment-add"><span>＋</span><strong>Add Attachments</strong><input type="file" multiple disabled={saving || draftAttachments.length >= 10} onChange={(event) => { addDraftAttachments(Array.from(event.target.files || [])); event.currentTarget.value = ""; }} /></label><div className="attachment-paste-zone" contentEditable suppressContentEditableWarning role="textbox" tabIndex={0} onInput={(event) => { event.currentTarget.textContent = ""; }} onPaste={(event) => { const files = pastedFiles(event); if (!files.length) return; event.preventDefault(); addDraftAttachments(files); }}><span>Paste attachments here · الصق المرفقات هنا</span></div><small>Optional · maximum 10 files and 25 MB per file</small>{draftAttachments.length > 0 && <div className="pending-files">{draftAttachments.map(({ id, file }) => <span key={id}>{file.name} <small>{fileSizeLabel(file.size)}</small><button type="button" onClick={() => deleteDraftAttachment(id)} aria-label={`Remove ${file.name}`}>×</button></span>)}</div>}</>}</div>
         <div className="form-section subtasks-section">
@@ -3259,7 +3675,13 @@ function TaskDrawer({ selectedId, form, setOpen, saveTask, deleteTask, saving, c
               <div className="comment-content"><div className="comment-meta"><strong>{comment.authorName}</strong><span className="comment-role">{author?.role === "owner" ? "Owner" : author?.role === "manager" ? "Manager" : author?.discipline || "Team member"}</span><time dir="ltr">{formatDateTime(comment.createdAt)}</time>{editable && !editing && <button type="button" className="comment-edit-button" onClick={() => { setEditingCommentId(comment.id); setEditingCommentBody(comment.body); }} aria-label="Edit note" title="Edit note (available for 15 minutes)">✎</button>}{currentUser?.role === "owner" && !editing && <button type="button" className="comment-delete-button" onClick={() => deleteComment(comment)} disabled={savingComment} aria-label="Delete note" title="Owner: delete note">×</button>}</div>{editing ? <div className="comment-editor"><textarea maxLength={2000} rows={3} value={editingCommentBody} onChange={(event) => setEditingCommentBody(event.target.value)} /><div><button type="button" onClick={() => setEditingCommentId(null)} disabled={savingComment}>Cancel</button><button type="button" className="comment-edit-save" disabled={savingComment || !editingCommentBody.trim()} onClick={async () => { if (await updateComment(comment.id, editingCommentBody)) setEditingCommentId(null); }}>Save</button></div></div> : <p>{comment.body}</p>}</div>
             </article>;
           })}</div>)}
-          {canComment && <div className="comment-composer"><label className="wide"><span>{selectedId ? "Add a note · أضف ملاحظة" : "Initial note (optional) · ملاحظة أولية (اختيارية)"}</span><textarea maxLength={2000} rows={3} value={commentDraft} onChange={(event) => setCommentDraft(event.target.value)} placeholder="اكتب تحديثًا أو ملاحظة مرتبطة بهذه المهمة..." /></label><div><small>{commentDraft.length}/2000</small>{selectedId && <button type="button" className="comment-button" onClick={addComment} disabled={savingComment || !commentDraft.trim()}><ButtonLabel en={savingComment ? "Posting..." : "Post note"} ar={savingComment ? "جاري الإضافة..." : "إضافة الملاحظة"} /></button>}</div></div>}
+          {canComment && <div className="comment-composer"><label className="wide"><span>{selectedId ? "Add a note · أضف ملاحظة" : "Initial note (optional) · ملاحظة أولية (اختيارية)"}</span><div className="comment-textarea-wrap"><textarea ref={mentionTextareaRef} maxLength={2000} rows={3} value={commentDraft} onChange={(event) => { setCommentDraft(event.target.value); updateMentionSearch(event.target.value, event.target.selectionStart); }} onClick={(event) => updateMentionSearch(event.currentTarget.value, event.currentTarget.selectionStart)} onKeyDown={(event) => {
+            if (mentionQuery === null || !filteredMentionCandidates.length) return;
+            if (event.key === "ArrowDown") { event.preventDefault(); setMentionActiveIndex((current) => (current + 1) % filteredMentionCandidates.length); }
+            else if (event.key === "ArrowUp") { event.preventDefault(); setMentionActiveIndex((current) => (current - 1 + filteredMentionCandidates.length) % filteredMentionCandidates.length); }
+            else if (event.key === "Enter") { event.preventDefault(); insertMention(filteredMentionCandidates[Math.min(mentionActiveIndex, filteredMentionCandidates.length - 1)]); }
+            else if (event.key === "Escape") { event.preventDefault(); setMentionQuery(null); setMentionStart(-1); }
+          }} placeholder="Write a task note. Type @ to mention someone..." />{selectedId && mentionQuery !== null && <div className="comment-mention-menu" role="listbox" aria-label="Mention a task user">{filteredMentionCandidates.length ? filteredMentionCandidates.map((user, index) => <button type="button" key={user.email} className={index === mentionActiveIndex ? "active" : ""} onMouseDown={(event) => event.preventDefault()} onClick={() => insertMention(user)} role="option" aria-selected={index === mentionActiveIndex}><UserAvatar user={user} name={user.displayName} className="mention-avatar" /><span><strong>{user.displayName}</strong><small>{user.role === "owner" ? "Owner" : user.role === "manager" ? `Manager · ${user.discipline}` : user.discipline || "Team member"}</small></span></button>) : <p>No permitted users match this mention.</p>}</div>}</div></label><div><small>Type @ to mention · {commentDraft.length}/2000</small>{selectedId && <button type="button" className="comment-button" onClick={async () => { const activeMentions = mentionedEmails.filter((email) => { const user = users.find((item) => item.email === email); return user ? commentDraft.includes(`@${user.displayName}`) : false; }); if (await addComment(activeMentions)) setMentionedEmails([]); }} disabled={savingComment || !commentDraft.trim()}><ButtonLabel en={savingComment ? "Posting..." : "Post note"} ar={savingComment ? "جاري الإضافة..." : "إضافة الملاحظة"} /></button>}</div></div>}
         </div>
         {selectedId && task && (issueLink || (canConvertTaskToIssue && task.project !== "PERSONAL")) && <div className="form-section task-to-issue-section"><h3>{issueLink ? (task.createdAt <= issueLink.createdAt ? "Converted to Issue" : "Converted from Issue") : "Convert to Issue"} <span>{issueLink ? "سجل مرتبط" : "تحويل المهمة إلى مشكلة"}</span></h3>{issueLink ? <><p>{task.createdAt <= issueLink.createdAt ? "This task was converted to a linked issue." : "This task was created from a linked issue."}</p><button type="button" className={`record-link-button ${task.createdAt <= issueLink.createdAt ? "task-first" : "issue-first"}`} onClick={() => onOpenIssue(issueLink)}>Open {issueLink.issueNumber}</button></> : <><p>Create a project issue from this task. The records will stay linked automatically.</p>{convertIssueError && <div className="inline-form-error">{convertIssueError}</div>}<label className="wide"><span>Description · وصف المشكلة</span><textarea rows={3} maxLength={2000} value={issueDescription} onChange={(event) => setIssueDescription(event.target.value)} /></label><div className="form-grid"><label><span>Discipline · التخصص</span><select value={issueDiscipline} disabled={currentUser?.role === "manager" && currentUser.discipline !== "Manager"} onChange={(event) => setIssueDiscipline(event.target.value as Discipline)}>{disciplines.filter((discipline) => discipline !== "Manager").map((discipline) => <option key={discipline}>{discipline}</option>)}</select></label><label><span>Category · التصنيف</span><input maxLength={120} value={issueCategory} onChange={(event) => setIssueCategory(event.target.value)} /></label><label><span>Issue Date · تاريخ المشكلة</span><input type="date" value={issueDate} onChange={(event) => setIssueDate(event.target.value)} /></label></div><button type="button" className="convert-issue-button" onClick={() => void convertTaskToIssue()} disabled={convertingIssue || !issueDescription.trim()}>{convertingIssue ? "Creating Issue..." : "Convert and Link Issue"}</button></>}</div>}
         <div className="drawer-actions">{selectedId && (management || memberOwnPrivate) && <button type="button" className="delete-button" onClick={deleteTask} disabled={saving}><ButtonLabel en="Delete Task" ar="حذف المهمة" /></button>}<button type="button" className="secondary-button" onClick={() => setOpen(false)}><ButtonLabel en="Close" ar="إغلاق" /></button>{canEditDetails && <button type="submit" className="primary-button" disabled={saving}><ButtonLabel en={saving ? "Saving..." : selectedId ? "Save Changes" : "Create Task"} ar={saving ? "جاري الحفظ..." : selectedId ? "حفظ التعديلات" : "إنشاء مهمة"} /></button>}</div>

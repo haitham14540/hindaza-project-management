@@ -163,7 +163,7 @@ export async function POST(request: Request) {
     if (!assignedUserAction && !managementPause) return Response.json({ error: "This task is not assigned to you." }, { status: 403 });
     const submitForReview = task.visibility === "team" || task.submittedToManager;
     if (action === "start" && task.managerCheck === "approved") {
-      return Response.json({ error: "An approved task must be reopened by the manager before work can resume." }, { status: 409 });
+      return Response.json({ error: "An approved task must be reopened by the manager before its employee status can change." }, { status: 409 });
     }
     if (action === "finish") {
       const openSubtasks = await db.select({ id: taskSubtasks.id }).from(taskSubtasks)
@@ -196,14 +196,17 @@ export async function POST(request: Request) {
     }
 
     if (action === "pause") {
-      affectedTasks.push(...await closeActiveEntries(db, task.employeeEmail, now, taskId));
-      if (managementPause && !affectedTasks.length) {
+      const pausedByClosing = await closeActiveEntries(db, task.employeeEmail, now, taskId);
+      affectedTasks.push(...pausedByClosing);
+      if (managementPause && !pausedByClosing.length) {
         return Response.json({ error: "This employee timer is not currently running." }, { status: 409 });
       }
-      if (!affectedTasks.length) {
-        const paused = await db.update(tasks).set({ status: "paused", updatedAt: now }).where(eq(tasks.id, taskId)).returning();
-        affectedTasks.push(paused[0]);
-      }
+      const paused = await db.update(tasks).set({
+        status: "paused",
+        ...(assignedUserAction ? { managerCheck: "new" as const } : {}),
+        updatedAt: now,
+      }).where(eq(tasks.id, taskId)).returning();
+      affectedTasks.push(paused[0]);
     }
 
     if (action === "finish") {
