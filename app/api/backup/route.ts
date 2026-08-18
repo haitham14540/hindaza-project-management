@@ -22,7 +22,7 @@ import { recordActivity } from "@/lib/activity";
 export const dynamic = "force-dynamic";
 
 const APP_NAME = "HINDAZA Project Management";
-const SCHEMA_VERSION = 9;
+const SCHEMA_VERSION = 10;
 const MAX_BACKUP_BYTES = 20 * 1024 * 1024;
 const MAX_TABLE_ROWS = 100_000;
 const MAX_D1_BOUND_PARAMETERS = 100;
@@ -146,7 +146,7 @@ function optionalNullablePositiveInteger(source: Record<string, unknown>, key: s
 
 function validateBackup(value: unknown): BackupData {
   const payload = record(value, "Backup");
-  if (payload.app !== APP_NAME || ![1, 2, 3, 4, 5, 6, 7, 8, 9].includes(Number(payload.schemaVersion))) {
+  if (payload.app !== APP_NAME || ![1, 2, 3, 4, 5, 6, 7, 8, 9, 10].includes(Number(payload.schemaVersion))) {
     fail("This file is not a compatible HINDAZA backup.");
   }
   const data = record(payload.data, "data");
@@ -181,6 +181,7 @@ function validateBackup(value: unknown): BackupData {
 
   const restoredTasks: BackupData["tasks"] = rows(data.tasks, "tasks").map((item) => ({
     id: positiveInteger(item, "id"),
+    startDate: optionalStringField(item, "startDate", 10),
     taskDate: stringField(item, "taskDate", 10, false),
     employeeName: stringField(item, "employeeName", 120, false),
     employeeEmail: emailField(item, "employeeEmail", true),
@@ -266,7 +267,7 @@ function validateBackup(value: unknown): BackupData {
   const restoredNotifications: BackupData["notifications"] = rows(data.notifications, "notifications").map((item) => ({
     id: positiveInteger(item, "id"),
     recipientEmail: emailField(item, "recipientEmail"),
-    type: enumField(item, "type", ["task_assigned", "review_updated", "private_task_submitted", "task_ready_for_review", "subtask_completed", "task_note_added", "issue_created", "issue_updated", "issue_note_added"] as const),
+    type: enumField(item, "type", ["task_assigned", "review_updated", "private_task_submitted", "task_ready_for_review", "subtask_completed", "task_note_added", "task_mentioned", "issue_created", "issue_updated", "issue_note_added", "project_member_added"] as const),
     taskId: nullablePositiveInteger(item, "taskId"),
     issueId: optionalNullablePositiveInteger(item, "issueId"),
     title: stringField(item, "title", 180, false),
@@ -509,7 +510,7 @@ export async function POST(request: Request) {
       d1.prepare("DELETE FROM users"),
       ...insertStatements(d1, "users", ["email", "display_name", "role", "discipline", "password_hash", "password_salt", "profile_image_key", "active", "created_at"], data.users, (user) => [user.email, user.displayName, user.role, user.discipline, user.passwordHash, user.passwordSalt, user.profileImageKey ?? "", user.active, user.createdAt]),
       ...insertStatements(d1, "projects", ["id", "code", "name", "client", "status", "start_date", "target_date", "created_at"], data.projects, (project) => [project.id!, project.code, project.name, project.client, project.status, project.startDate, project.targetDate, project.createdAt]),
-      ...insertStatements(d1, "tasks", ["id", "task_date", "employee_name", "employee_email", "project", "title", "expected_output", "priority", "planned_hours", "start_time", "end_time", "actual_hours", "status", "manager_check", "manager_note", "visibility", "submitted_to_manager", "originated_by_email", "originated_by_name", "accepted_by_email", "accepted_by_name", "work_cycle", "created_by", "created_at", "updated_at"], data.tasks, (task) => [task.id!, task.taskDate, task.employeeName, task.employeeEmail, task.project, task.title, task.expectedOutput, task.priority, task.plannedHours, task.startTime, task.endTime, task.actualHours, task.status, task.managerCheck, task.managerNote, task.visibility, task.submittedToManager, task.originatedByEmail ?? "", task.originatedByName ?? "", task.acceptedByEmail ?? "", task.acceptedByName ?? "", task.workCycle ?? 1, task.createdBy, task.createdAt, task.updatedAt]),
+      ...insertStatements(d1, "tasks", ["id", "start_date", "task_date", "employee_name", "employee_email", "project", "title", "expected_output", "priority", "planned_hours", "start_time", "end_time", "actual_hours", "status", "manager_check", "manager_note", "visibility", "submitted_to_manager", "originated_by_email", "originated_by_name", "accepted_by_email", "accepted_by_name", "work_cycle", "created_by", "created_at", "updated_at"], data.tasks, (task) => [task.id!, task.startDate ?? "", task.taskDate, task.employeeName, task.employeeEmail, task.project, task.title, task.expectedOutput, task.priority, task.plannedHours, task.startTime, task.endTime, task.actualHours, task.status, task.managerCheck, task.managerNote, task.visibility, task.submittedToManager, task.originatedByEmail ?? "", task.originatedByName ?? "", task.acceptedByEmail ?? "", task.acceptedByName ?? "", task.workCycle ?? 1, task.createdBy, task.createdAt, task.updatedAt]),
       ...insertStatements(d1, "project_members", ["id", "project_id", "employee_email", "is_project_manager", "created_at"], data.projectMembers, (membership) => [membership.id!, membership.projectId, membership.employeeEmail, membership.isProjectManager, membership.createdAt]),
       ...insertStatements(d1, "task_comments", ["id", "task_id", "author_email", "author_name", "body", "created_at"], data.taskComments, (comment) => [comment.id!, comment.taskId, comment.authorEmail, comment.authorName, comment.body, comment.createdAt]),
       ...insertStatements(d1, "task_subtasks", ["id", "task_id", "title", "completed", "completed_at", "completed_by", "created_by", "created_at", "updated_at"], data.taskSubtasks, (subtask) => [subtask.id!, subtask.taskId, subtask.title, subtask.completed, subtask.completedAt ?? null, subtask.completedBy, subtask.createdBy, subtask.createdAt, subtask.updatedAt]),

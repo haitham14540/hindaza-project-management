@@ -478,7 +478,7 @@ export const IssuesModule = forwardRef<IssuesModuleHandle, {
 
   return <>
     {error && <div className="error-banner issue-error"><span>{error}</span><button onClick={() => setError("")}>×</button></div>}
-    <section className="issue-stats" aria-label="Project issue summary">
+    <section className="issue-stats task-stats-ltr" aria-label="Project issue summary" dir="ltr">
       <article><span>Total Issues · إجمالي المشاكل</span><strong>{stats.total}</strong></article><article className="issue-open"><span>Open · مفتوحة</span><strong>{stats.open}</strong></article><article className="issue-reopen"><span>Re-Open · أعيد فتحها</span><strong>{stats.reopen}</strong></article><article className="issue-closed"><span>Closed · مغلقة</span><strong>{stats.closed}</strong></article><article className="issue-critical"><span>Critical · حرجة</span><strong>{stats.critical}</strong></article>
     </section>
     <section className="panel issues-panel">

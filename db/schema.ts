@@ -58,6 +58,7 @@ export const tasks = sqliteTable(
   "tasks",
   {
     id: integer("id").primaryKey({ autoIncrement: true }),
+    startDate: text("start_date").notNull().default(""),
     taskDate: text("task_date").notNull(),
     employeeName: text("employee_name").notNull(),
     employeeEmail: text("employee_email").notNull().default(""),
@@ -96,6 +97,7 @@ export const tasks = sqliteTable(
     updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
   },
   (table) => [
+    index("tasks_start_date_idx").on(table.startDate),
     index("tasks_date_idx").on(table.taskDate),
     index("tasks_employee_idx").on(table.employeeEmail),
     index("tasks_created_idx").on(table.createdAt),
@@ -130,7 +132,7 @@ export const notifications = sqliteTable(
   {
     id: integer("id").primaryKey({ autoIncrement: true }),
     recipientEmail: text("recipient_email").notNull(),
-    type: text("type", { enum: ["task_assigned", "review_updated", "private_task_submitted", "task_ready_for_review", "subtask_completed", "task_note_added", "issue_created", "issue_updated", "issue_note_added", "project_member_added"] }).notNull(),
+    type: text("type", { enum: ["task_assigned", "review_updated", "private_task_submitted", "task_ready_for_review", "subtask_completed", "task_note_added", "task_mentioned", "issue_created", "issue_updated", "issue_note_added", "project_member_added"] }).notNull(),
     taskId: integer("task_id"),
     issueId: integer("issue_id"),
     title: text("title").notNull(),
