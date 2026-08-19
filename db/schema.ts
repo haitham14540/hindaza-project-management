@@ -54,6 +54,24 @@ export const projectMembers = sqliteTable(
   ],
 );
 
+export const projectNotes = sqliteTable(
+  "project_notes",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    projectCode: text("project_code").notNull(),
+    title: text("title").notNull(),
+    contentHtml: text("content_html").notNull().default(""),
+    createdBy: text("created_by").notNull(),
+    updatedBy: text("updated_by").notNull(),
+    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+    updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  },
+  (table) => [
+    index("project_notes_project_updated_idx").on(table.projectCode, table.updatedAt),
+    index("project_notes_creator_idx").on(table.createdBy),
+  ],
+);
+
 export const tasks = sqliteTable(
   "tasks",
   {

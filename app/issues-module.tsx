@@ -39,6 +39,7 @@ type Issue = {
   notes: IssueNote[];
 };
 type IssueForm = Pick<Issue, "projectCode" | "status" | "discipline" | "description" | "category" | "priority" | "raisedByEmail" | "issueDate" | "resolvedDate" | "comments" | "clientReply">;
+type IssueSortKey = "issueNumber" | "description" | "raisedBy" | "discipline" | "status" | "priority" | "createdAt" | "resolvedDate" | "taskLink";
 
 const disciplines: IssueDiscipline[] = ["Architecture", "ID", "Structure", "Mechanical", "Electrical", "Infrastructure"];
 const disciplineCode: Record<IssueDiscipline, string> = { Architecture: "ARC", ID: "ID", Structure: "STR", Mechanical: "MECH", Electrical: "ELEC", Infrastructure: "INF" };
@@ -225,6 +226,7 @@ export const IssuesModule = forwardRef<IssuesModuleHandle, {
   const [editingNoteBody, setEditingNoteBody] = useState("");
   const [savingNote, setSavingNote] = useState(false);
   const [clock, setClock] = useState(0);
+  const [issueSort, setIssueSort] = useState<{ key: IssueSortKey; direction: "asc" | "desc" }>({ key: "createdAt", direction: "desc" });
   const loadInFlightRef = useRef(false);
 
   const load = useCallback(async (silent = false) => {
@@ -265,7 +267,32 @@ export const IssuesModule = forwardRef<IssuesModuleHandle, {
     const term = search.trim().toLowerCase();
     const text = `${issue.issueNumber} ${issue.description} ${issue.category} ${issue.projectCode} ${issue.raisedByName}`.toLowerCase();
     return (!term || text.includes(term)) && (!lockedProjectCode || issue.projectCode === lockedProjectCode) && (lockedProjectCode || projectFilter === "all" || issue.projectCode === projectFilter) && (statusFilter === "all" || issue.status === statusFilter) && (disciplineFilter === "all" || issue.discipline === disciplineFilter) && (priorityFilter === "all" || issue.priority === priorityFilter);
-  }).sort((a, b) => a.projectCode.localeCompare(b.projectCode) || a.discipline.localeCompare(b.discipline) || a.sequence - b.sequence || a.id - b.id), [issues, search, lockedProjectCode, projectFilter, statusFilter, disciplineFilter, priorityFilter]);
+  }).sort((a, b) => {
+    const value = (issue: Issue) => issueSort.key === "issueNumber" ? issue.issueNumber : issueSort.key === "description" ? issue.description : issueSort.key === "raisedBy" ? issue.raisedByName : issueSort.key === "discipline" ? issue.discipline : issueSort.key === "status" ? issue.status : issueSort.key === "priority" ? issue.priority : issueSort.key === "resolvedDate" ? issue.resolvedDate : issueSort.key === "taskLink" ? issue.convertedTaskId || 0 : issue.createdAt;
+    const left = value(a); const right = value(b);
+    const result = typeof left === "number" && typeof right === "number" ? left - right : String(left).localeCompare(String(right), undefined, { numeric: true, sensitivity: "base" });
+    return (issueSort.direction === "asc" ? result : -result) || b.id - a.id;
+  }), [issues, search, lockedProjectCode, projectFilter, statusFilter, disciplineFilter, priorityFilter, issueSort]);
+  useEffect(() => {
+    const headers = Array.from(document.querySelectorAll<HTMLTableCellElement>(".issues-panel .issue-table thead th"));
+    const keys: IssueSortKey[] = ["issueNumber", "description", "raisedBy", "discipline", "status", "priority", "createdAt", "resolvedDate", "taskLink"];
+    const cleanups = headers.map((header, index) => {
+      const key = keys[index];
+      if (!key) return () => undefined;
+      header.classList.add("interactive-sort-header");
+      header.tabIndex = 0;
+      header.setAttribute("role", "button");
+      header.setAttribute("aria-sort", issueSort.key === key ? issueSort.direction === "asc" ? "ascending" : "descending" : "none");
+      header.dataset.sortMarker = issueSort.key === key ? issueSort.direction === "asc" ? "▲" : "▼" : "↕";
+      const activate = () => setIssueSort((current) => current.key === key ? { key, direction: current.direction === "asc" ? "desc" : "asc" } : { key, direction: key === "createdAt" ? "desc" : "asc" });
+      const click = () => activate();
+      const keydown = (event: KeyboardEvent) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); activate(); } };
+      header.addEventListener("click", click);
+      header.addEventListener("keydown", keydown);
+      return () => { header.removeEventListener("click", click); header.removeEventListener("keydown", keydown); };
+    });
+    return () => cleanups.forEach((cleanup) => cleanup());
+  }, [issueSort, filtered.length]);
   const scopedIssues = useMemo(() => lockedProjectCode ? issues.filter((issue) => issue.projectCode === lockedProjectCode) : issues, [issues, lockedProjectCode]);
   const stats = useMemo(() => ({ total: scopedIssues.length, open: scopedIssues.filter((issue) => issue.status === "open").length, reopen: scopedIssues.filter((issue) => issue.status === "re_open").length, closed: scopedIssues.filter((issue) => issue.status === "closed").length, critical: scopedIssues.filter((issue) => issue.priority === "critical" && issue.status !== "closed").length }), [scopedIssues]);
   const filtersActive = Boolean(search.trim()) || (!lockedProjectCode && projectFilter !== "all") || disciplineFilter !== "all" || statusFilter !== "all" || priorityFilter !== "all";

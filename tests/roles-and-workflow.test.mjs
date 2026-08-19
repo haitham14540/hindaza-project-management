@@ -182,7 +182,7 @@ test("project issue client response notes, closure dates, and single-save behavi
   assert.match(issuesModule, /setFiles\(\[\]\); setClientFiles\(\[\]\);/);
   assert.match(issuesModule, /if \(!selectedId\) setDrawerOpen\(false\)/);
   assert.match(dashboard, /Task Details & Update/);
-  assert.match(backupApi, /const SCHEMA_VERSION = 10/);
+  assert.match(backupApi, /const SCHEMA_VERSION = 11/);
   assert.match(backupApi, /issueComments/);
   assert.match(backupApi, /item\.source === undefined \? "internal"/);
 });
@@ -702,7 +702,7 @@ test("project navigation scopes tasks and issues without changing reports", asyn
     source("app/issues-module.tsx"),
     source("app/globals.css"),
   ]);
-  assert.match(dashboard, /onClick=\{openProjectDirectory\} aria-label="Open Project Management"/);
+  assert.match(dashboard, /onClick=\{openProjectDirectory\} aria-label="Projects" title="Projects"/);
   assert.doesNotMatch(dashboard, /Toggle Project list|projectMenuOpen|project-nav-list/);
   assert.match(dashboard, /<tr key=\{project\.id\} onClick=\{\(\) => openProjectWorkspace\(project\.code\)\}/);
   assert.match(dashboard, /event\.stopPropagation\(\); openProject\(project\)/);
@@ -729,7 +729,7 @@ test("project navigation scopes tasks and issues without changing reports", asyn
   assert.match(dashboard, /tab === "reports" && <div className="reports-workspace"/);
   assert.match(styles, /\.project-workspace-tabs/);
   assert.match(styles, /\.project-switcher/);
-  assert.match(styles, /\.project-switcher-menu \{ position: absolute;[^}]*right: 0;/);
+  assert.match(styles, /\.project-switcher-menu \{ position: absolute;[^}]*left: 0;[^}]*right: auto;/);
   assert.match(styles, /\.project-switcher-menu strong \{ color: #171717;/);
   assert.match(styles, /\.project-table-identity > strong/);
 });
@@ -1030,7 +1030,7 @@ test("V80 simplifies task and issue tables and normalizes legacy issue numbers",
     source("app/issues-module.tsx"),
     source("app/api/issues/route.ts"),
   ]);
-  assert.match(dashboard, /<th>Task<\/th>\{props\.showEmployeeFilter && <th>Employee<\/th>\}<th>Created By<\/th>/);
+  assert.match(dashboard, /sortHeader\("title", "Task"\).*sortHeader\("employee", "Employee"\).*sortHeader\("createdBy", "Created By"\)/s);
   assert.doesNotMatch(dashboard, /<span className="project-code">\{task\.project\}<\/span>/);
   assert.match(dashboard, /employee-cell creator-person-cell/);
   assert.match(issuesModule, /<th>Issue Number<\/th><th>Description<\/th><th>Raised By<\/th><th>Discipline<\/th>/);
@@ -1307,7 +1307,7 @@ test("V103 links converted issues dynamically and expands the English employee t
   ]);
   assert.match(bootstrap, /taskIssueLinks: linkedIssueRows/);
   assert.match(bootstrap, /convertedTaskId: projectIssues\.convertedTaskId/);
-  assert.match(dashboard, /<th>Issue Link<\/th>/);
+  assert.match(dashboard, /sortHeader\("issueLink", "Issue Link"\)/);
   assert.match(dashboard, /record-link-button/);
   assert.match(dashboard, /props\.openIssue\(issueLink\)/);
   assert.match(dashboard, /openProjectWorkspace\(link\.projectCode, "issues"\)/);
@@ -1328,7 +1328,7 @@ test("V104 converts tasks to linked issues and color-codes the originating recor
     source("app/api/tasks/convert-to-issue/route.ts"),
     source("app/globals.css"),
   ]);
-  assert.match(dashboard, /<th>Indicator<\/th><th>Issue Link<\/th>/);
+  assert.match(dashboard, /sortHeader\("indicator", "Indicator"\).*sortHeader\("issueLink", "Issue Link"\)/s);
   assert.match(dashboard, /className="form-section task-to-issue-section"/);
   assert.match(dashboard, /fetch\("\/api\/tasks\/convert-to-issue"/);
   assert.match(convertApi, /convertedTaskId: task\.id/);
@@ -1727,7 +1727,7 @@ test("V132 moves progress into the task field and restores it when review is ret
     source("app/api/task-timer/route.ts"),
     source("drizzle/0019_quiet_mikhail_rasputin.sql"),
   ]);
-  assert.match(dashboard, /<th>Task<\/th>\{props\.showEmployeeFilter && <th>Employee<\/th>\}<th>Created By<\/th>/);
+  assert.match(dashboard, /sortHeader\("title", "Task"\).*sortHeader\("employee", "Employee"\).*sortHeader\("createdBy", "Created By"\)/s);
   assert.doesNotMatch(dashboard, /className="task-progress-value"/);
   assert.match(dashboard, /className="wide task-title-field"/);
   assert.match(dashboard, /task-title-drawer-progress/);
@@ -2272,4 +2272,213 @@ test("V165 keeps Kanban task drawers closed after drag and drop", async () => {
   assert.match(dashboard, /onDragStart=\{\(event\) => \{ suppressClickAfterDrag\.current = true;/);
   assert.match(dashboard, /window\.setTimeout\(\(\) => \{ suppressClickAfterDrag\.current = false; \}, 350\)/);
   assert.match(dashboard, /if \(suppressClickAfterDrag\.current\) \{ event\.preventDefault\(\); return; \}/);
+});
+
+test("V166 adds persistent project Notes with rich editing, mind maps, and PDF export", async () => {
+  const [dashboard, notesModule, notesApi, schema, backupApi, styles] = await Promise.all([
+    source("app/task-dashboard.tsx"),
+    source("app/project-notes-module.tsx"),
+    source("app/api/project-notes/route.ts"),
+    source("db/schema.ts"),
+    source("app/api/backup/route.ts"),
+    source("app/globals.css"),
+  ]);
+  assert.match(schema, /sqliteTable\(\s*"project_notes"/);
+  assert.match(notesApi, /canAccessProject/);
+  assert.match(notesApi, /Only the note creator or owner can delete this page/);
+  assert.match(dashboard, /import ProjectNotesModule/);
+  assert.match(dashboard, /projectWorkspaceTab === "notes" && currentUser && <ProjectNotesModule/);
+  assert.match(notesModule, /className="project-notes-app"/);
+  assert.match(notesModule, /contentEditable/);
+  assert.match(notesModule, /document\.execCommand/);
+  assert.match(notesModule, /editor\.innerHTML = selectedNote\.contentHtml/);
+  assert.match(notesModule, /editor\.dataset\.noteId = noteMarker/);
+  assert.match(notesModule, /className="notes-trash-icon"/);
+  assert.match(notesModule, />Mind Map</);
+  assert.match(notesModule, /window\.print\(\)/);
+  assert.match(notesModule, /report-logo\.png/);
+  assert.match(styles, /\.project-notes-app \{[^}]*grid-template-columns: 300px minmax\(0, 1fr\)/);
+  assert.match(backupApi, /projectNotes/);
+  assert.match(backupApi, /SCHEMA_VERSION = 11/);
+});
+
+test("V167 collapses the desktop sidebar to icons while preserving responsive layout and concise tooltips", async () => {
+  const [dashboard, styles] = await Promise.all([
+    source("app/task-dashboard.tsx"),
+    source("app/globals.css"),
+  ]);
+  assert.match(dashboard, /sidebarStateStorageKey/);
+  assert.match(dashboard, /sidebarCollapsed \? " sidebar-collapsed"/);
+  assert.match(dashboard, /className="sidebar-collapse-toggle"/);
+  assert.match(dashboard, /aria-label="Overview" title="Overview"/);
+  assert.match(dashboard, /aria-label="Projects" title="Projects"/);
+  assert.doesNotMatch(dashboard, /aria-label="Open Overview"|aria-label="Open Project Management"|aria-label=\{`Open \$\{item\.en\}`\}/);
+  assert.match(styles, /\.app-shell\.sidebar-collapsed \.sidebar \{[^}]*width: 82px/);
+  assert.match(styles, /\.app-shell\.sidebar-collapsed \.main-content \{[^}]*margin-left: 82px/);
+  assert.match(styles, /\.sidebar-collapse-toggle \{[^}]*background: #151515/);
+  assert.match(styles, /@media \(max-width: 780px\)[\s\S]*?\.sidebar-collapse-toggle \{ display: none; \}/);
+});
+
+test("V168 anchors the sidebar arrow in a circular tab that protrudes from its edge", async () => {
+  const styles = await source("app/globals.css");
+  assert.match(styles, /\.sidebar-collapse-toggle \{[^}]*border-radius: 50%/);
+});
+
+test("V169 reduces the sidebar tab to a subtle less-than-half protrusion", async () => {
+  const styles = await source("app/globals.css");
+  assert.match(styles, /\.sidebar-collapse-toggle \{[^}]*right: -17px;[^}]*width: 40px;[^}]*height: 40px/);
+  assert.match(styles, /\.sidebar-collapse-toggle \{[^}]*border: 3px solid #050505/);
+  assert.match(styles, /\.sidebar-collapse-toggle span \{[^}]*font-size: 18px;[^}]*transform: translate\(4px,-1px\)/);
+});
+
+test("V170 prevents transient page-level horizontal scrolling while the sidebar animates", async () => {
+  const styles = await source("app/globals.css");
+  assert.match(styles, /html \{[^}]*max-width: 100%;[^}]*overflow-x: hidden;[^}]*overflow-x: clip/);
+  assert.match(styles, /body \{[^}]*max-width: 100%;[^}]*overflow-x: hidden;[^}]*overflow-x: clip/);
+  assert.match(styles, /\.app-shell \{[^}]*width: 100%;[^}]*overflow-x: clip/);
+  assert.match(styles, /\.task-table-wrap \{[^}]*overflow-x: auto/);
+});
+
+test("V171 sanitizes external note paste and keeps the formatting toolbar visible", async () => {
+  const [notesModule, styles] = await Promise.all([
+    source("app/project-notes-module.tsx"),
+    source("app/globals.css"),
+  ]);
+  assert.match(notesModule, /function sanitizePastedNoteHtml/);
+  assert.match(notesModule, /style,script,link,meta,iframe,object,embed,form,input,button,textarea,select/);
+  assert.match(notesModule, /onPaste=\{pasteIntoEditor\}/);
+  assert.match(notesModule, /latestDraftRef/);
+  assert.doesNotMatch(notesModule, /editorRef\.current\.innerHTML = saved\.contentHtml/);
+  assert.match(styles, /\.notes-editor-toolbar \{[^}]*z-index: 3;[^}]*flex: 0 0 auto/);
+  assert.match(styles, /\.notes-rich-editor \{[^}]*min-height: 0;[^}]*flex: 1 1 0/);
+});
+
+test("V172 prints A4 multi-page notes and edits persistent note tables", async () => {
+  const [notesModule, notesApi, styles] = await Promise.all([
+    source("app/project-notes-module.tsx"),
+    source("app/api/project-notes/route.ts"),
+    source("app/globals.css"),
+  ]);
+  assert.match(notesModule, /function printNote\(\)/);
+  assert.match(notesModule, /@page\{size:A4 portrait;margin:16mm\}/);
+  assert.match(notesModule, /report-logo\.png/);
+  assert.match(notesModule, /className="notes-print-icon"/);
+  assert.match(notesModule, /function insertTable\(\)/);
+  assert.match(notesModule, /editSelectedTable\(action: "add-row" \| "add-column" \| "delete-row" \| "delete-column" \| "delete-table"\)/);
+  assert.match(notesModule, /Insert 3 × 3 table/);
+  assert.match(notesApi, /"table", "thead", "tbody", "tfoot", "tr", "th", "td"/);
+  assert.match(styles, /\.notes-rich-editor table \{[^}]*border-collapse: collapse/);
+});
+
+test("V173 restores workspace state and upgrades note editing controls", async () => {
+  const [dashboard, notesModule, styles] = await Promise.all([
+    source("app/task-dashboard.tsx"),
+    source("app/project-notes-module.tsx"),
+    source("app/globals.css"),
+  ]);
+  assert.match(dashboard, /workspaceUiSessionKey/);
+  assert.match(dashboard, /workspaceScrollSessionKey/);
+  assert.match(dashboard, /initialSection === "notes" \|\| initialSection === "mom"/);
+  assert.match(dashboard, /taskCalendarAnchorSessionKey/);
+  assert.match(notesModule, /noteSessionKey/);
+  assert.match(notesModule, /function editorKeyboardShortcut/);
+  assert.match(notesModule, /className="notes-list-tool"/);
+  assert.match(notesModule, /className="notes-table-menu"/);
+  assert.match(notesModule, /className="notes-print-icon"/);
+  assert.match(styles, /\.assignment-time-section \.assignment-time-grid\.management/);
+});
+
+test("project Notes use sections, A4 pages, independent table selections, and live mind maps", async () => {
+  const [notesModule, notesApi, styles] = await Promise.all([
+    source("app/project-notes-module.tsx"),
+    source("app/api/project-notes/route.ts"),
+    source("app/globals.css"),
+  ]);
+  assert.match(notesModule, /<small>Sections · \{notes\.length\}/);
+  assert.match(notesModule, /pageCount \* 1123/);
+  assert.match(notesModule, /selectTableGroup\("column"\)/);
+  assert.match(notesModule, /formatSelectedTableBackground/);
+  assert.match(notesModule, /Live from the current note/);
+  assert.match(notesApi, /"width", "height", "min-width"/);
+  assert.match(styles, /\.notes-editor-shell \.notes-rich-editor \{[^}]*width: min\(794px/);
+  assert.match(styles, /data-table-selected="column"/);
+});
+
+test("project Notes use the active notebook, mouse-resizable tables, and distinct row and column selection", async () => {
+  const [notesModule, styles] = await Promise.all([
+    source("app/project-notes-module.tsx"),
+    source("app/globals.css"),
+  ]);
+  assert.doesNotMatch(notesModule, /<aside className="notes-projects-column">/);
+  assert.match(notesModule, /notes-notebook-name/);
+  assert.match(notesModule, /notes-notebook-code/);
+  assert.match(notesModule, /<small>Sections · \{notes\.length\}/);
+  assert.match(notesModule, /closeTableMenuOutside/);
+  assert.match(notesModule, /handleTableResizeStart/);
+  assert.match(notesModule, /handleTableResizeHover/);
+  assert.match(notesModule, /data-table-selected", "column"/);
+  assert.match(notesModule, /data-table-selected", "row"/);
+  assert.match(notesModule, /tableCellColors\.map/);
+  assert.match(styles, /grid-template-columns: 300px minmax\(0, 1fr\)/);
+  assert.match(styles, /data-table-selected="column"/);
+  assert.match(styles, /data-table-selected="row"/);
+});
+
+test("V175 keeps Notes visible and auto-saved while task tables sort from Created Date", async () => {
+  const [dashboard, notesModule, styles] = await Promise.all([
+    source("app/task-dashboard.tsx"),
+    source("app/project-notes-module.tsx"),
+    source("app/globals.css"),
+  ]);
+  assert.match(styles, /\.project-switcher-menu \{[^}]*left: 0;[^}]*right: auto;/);
+  assert.match(styles, /@media \(max-width: 780px\)[\s\S]*\.project-switcher-menu \{[^}]*position: fixed;[^}]*left: 12px;[^}]*right: 12px;/);
+  assert.match(notesModule, /window\.setTimeout\(\(\) => \{ void saveNoteRef\.current\(true\); \}, 700\)/);
+  assert.match(notesModule, /keepalive: true/);
+  assert.doesNotMatch(notesModule, /className="notes-save-button"/);
+  assert.match(notesModule, /const targets = tableFormattingTargets\(\);\s*if \(!targets\.length\)/);
+  assert.match(dashboard, /useState<\{ key: TaskSortKey; direction: "asc" \| "desc" \}>\(\{ key: "createdAt", direction: "desc" \}\)/);
+  assert.match(dashboard, /aria-sort=/);
+  assert.match(dashboard, /sortedTasks\.map\(\(task\)/);
+});
+
+test("V176 adds Word-style table handles, resizable note images, and mobile issues", async () => {
+  const [notesModule, notesApi, imageApi, styles] = await Promise.all([
+    source("app/project-notes-module.tsx"),
+    source("app/api/project-notes/route.ts"),
+    source("app/api/project-note-images/route.ts"),
+    source("app/globals.css"),
+  ]);
+  assert.match(notesModule, /className="notes-table-edge-handle column"/);
+  assert.match(notesModule, /className="notes-table-edge-handle row"/);
+  assert.match(notesModule, /function selectTableGroup\(kind: "column" \| "row"\)/);
+  assert.match(notesModule, /function uploadNoteImage\(file: File\)/);
+  assert.match(notesModule, /className="notes-image-size"/);
+  assert.match(imageApi, /const MAX_IMAGE_BYTES = 8 \* 1024 \* 1024/);
+  assert.match(imageApi, /project-note-images\/uploads/);
+  assert.match(notesApi, /allowedTags = new Set\(\[[^\]]*"img"/);
+  assert.match(styles, /\.issues-panel \.task-table-wrap \{ display: block;/);
+  assert.match(styles, /\.issues-panel \.issue-table \{ min-width: 1080px;/);
+});
+
+test("V177 refines note controls and sorts issues and task dialogs from creation date", async () => {
+  const [notesModule, notesApi, issuesModule, dashboard, styles] = await Promise.all([
+    source("app/project-notes-module.tsx"),
+    source("app/api/project-notes/route.ts"),
+    source("app/issues-module.tsx"),
+    source("app/task-dashboard.tsx"),
+    source("app/globals.css"),
+  ]);
+  assert.match(notesModule, /tableRect\.top - 9/);
+  assert.match(notesModule, /setTableHandlePosition\(null\)/);
+  assert.match(notesModule, /alignSelectedImage\("center"\)/);
+  assert.match(notesModule, /setEditorDirection\("rtl"\)/);
+  assert.match(notesModule, /Uploading image \{imageUploadProgress\}%/);
+  assert.match(notesApi, /const dirMatch = match\[3\]\.match/);
+  assert.match(issuesModule, /useState<\{ key: IssueSortKey; direction: "asc" \| "desc" \}>\(\{ key: "createdAt", direction: "desc" \}\)/);
+  assert.match(issuesModule, /interactive-sort-header/);
+  assert.match(dashboard, /type WindowTaskSortKey/);
+  assert.match(dashboard, /sortWindowTasks/);
+  assert.match(dashboard, /useWindowTaskTableSorting\("\.report-tasks-dialog"/);
+  assert.match(dashboard, /useWindowTaskTableSorting\("\.employee-tasks-dialog:not\(\.report-tasks-dialog\)"/);
+  assert.match(styles, /\.notes-image-align/);
 });
