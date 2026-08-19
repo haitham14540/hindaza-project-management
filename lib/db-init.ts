@@ -134,6 +134,18 @@ export async function ensureDatabase() {
         )
       `),
       d1.prepare(`
+        CREATE TABLE IF NOT EXISTS project_notes (
+          id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+          project_code TEXT NOT NULL,
+          title TEXT NOT NULL,
+          content_html TEXT DEFAULT '' NOT NULL,
+          created_by TEXT NOT NULL,
+          updated_by TEXT NOT NULL,
+          created_at TEXT DEFAULT CURRENT_TIMESTAMP NOT NULL,
+          updated_at TEXT DEFAULT CURRENT_TIMESTAMP NOT NULL
+        )
+      `),
+      d1.prepare(`
         CREATE TABLE IF NOT EXISTS notifications (
           id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
           recipient_email TEXT NOT NULL,
@@ -192,6 +204,12 @@ export async function ensureDatabase() {
       ),
       d1.prepare(
         "CREATE INDEX IF NOT EXISTS project_members_employee_idx ON project_members (employee_email)",
+      ),
+      d1.prepare(
+        "CREATE INDEX IF NOT EXISTS project_notes_project_updated_idx ON project_notes (project_code, updated_at)",
+      ),
+      d1.prepare(
+        "CREATE INDEX IF NOT EXISTS project_notes_creator_idx ON project_notes (created_by)",
       ),
       d1.prepare(
         "CREATE INDEX IF NOT EXISTS notifications_recipient_idx ON notifications (recipient_email)",

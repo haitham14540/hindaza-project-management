@@ -8,6 +8,7 @@ import {
   notifications,
   projectIssues,
   projectMembers,
+  projectNotes,
   projects,
   taskComments,
   taskAttachments,
@@ -22,11 +23,11 @@ import { recordActivity } from "@/lib/activity";
 export const dynamic = "force-dynamic";
 
 const APP_NAME = "HINDAZA Project Management";
-const SCHEMA_VERSION = 10;
+const SCHEMA_VERSION = 11;
 const MAX_BACKUP_BYTES = 20 * 1024 * 1024;
 const MAX_TABLE_ROWS = 100_000;
 const MAX_D1_BOUND_PARAMETERS = 100;
-const MAX_RESTORE_BATCH_STATEMENTS = 55;
+const MAX_RESTORE_BATCH_STATEMENTS = 65;
 
 class BackupValidationError extends Error {}
 
@@ -34,6 +35,7 @@ type BackupData = {
   users: Array<typeof users.$inferInsert>;
   projects: Array<typeof projects.$inferInsert>;
   projectMembers: Array<typeof projectMembers.$inferInsert>;
+  projectNotes: Array<typeof projectNotes.$inferInsert>;
   tasks: Array<typeof tasks.$inferInsert>;
   taskComments: Array<typeof taskComments.$inferInsert>;
   taskSubtasks: Array<typeof taskSubtasks.$inferInsert>;
@@ -146,7 +148,7 @@ function optionalNullablePositiveInteger(source: Record<string, unknown>, key: s
 
 function validateBackup(value: unknown): BackupData {
   const payload = record(value, "Backup");
-  if (payload.app !== APP_NAME || ![1, 2, 3, 4, 5, 6, 7, 8, 9, 10].includes(Number(payload.schemaVersion))) {
+  if (payload.app !== APP_NAME || ![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11].includes(Number(payload.schemaVersion))) {
     fail("This file is not a compatible HINDAZA backup.");
   }
   const data = record(payload.data, "data");
@@ -177,6 +179,17 @@ function validateBackup(value: unknown): BackupData {
     startDate: stringField(item, "startDate", 10),
     targetDate: stringField(item, "targetDate", 10),
     createdAt: stringField(item, "createdAt", 50, false),
+  }));
+
+  const restoredProjectNotes: BackupData["projectNotes"] = (Array.isArray(data.projectNotes) ? rows(data.projectNotes, "projectNotes") : []).map((item) => ({
+    id: positiveInteger(item, "id"),
+    projectCode: stringField(item, "projectCode", 80, false),
+    title: stringField(item, "title", 180, false),
+    contentHtml: stringField(item, "contentHtml", 250_000),
+    createdBy: emailField(item, "createdBy"),
+    updatedBy: emailField(item, "updatedBy"),
+    createdAt: stringField(item, "createdAt", 50, false),
+    updatedAt: stringField(item, "updatedAt", 50, false),
   }));
 
   const restoredTasks: BackupData["tasks"] = rows(data.tasks, "tasks").map((item) => ({
@@ -338,11 +351,13 @@ function validateBackup(value: unknown): BackupData {
   }));
 
   const projectIds = new Set(restoredProjects.map((project) => project.id));
+  const projectCodes = new Set(restoredProjects.map((project) => project.code));
   const taskIds = new Set(restoredTasks.map((task) => task.id));
   const issueIds = new Set(restoredIssues.map((issue) => issue.id));
   ensureUnique(restoredUsers, (user) => user.email, "user email");
   ensureUnique(restoredProjects, (project) => project.id!, "project id");
   ensureUnique(restoredProjects, (project) => project.code, "project code");
+  ensureUnique(restoredProjectNotes, (note) => note.id!, "project note id");
   ensureUnique(restoredTasks, (task) => task.id!, "task id");
   ensureUnique(restoredProjectMembers, (membership) => membership.id!, "project membership id");
   ensureUnique(restoredProjectMembers, (membership) => `${membership.projectId}:${membership.employeeEmail}`, "project membership");
@@ -361,6 +376,7 @@ function validateBackup(value: unknown): BackupData {
   ensureUnique(restoredIssueComments, (comment) => comment.id!, "issue comment id");
   ensureUnique(restoredActivityLogs, (entry) => entry.id!, "activity log id");
   if (restoredProjectMembers.some((membership) => !projectIds.has(membership.projectId))) fail("Backup contains an invalid project membership.");
+  if (restoredProjectNotes.some((note) => !projectCodes.has(note.projectCode))) fail("Backup contains a note for a missing project.");
   if (restoredComments.some((comment) => !taskIds.has(comment.taskId))) fail("Backup contains a note for a missing task.");
   if (restoredTimeEntries.some((entry) => !taskIds.has(entry.taskId))) fail("Backup contains a time entry for a missing task.");
   const subtaskIds = new Set(restoredSubtasks.map((subtask) => subtask.id));
@@ -376,6 +392,7 @@ function validateBackup(value: unknown): BackupData {
     users: restoredUsers,
     projects: restoredProjects,
     projectMembers: restoredProjectMembers,
+    projectNotes: restoredProjectNotes,
     tasks: restoredTasks,
     taskComments: restoredComments,
     taskSubtasks: restoredSubtasks,
@@ -414,10 +431,11 @@ export async function GET(request: Request) {
     if (currentUser.role !== "owner") return Response.json({ error: "Owner access required." }, { status: 403 });
     const db = await getDb();
     await recordActivity(db, currentUser, { action: "downloaded", entityType: "backup", entityLabel: "Full system backup", details: "Owner downloaded a backup" });
-    const [userRows, projectRows, membershipRows, taskRows, commentRows, subtaskRows, taskAttachmentRows, timeRows, notificationRows, issueRows, issueAttachmentRows, issueCategoryRows, issueCommentRows, activityRows] = await db.batch([
+    const [userRows, projectRows, membershipRows, projectNoteRows, taskRows, commentRows, subtaskRows, taskAttachmentRows, timeRows, notificationRows, issueRows, issueAttachmentRows, issueCategoryRows, issueCommentRows, activityRows] = await db.batch([
       db.select().from(users).orderBy(asc(users.createdAt), asc(users.email)),
       db.select().from(projects).orderBy(asc(projects.id)),
       db.select().from(projectMembers).orderBy(asc(projectMembers.id)),
+      db.select().from(projectNotes).orderBy(asc(projectNotes.id)),
       db.select().from(tasks).orderBy(asc(tasks.id)),
       db.select().from(taskComments).orderBy(asc(taskComments.id)),
       db.select().from(taskSubtasks).orderBy(asc(taskSubtasks.id)),
@@ -434,6 +452,7 @@ export async function GET(request: Request) {
       users: userRows.map((user) => ({ ...user, profileImageKey: "" })),
       projects: projectRows,
       projectMembers: membershipRows,
+      projectNotes: projectNoteRows,
       tasks: taskRows,
       taskComments: commentRows,
       taskSubtasks: subtaskRows,
@@ -504,12 +523,14 @@ export async function POST(request: Request) {
       d1.prepare("DELETE FROM task_comments"),
       d1.prepare("DELETE FROM notifications"),
       d1.prepare("DELETE FROM project_members"),
+      d1.prepare("DELETE FROM project_notes"),
       d1.prepare("DELETE FROM tasks"),
       d1.prepare("DELETE FROM projects"),
       d1.prepare("DELETE FROM sessions"),
       d1.prepare("DELETE FROM users"),
       ...insertStatements(d1, "users", ["email", "display_name", "role", "discipline", "password_hash", "password_salt", "profile_image_key", "active", "created_at"], data.users, (user) => [user.email, user.displayName, user.role, user.discipline, user.passwordHash, user.passwordSalt, user.profileImageKey ?? "", user.active, user.createdAt]),
       ...insertStatements(d1, "projects", ["id", "code", "name", "client", "status", "start_date", "target_date", "created_at"], data.projects, (project) => [project.id!, project.code, project.name, project.client, project.status, project.startDate, project.targetDate, project.createdAt]),
+      ...insertStatements(d1, "project_notes", ["id", "project_code", "title", "content_html", "created_by", "updated_by", "created_at", "updated_at"], data.projectNotes, (note) => [note.id!, note.projectCode, note.title, note.contentHtml, note.createdBy, note.updatedBy, note.createdAt, note.updatedAt]),
       ...insertStatements(d1, "tasks", ["id", "start_date", "task_date", "employee_name", "employee_email", "project", "title", "expected_output", "priority", "planned_hours", "start_time", "end_time", "actual_hours", "status", "manager_check", "manager_note", "visibility", "submitted_to_manager", "originated_by_email", "originated_by_name", "accepted_by_email", "accepted_by_name", "work_cycle", "created_by", "created_at", "updated_at"], data.tasks, (task) => [task.id!, task.startDate ?? "", task.taskDate, task.employeeName, task.employeeEmail, task.project, task.title, task.expectedOutput, task.priority, task.plannedHours, task.startTime, task.endTime, task.actualHours, task.status, task.managerCheck, task.managerNote, task.visibility, task.submittedToManager, task.originatedByEmail ?? "", task.originatedByName ?? "", task.acceptedByEmail ?? "", task.acceptedByName ?? "", task.workCycle ?? 1, task.createdBy, task.createdAt, task.updatedAt]),
       ...insertStatements(d1, "project_members", ["id", "project_id", "employee_email", "is_project_manager", "created_at"], data.projectMembers, (membership) => [membership.id!, membership.projectId, membership.employeeEmail, membership.isProjectManager, membership.createdAt]),
       ...insertStatements(d1, "task_comments", ["id", "task_id", "author_email", "author_name", "body", "created_at"], data.taskComments, (comment) => [comment.id!, comment.taskId, comment.authorEmail, comment.authorName, comment.body, comment.createdAt]),

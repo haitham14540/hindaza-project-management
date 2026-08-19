@@ -5,6 +5,7 @@ import { CSSProperties, ChangeEvent, ClipboardEvent, DragEvent, FormEvent, Point
 import { IssueReportPanel, IssuesModule, type IssuesModuleHandle } from "./issues-module";
 import { useAppConfirm } from "./confirm-dialog";
 import PasswordInput from "./password-input";
+import ProjectNotesModule from "./project-notes-module";
 
 type Discipline = "Manager" | "Architecture" | "ID" | "Structure" | "Mechanical" | "Electrical" | "Infrastructure";
 
@@ -245,10 +246,14 @@ type TeamMetric = {
 
 const tabValues: Tab[] = ["overview", "tasks", "rfi", "issues", "projects", "team", "reports", "activity"];
 const activeTabStorageKey = "hindaza-project-management-active-tab";
+const sidebarStateStorageKey = "hindaza-project-management-sidebar";
+const workspaceUiSessionKey = "hindaza-project-management-ui-state-v2";
+const workspaceScrollSessionKey = "hindaza-project-management-scroll-v1";
 
 function tabFromLocation(): Tab {
   if (typeof window === "undefined") return "overview";
-  const value = new URL(window.location.href).searchParams.get("view");
+  const requested = new URL(window.location.href).searchParams.get("view");
+  const value = requested || window.localStorage.getItem(activeTabStorageKey);
   return tabValues.includes(value as Tab) ? value as Tab : "overview";
 }
 
@@ -629,6 +634,7 @@ export default function TaskDashboard() {
   const { confirm, confirmDialog } = useAppConfirm();
   const [tab, setTab] = useState<Tab>("overview");
   const [tabReady, setTabReady] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [selectedProjectCode, setSelectedProjectCode] = useState("");
   const [projectWorkspaceTab, setProjectWorkspaceTab] = useState<ProjectWorkspaceTab>("tasks");
   const [tasks, setTasks] = useState<Task[]>([]);
@@ -731,6 +737,7 @@ export default function TaskDashboard() {
   const [reportScope, setReportScope] = useState("all");
   const [reportDialogMetric, setReportDialogMetric] = useState<ReportMetric | null>(null);
   const [reportRowKey, setReportRowKey] = useState("");
+  const [uiPreferencesReady, setUiPreferencesReady] = useState(false);
 
   const taskCommentCounts = useMemo(() => {
     const counts = new Map<number, number>();
@@ -934,10 +941,72 @@ export default function TaskDashboard() {
       const initialProject = url.searchParams.get("project") || "";
       const initialSection = url.searchParams.get("section");
       setSelectedProjectCode(initialProject);
-      if (initialSection === "tasks" || initialSection === "issues" || initialSection === "rfi") setProjectWorkspaceTab(initialSection);
+      if (initialSection === "tasks" || initialSection === "issues" || initialSection === "rfi" || initialSection === "notes" || initialSection === "mom") setProjectWorkspaceTab(initialSection);
       url.searchParams.set("view", initialTab);
       window.history.replaceState({ ...window.history.state, hindazaTab: initialTab }, "", url);
       setTabReady(true);
+    }, 0);
+    return () => window.clearTimeout(timeout);
+  }, []);
+
+  useEffect(() => {
+    const timeout = window.setTimeout(() => {
+      try {
+        const saved = JSON.parse(window.sessionStorage.getItem(workspaceUiSessionKey) || "{}") as Record<string, unknown>;
+        if (typeof saved.search === "string") setSearch(saved.search);
+        if (typeof saved.employeeFilter === "string") setEmployeeFilter(saved.employeeFilter);
+        if (typeof saved.projectFilter === "string") setProjectFilter(saved.projectFilter);
+        if (typeof saved.statusFilter === "string") setStatusFilter(saved.statusFilter);
+        if (typeof saved.reviewFilter === "string") setReviewFilter(saved.reviewFilter);
+        if (typeof saved.dueDateFilter === "string") setDueDateFilter(saved.dueDateFilter);
+        if (typeof saved.disciplineFilter === "string") setDisciplineFilter(saved.disciplineFilter);
+        if (typeof saved.teamSearch === "string") setTeamSearch(saved.teamSearch);
+        if (typeof saved.teamDisciplineFilter === "string") setTeamDisciplineFilter(saved.teamDisciplineFilter);
+        if (typeof saved.teamRoleFilter === "string") setTeamRoleFilter(saved.teamRoleFilter);
+        if (saved.teamView === "table" || saved.teamView === "cards") setTeamView(saved.teamView);
+        if (typeof saved.projectSearch === "string") setProjectSearch(saved.projectSearch);
+        if (typeof saved.projectStatusFilter === "string") setProjectStatusFilter(saved.projectStatusFilter);
+        if (saved.projectView === "table" || saved.projectView === "cards") setProjectView(saved.projectView);
+        if (saved.reportPeriod === "week" || saved.reportPeriod === "month" || saved.reportPeriod === "custom") setReportPeriod(saved.reportPeriod);
+        if (saved.reportType === "tasks" || saved.reportType === "issues" || saved.reportType === "rfi") setReportType(saved.reportType);
+        if (saved.reportGroup === "project" || saved.reportGroup === "employee") setReportGroup(saved.reportGroup);
+        if (typeof saved.reportAnchor === "string") setReportAnchor(saved.reportAnchor);
+        if (typeof saved.reportCustomStart === "string") setReportCustomStart(saved.reportCustomStart);
+        if (typeof saved.reportCustomEnd === "string") setReportCustomEnd(saved.reportCustomEnd);
+        if (typeof saved.reportScope === "string") setReportScope(saved.reportScope);
+      } catch {
+        window.sessionStorage.removeItem(workspaceUiSessionKey);
+      }
+      setUiPreferencesReady(true);
+    }, 0);
+    return () => window.clearTimeout(timeout);
+  }, []);
+
+  useEffect(() => {
+    if (!uiPreferencesReady) return;
+    window.sessionStorage.setItem(workspaceUiSessionKey, JSON.stringify({ search, employeeFilter, projectFilter, statusFilter, reviewFilter, dueDateFilter, disciplineFilter, teamSearch, teamDisciplineFilter, teamRoleFilter, teamView, projectSearch, projectStatusFilter, projectView, reportPeriod, reportType, reportGroup, reportAnchor, reportCustomStart, reportCustomEnd, reportScope }));
+  }, [uiPreferencesReady, search, employeeFilter, projectFilter, statusFilter, reviewFilter, dueDateFilter, disciplineFilter, teamSearch, teamDisciplineFilter, teamRoleFilter, teamView, projectSearch, projectStatusFilter, projectView, reportPeriod, reportType, reportGroup, reportAnchor, reportCustomStart, reportCustomEnd, reportScope]);
+
+  useEffect(() => {
+    if (!tabReady || loading) return;
+    const savedScroll = Number(window.sessionStorage.getItem(workspaceScrollSessionKey));
+    const restore = window.requestAnimationFrame(() => window.scrollTo({ top: Number.isFinite(savedScroll) ? savedScroll : 0, behavior: "instant" }));
+    let pending = 0;
+    const rememberScroll = () => {
+      window.cancelAnimationFrame(pending);
+      pending = window.requestAnimationFrame(() => window.sessionStorage.setItem(workspaceScrollSessionKey, String(window.scrollY)));
+    };
+    window.addEventListener("scroll", rememberScroll, { passive: true });
+    return () => {
+      window.cancelAnimationFrame(restore);
+      window.cancelAnimationFrame(pending);
+      window.removeEventListener("scroll", rememberScroll);
+    };
+  }, [tabReady, loading]);
+
+  useEffect(() => {
+    const timeout = window.setTimeout(() => {
+      setSidebarCollapsed(window.localStorage.getItem(sidebarStateStorageKey) === "collapsed");
     }, 0);
     return () => window.clearTimeout(timeout);
   }, []);
@@ -2578,14 +2647,15 @@ export default function TaskDashboard() {
   const accountProfileProgressStyle = { "--profile-upload-progress": `${profileImageProgress * 3.6}deg` } as CSSProperties;
 
   return (
-    <div className="app-shell">
+    <div className={`app-shell${sidebarCollapsed ? " sidebar-collapsed" : ""}`}>
       <aside className="sidebar" aria-label="التنقل الرئيسي">
         <a className="brand-block" href="https://pm.hindaza.com/" aria-label="Go to HINDAZA Project Management home"><img src="/hindaza-logo.png" alt="HINDAZA Engineering BIM" /><span>PROJECT MANAGEMENT</span></a>
         <nav className="nav-list">
-          <button className={tab === "overview" ? "active" : ""} onClick={() => setTab("overview")} aria-label="Open Overview"><span className="nav-icon">◫</span><span><strong>Overview</strong><small dir="rtl">نظرة عامة</small></span></button>
-          <button className={tab === "projects" ? "active" : ""} onClick={openProjectDirectory} aria-label="Open Project Management"><span className="nav-icon has-image"><img src="/icons/projects-v2.png" alt="" aria-hidden="true" /></span><span><strong>Project</strong><small dir="rtl">المشاريع</small></span></button>
-          {navItems.map((item) => <button key={item.key} className={tab === item.key ? "active" : ""} onClick={() => setTab(item.key)} aria-label={`Open ${item.en}`}><span className={`nav-icon${item.icon.startsWith("/") ? " has-image" : ""}`}>{item.icon.startsWith("/") ? <img src={item.icon} alt="" aria-hidden="true" /> : item.icon}</span><span><strong>{item.en}</strong><small dir="rtl">{item.ar}</small></span></button>)}
+          <button className={tab === "overview" ? "active" : ""} onClick={() => setTab("overview")} aria-label="Overview" title="Overview"><span className="nav-icon">◫</span><span><strong>Overview</strong><small dir="rtl">نظرة عامة</small></span></button>
+          <button className={tab === "projects" ? "active" : ""} onClick={openProjectDirectory} aria-label="Projects" title="Projects"><span className="nav-icon has-image"><img src="/icons/projects-v2.png" alt="" aria-hidden="true" /></span><span><strong>Project</strong><small dir="rtl">المشاريع</small></span></button>
+          {navItems.map((item) => <button key={item.key} className={tab === item.key ? "active" : ""} onClick={() => setTab(item.key)} aria-label={item.en} title={item.en}><span className={`nav-icon${item.icon.startsWith("/") ? " has-image" : ""}`}>{item.icon.startsWith("/") ? <img src={item.icon} alt="" aria-hidden="true" /> : item.icon}</span><span><strong>{item.en}</strong><small dir="rtl">{item.ar}</small></span></button>)}
         </nav>
+        <button type="button" className="sidebar-collapse-toggle" onClick={() => { const next = !sidebarCollapsed; setSidebarCollapsed(next); window.localStorage.setItem(sidebarStateStorageKey, next ? "collapsed" : "expanded"); }} aria-label={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"} title={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}><span aria-hidden="true">{sidebarCollapsed ? "›" : "‹"}</span></button>
         <div className="sidebar-account" ref={accountMenuRef}>
           {accountMenuOpen && <div className="account-menu">
             <div className="account-menu-title"><strong>{currentUser?.displayName}</strong><span dir="ltr">{currentUser?.email}</span><em>{currentUser ? roleLabel(currentUser.role) : ""}</em></div>
@@ -2601,7 +2671,7 @@ export default function TaskDashboard() {
             <button className="account-logout" onClick={logout}><ButtonLabel en="Logout" ar="تسجيل الخروج" /></button>
           </div>}
           <div className="sidebar-user">
-            <button type="button" className={`sidebar-user-trigger${accountMenuOpen ? " open" : ""}`} onClick={() => { setNotificationMenuOpen(false); setAccountMenuOpen((open) => !open); }} aria-label="Account details" aria-expanded={accountMenuOpen}>
+            <button type="button" className={`sidebar-user-trigger${accountMenuOpen ? " open" : ""}`} onClick={() => { setNotificationMenuOpen(false); setAccountMenuOpen((open) => !open); }} aria-label="Account" title="Account" aria-expanded={accountMenuOpen}>
               <span className="sidebar-account-photo"><span className={`avatar${currentUser?.profileImageKey ? " has-image" : ""}`}>{currentUser?.profileImageKey ? <img src={`/api/profile-image?v=${encodeURIComponent(currentUser.profileImageKey)}`} alt={currentUser.displayName} /> : initials(currentUser?.displayName || "H")}</span>{profileImageBusy && profileImageProgress > 0 && <span className="sidebar-photo-progress" style={accountProfileProgressStyle} role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={profileImageProgress} aria-label={`Uploading profile image ${profileImageProgress}%`}><span>{profileImageProgress}%</span></span>}</span>
               <span className="sidebar-user-copy"><strong>{currentUser?.displayName || "جاري التحميل"}</strong><span>{currentUser ? roleLabel(currentUser.role) : ""}</span></span>
             </button>
@@ -2670,7 +2740,14 @@ export default function TaskDashboard() {
           </>}
           {projectWorkspaceTab === "issues" && currentUser && <IssuesModule key={selectedProject.code} ref={issuesModuleRef} currentUser={currentUser} users={users} projects={[selectedProject]} lockedProjectCode={selectedProject.code} onTaskCreated={(task) => setTasks((current) => [task as Task, ...current])} onIssueChanged={syncIssueLink} onOpenTask={(id) => void openLinkedTask(id)} onOpenProjectSettings={(project) => openProjectFromTask(project as Project)} onToast={setToast} />}
           {projectWorkspaceTab === "rfi" && <section className="panel module-placeholder"><div className="module-icon">RFI</div><p>REQUEST FOR INFORMATION</p><h2>{selectedProject.name}</h2><span>This RFI workspace is limited to {selectedProject.code}.</span><div className="module-status">Ready for configuration</div></section>}
-          {projectWorkspaceTab === "notes" && <section className="panel module-placeholder"><div className="module-icon">N</div><p>PROJECT NOTES</p><h2>{selectedProject.name}</h2><span>The Notes workspace will be configured in a future version.</span><div className="module-status">Coming soon</div></section>}
+          {projectWorkspaceTab === "notes" && currentUser && <ProjectNotesModule
+            key={selectedProject.code}
+            projects={projects}
+            projectCode={selectedProject.code}
+            currentUser={currentUser}
+            onSelectProject={(projectCode) => openProjectWorkspace(projectCode, "notes")}
+            onToast={setToast}
+          />}
           {projectWorkspaceTab === "mom" && <section className="panel module-placeholder"><div className="module-icon">M</div><p>MINUTES OF MEETING</p><h2>{selectedProject.name}</h2><span>The MOM workspace will be configured in a future version.</span><div className="module-status">Coming soon</div></section>}
         </section>}
 
@@ -2756,6 +2833,56 @@ export default function TaskDashboard() {
   );
 }
 
+type WindowTaskSortKey = "title" | "employee" | "createdBy" | "createdAt" | "dueDate" | "status" | "managerReview" | "hours" | "indicator";
+type WindowTaskSort = { key: WindowTaskSortKey; direction: "asc" | "desc" };
+
+function sortWindowTasks(tasks: Task[], sort: WindowTaskSort, timeEntriesByTaskId: Map<number, TaskTimeEntry[]>, clock: number) {
+  const value = (task: Task): string | number => {
+    if (sort.key === "title") return task.title;
+    if (sort.key === "employee") return task.employeeName;
+    if (sort.key === "createdBy") return task.createdByName || task.createdBy || "";
+    if (sort.key === "createdAt") return task.createdAt;
+    if (sort.key === "dueDate") return task.taskDate;
+    if (sort.key === "status") return tableStatusLabel[task.status];
+    if (sort.key === "managerReview") return tableCheckLabel[task.managerCheck];
+    if (sort.key === "hours") return taskLoggedHours(task, timeEntriesByTaskId.get(task.id) || [], clock);
+    return taskFlag(task).label;
+  };
+  return [...tasks].sort((a, b) => {
+    const first = value(a);
+    const second = value(b);
+    const result = typeof first === "number" && typeof second === "number"
+      ? first - second
+      : String(first).localeCompare(String(second), undefined, { numeric: true, sensitivity: "base" });
+    return (sort.direction === "asc" ? result : -result) || b.id - a.id;
+  });
+}
+
+function useWindowTaskTableSorting(selector: string, sort: WindowTaskSort, setSort: (updater: (current: WindowTaskSort) => WindowTaskSort) => void, includeEmployee: boolean, rowCount: number) {
+  useEffect(() => {
+    const keys: WindowTaskSortKey[] = includeEmployee
+      ? ["title", "employee", "createdBy", "createdAt", "dueDate", "status", "managerReview", "hours", "indicator"]
+      : ["title", "createdBy", "createdAt", "dueDate", "status", "managerReview", "hours", "indicator"];
+    const headers = Array.from(document.querySelectorAll<HTMLTableCellElement>(`${selector} .employee-task-table thead th`));
+    const cleanups = headers.map((header, index) => {
+      const key = keys[index % keys.length];
+      if (!key) return () => undefined;
+      header.classList.add("interactive-sort-header");
+      header.tabIndex = 0;
+      header.setAttribute("role", "button");
+      header.setAttribute("aria-sort", sort.key === key ? sort.direction === "asc" ? "ascending" : "descending" : "none");
+      header.dataset.sortMarker = sort.key === key ? sort.direction === "asc" ? "▲" : "▼" : "↕";
+      const activate = () => setSort((current) => current.key === key ? { key, direction: current.direction === "asc" ? "desc" : "asc" } : { key, direction: key === "createdAt" ? "desc" : "asc" });
+      const click = () => activate();
+      const keydown = (event: KeyboardEvent) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); activate(); } };
+      header.addEventListener("click", click);
+      header.addEventListener("keydown", keydown);
+      return () => { header.removeEventListener("click", click); header.removeEventListener("keydown", keydown); };
+    });
+    return () => cleanups.forEach((cleanup) => cleanup());
+  }, [selector, sort, setSort, includeEmployee, rowCount]);
+}
+
 function TaskRecordIndicators({ task }: { task: Task }) {
   const subtasks = Number(task.subtaskCount || 0);
   const notes = Number(task.commentCount || 0);
@@ -2770,6 +2897,7 @@ function TaskRecordIndicators({ task }: { task: Task }) {
 
 function ReportTasksDialog({ metric, title, groupBy, tasks, projects, users, timeEntries, clock, currentUser, updateCompletion, completionSavingTaskId, projectCode = "", employee = null, hideEmployeeColumn = false, onOpenProject, onProjectSettings, onEmployeeSettings, onClose, onOpenTask }: { metric: ReportMetric; title?: string; groupBy: "project" | "employee"; tasks: Task[]; projects: Project[]; users: User[]; timeEntries: TaskTimeEntry[]; clock: number; currentUser: User | null; updateCompletion: (taskId: number, completionPercent: number) => void; completionSavingTaskId: number | null; projectCode?: string; employee?: User | null; hideEmployeeColumn?: boolean; onOpenProject?: (projectCode: string) => void; onProjectSettings?: (project: Project) => void; onEmployeeSettings?: (user: User) => void; onClose: () => void; onOpenTask: (task: Task) => void; }) {
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(() => new Set());
+  const [taskSort, setTaskSort] = useState<WindowTaskSort>({ key: "createdAt", direction: "desc" });
   const [employeeFilter, setEmployeeFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState("all");
   const [reviewFilter, setReviewFilter] = useState("all");
@@ -2788,7 +2916,8 @@ function ReportTasksDialog({ metric, title, groupBy, tasks, projects, users, tim
   const taskDisciplines = useMemo(() => Array.from(new Set(tasks.map((task) => task.employeeDiscipline).filter(Boolean))).sort(), [tasks]);
   const timeEntriesByTaskId = useMemo(() => rowsByTaskId(timeEntries), [timeEntries]);
   const activeTaskIds = useMemo(() => new Set(timeEntries.filter((entry) => !entry.endedAt).map((entry) => entry.taskId)), [timeEntries]);
-  const visibleTasks = useMemo(() => tasks.filter((task) => (employeeFilter === "all" || task.employeeName === employeeFilter) && matchesEmployeeStatus(task.status, statusFilter) && (reviewFilter === "all" || task.managerCheck === reviewFilter) && (disciplineFilter === "all" || task.employeeDiscipline === disciplineFilter) && (!dueDateFilter || task.taskDate === dueDateFilter)), [tasks, employeeFilter, statusFilter, reviewFilter, disciplineFilter, dueDateFilter]);
+  const visibleTasks = useMemo(() => sortWindowTasks(tasks.filter((task) => (employeeFilter === "all" || task.employeeName === employeeFilter) && matchesEmployeeStatus(task.status, statusFilter) && (reviewFilter === "all" || task.managerCheck === reviewFilter) && (disciplineFilter === "all" || task.employeeDiscipline === disciplineFilter) && (!dueDateFilter || task.taskDate === dueDateFilter)), taskSort, timeEntriesByTaskId, clock), [tasks, employeeFilter, statusFilter, reviewFilter, disciplineFilter, dueDateFilter, taskSort, timeEntriesByTaskId, clock]);
+  useWindowTaskTableSorting(".report-tasks-dialog", taskSort, setTaskSort, !hideEmployeeColumn, visibleTasks.length);
   const groups = useMemo(() => {
     const grouped = new Map<string, Task[]>();
     visibleTasks.forEach((task) => {
@@ -2861,11 +2990,13 @@ function ReportTasksDialog({ metric, title, groupBy, tasks, projects, users, tim
 
 function EmployeeTasksDialog({ employee, tasks, projects, timeEntries, clock, currentUser, updateCompletion, completionSavingTaskId, onClose, onOpenTask, onEditEmployee }: { employee: User | null; tasks: Task[]; projects: Project[]; timeEntries: TaskTimeEntry[]; clock: number; currentUser: User | null; updateCompletion: (taskId: number, completionPercent: number) => void; completionSavingTaskId: number | null; onClose: () => void; onOpenTask: (task: Task) => void; onEditEmployee: (user: User) => void; }) {
   const [showAll, setShowAll] = useState(false);
+  const [taskSort, setTaskSort] = useState<WindowTaskSort>({ key: "createdAt", direction: "desc" });
   const [collapsedProjects, setCollapsedProjects] = useState<Set<string>>(() => new Set());
   const projectGroupsRef = useRef<HTMLDivElement>(null);
   const timeEntriesByTaskId = useMemo(() => rowsByTaskId(timeEntries), [timeEntries]);
   const activeTaskIds = useMemo(() => new Set(timeEntries.filter((entry) => !entry.endedAt).map((entry) => entry.taskId)), [timeEntries]);
-  const visibleTasks = showAll ? tasks : tasks.filter((task) => task.managerCheck !== "approved");
+  const visibleTasks = useMemo(() => sortWindowTasks(showAll ? tasks : tasks.filter((task) => task.managerCheck !== "approved"), taskSort, timeEntriesByTaskId, clock), [showAll, tasks, taskSort, timeEntriesByTaskId, clock]);
+  useWindowTaskTableSorting(".employee-tasks-dialog:not(.report-tasks-dialog)", taskSort, setTaskSort, false, visibleTasks.length);
   const groups = useMemo(() => {
     const grouped = new Map<string, Task[]>();
     visibleTasks.forEach((task) => grouped.set(task.project, [...(grouped.get(task.project) || []), task]));
@@ -3088,6 +3219,8 @@ function TaskProgressControl({ task, canEdit, busy, onChange }: { task: Task; ca
 
 type TaskViewMode = "table" | "kanban" | "calendar" | "gantt";
 const taskViewModeSessionKey = "hindaza-task-view-mode";
+const taskCalendarAnchorSessionKey = "hindaza-task-calendar-anchor";
+const taskGanttAnchorSessionKey = "hindaza-task-gantt-anchor";
 
 function TaskViewIcon({ view }: { view: TaskViewMode }) {
   if (view === "table") return <svg className="task-view-icon" viewBox="0 0 24 20" aria-hidden="true"><rect x="1.5" y="1.5" width="21" height="17" rx="2.5" /><path d="M1.5 6.5h21M1.5 11.5h21M8 1.5v17" /></svg>;
@@ -3224,7 +3357,6 @@ function TaskCalendarView({ tasks: rows, anchor, setAnchor, openTask }: { tasks:
   const gridStart = new Date(monthStart);
   gridStart.setDate(monthStart.getDate() - ((monthStart.getDay() + 6) % 7));
   const days = Array.from({ length: 42 }, (_, index) => addTaskViewDays(gridStart, index));
-  const gridEnd = days.at(-1)!;
   const periods = rows.map((task) => ({ task, ...taskViewRange(task) }));
   const monthLabel = new Intl.DateTimeFormat("en-GB", { month: "long", year: "numeric" }).format(monthStart);
   const taskCountForDate = (date: Date) => periods.filter(({ start, due }) => start <= date && due >= date).length;
@@ -3321,11 +3453,17 @@ function TaskGanttView({ tasks: rows, anchor, setAnchor, openTask, canEditTask, 
   </div></div></div>;
 }
 
+type TaskSortKey = "title" | "employee" | "createdBy" | "discipline" | "createdAt" | "startDate" | "dueDate" | "priority" | "hours" | "status" | "managerReview" | "indicator" | "issueLink";
+
 function TaskTable(props: TaskTableProps) {
-  const [viewMode, setViewMode] = useState<TaskViewMode>("table");
-  const [viewModeRestored, setViewModeRestored] = useState(false);
-  const [calendarAnchor, setCalendarAnchor] = useState(() => `${localToday().slice(0, 7)}-01`);
-  const [ganttAnchor, setGanttAnchor] = useState(localToday);
+  const [viewMode, setViewMode] = useState<TaskViewMode>(() => {
+    if (typeof window === "undefined") return "table";
+    const saved = window.sessionStorage.getItem(taskViewModeSessionKey);
+    return saved === "kanban" || saved === "calendar" || saved === "gantt" ? saved : "table";
+  });
+  const [calendarAnchor, setCalendarAnchor] = useState(() => typeof window === "undefined" ? `${localToday().slice(0, 7)}-01` : window.sessionStorage.getItem(taskCalendarAnchorSessionKey) || `${localToday().slice(0, 7)}-01`);
+  const [ganttAnchor, setGanttAnchor] = useState(() => typeof window === "undefined" ? localToday() : window.sessionStorage.getItem(taskGanttAnchorSessionKey) || localToday());
+  const [taskSort, setTaskSort] = useState<{ key: TaskSortKey; direction: "asc" | "desc" }>({ key: "createdAt", direction: "desc" });
   const managementCanReorderKanban = props.currentUser?.role === "owner" || props.currentUser?.role === "manager";
   const employeeStatusKanban = props.currentUser?.role === "member";
   const filtersActive = Boolean(props.search.trim()) || props.employeeFilter !== "all" || (!props.lockedProjectCode && props.projectFilter !== "all") || props.statusFilter !== "all" || props.reviewFilter !== "all" || Boolean(props.dueDateFilter) || (props.showDisciplineColumn && props.disciplineFilter !== "all");
@@ -3335,14 +3473,37 @@ function TaskTable(props: TaskTableProps) {
   const issueLinkByTaskId = useMemo(() => new Map(props.issueLinks.map((link) => [link.convertedTaskId, link])), [props.issueLinks]);
   const usersByEmail = useMemo(() => new Map(props.users.map((user) => [user.email.toLowerCase(), user])), [props.users]);
   const usersByName = useMemo(() => new Map(props.users.map((user) => [user.displayName, user])), [props.users]);
+  const sortedTasks = useMemo(() => {
+    const priorityRank: Record<Task["priority"], number> = { low: 1, medium: 2, high: 3 };
+    const valueFor = (task: Task, key: TaskSortKey): string | number => {
+      if (key === "title") return task.title;
+      if (key === "employee") return task.employeeName;
+      if (key === "createdBy") return task.createdByName || task.createdBy;
+      if (key === "discipline") return task.employeeDiscipline;
+      if (key === "createdAt") return task.createdAt;
+      if (key === "startDate") return task.startDate || "";
+      if (key === "dueDate") return task.taskDate || "";
+      if (key === "priority") return priorityRank[task.priority];
+      if (key === "hours") return taskLoggedHours(task, timeEntriesByTaskId.get(task.id) || [], props.clock);
+      if (key === "status") return tableStatusLabel[task.status];
+      if (key === "managerReview") return tableCheckLabel[task.managerCheck];
+      if (key === "indicator") return taskFlag(task).label;
+      return issueLinkByTaskId.get(task.id)?.issueNumber || "";
+    };
+    const collator = new Intl.Collator("en", { numeric: true, sensitivity: "base" });
+    return props.tasks.map((task, index) => ({ task, index })).sort((left, right) => {
+      const leftValue = valueFor(left.task, taskSort.key);
+      const rightValue = valueFor(right.task, taskSort.key);
+      const comparison = typeof leftValue === "number" && typeof rightValue === "number" ? leftValue - rightValue : collator.compare(String(leftValue), String(rightValue));
+      return comparison === 0 ? left.index - right.index : taskSort.direction === "asc" ? comparison : -comparison;
+    }).map(({ task }) => task);
+  }, [props.tasks, props.clock, taskSort, timeEntriesByTaskId, issueLinkByTaskId]);
+  const sortHeader = (key: TaskSortKey, label: string) => <th aria-sort={taskSort.key === key ? taskSort.direction === "asc" ? "ascending" : "descending" : "none"}><button type="button" className={`task-sort-header${taskSort.key === key ? " active" : ""}`} onClick={() => setTaskSort((current) => current.key === key ? { key, direction: current.direction === "asc" ? "desc" : "asc" } : { key, direction: key === "createdAt" ? "desc" : "asc" })}>{label}<span aria-hidden="true">{taskSort.key === key ? taskSort.direction === "asc" ? "▲" : "▼" : "↕"}</span></button></th>;
   useEffect(() => {
-    const saved = window.sessionStorage.getItem(taskViewModeSessionKey);
-    if (saved === "table" || saved === "kanban" || saved === "calendar" || saved === "gantt") setViewMode(saved);
-    setViewModeRestored(true);
-  }, []);
-  useEffect(() => {
-    if (viewModeRestored) window.sessionStorage.setItem(taskViewModeSessionKey, viewMode);
-  }, [viewMode, viewModeRestored]);
+    window.sessionStorage.setItem(taskViewModeSessionKey, viewMode);
+    window.sessionStorage.setItem(taskCalendarAnchorSessionKey, calendarAnchor);
+    window.sessionStorage.setItem(taskGanttAnchorSessionKey, ganttAnchor);
+  }, [viewMode, calendarAnchor, ganttAnchor]);
   const clearFilters = () => {
     props.setSearch("");
     props.setEmployeeFilter("all");
@@ -3353,8 +3514,8 @@ function TaskTable(props: TaskTableProps) {
     props.setDisciplineFilter("all");
   };
   return <section className="panel task-results-panel">
-    <div className="filters task-filters-with-views"><div className="task-filter-cluster"><label className="search-box task-search-box"><span>⌕</span><input value={props.search} onChange={(event) => props.setSearch(event.target.value)} placeholder={props.lockedProjectCode ? "Search tasks..." : "Search tasks or projects..."} /></label>{props.showEmployeeFilter && <select value={props.employeeFilter} onChange={(event) => props.setEmployeeFilter(event.target.value)} aria-label="Filter by employee"><option value="all">All employees</option>{props.employees.map((employee) => <option key={employee.name} value={employee.name}>{employee.name} ({employee.discipline})</option>)}</select>}{props.showDisciplineColumn && <select value={props.disciplineFilter} onChange={(event) => props.setDisciplineFilter(event.target.value)} aria-label="Filter by discipline"><option value="all">All disciplines</option>{disciplines.map((discipline) => <option key={discipline} value={discipline}>{discipline}</option>)}</select>}{!props.lockedProjectCode && <select value={props.projectFilter} onChange={(event) => props.setProjectFilter(event.target.value)} aria-label="Filter by project"><option value="all">All projects</option>{props.projects.map((project) => <option key={project}>{project}</option>)}</select>}<select value={props.statusFilter} onChange={(event) => props.setStatusFilter(event.target.value)} aria-label="Filter by status"><option value="all">All employee statuses</option>{employeeStatusKeys.map((value) => <option key={value} value={value}>{tableStatusLabel[value]}</option>)}</select><select value={props.reviewFilter} onChange={(event) => props.setReviewFilter(event.target.value)} aria-label="Filter by manager review">{props.lockedProjectCode && <option value="unapproved">Unapproved</option>}<option value="all">All manager reviews</option>{Object.entries(tableCheckLabel).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select><label className="due-date-filter"><span>Due Date</span><input type="date" value={props.dueDateFilter} onChange={(event) => props.setDueDateFilter(event.target.value)} aria-label="Filter by due date" /></label><button type="button" className="clear-filters-button" onClick={clearFilters} disabled={!filtersActive} aria-label="Clear all task filters" title="Clear filters"><span className="filter-clear-icon" aria-hidden="true" /></button></div><div className="task-view-cluster"><div className="task-view-switcher" role="group" aria-label="Task view"><button type="button" className={viewMode === "table" ? "active" : ""} onClick={() => setViewMode("table")}><TaskViewIcon view="table" />Table</button><button type="button" className={viewMode === "kanban" ? "active" : ""} onClick={() => setViewMode("kanban")}><TaskViewIcon view="kanban" />Kanban</button><button type="button" className={viewMode === "calendar" ? "active" : ""} onClick={() => setViewMode("calendar")}><TaskViewIcon view="calendar" />Calendar</button><button type="button" className={viewMode === "gantt" ? "active" : ""} onClick={() => setViewMode("gantt")}><TaskViewIcon view="gantt" />Gantt</button></div></div><span className="count-badge filter-count" dir="ltr">{props.filteredCount} {props.filteredCount === 1 ? "Task" : "Tasks"}</span></div>
-    {props.loading ? <div className="loading-state"><div className="spinner" /><p>جاري تحميل المهام...</p></div> : props.tasks.length === 0 && viewMode !== "kanban" ? <div className="empty-state"><strong>لا توجد مهام مطابقة</strong><p>غيّر خيارات البحث أو أضف مهمة جديدة.</p></div> : viewMode === "kanban" ? employeeStatusKanban && props.currentUser ? <EmployeeTaskKanbanBoard tasks={props.tasks} openTask={props.openTask} currentUser={props.currentUser} savingTaskId={props.kanbanStatusSavingTaskId} onStatusChange={props.updateStatusFromKanban} /> : <TaskKanbanBoard tasks={props.tasks} openTask={props.openTask} createTask={() => props.createTask(props.lockedProjectCode || "")} canReorder={managementCanReorderKanban} hideApproved={props.reviewFilter === "unapproved"} savingTaskId={props.kanbanReviewSavingTaskId} onReviewChange={props.updateReviewFromKanban} /> : viewMode === "calendar" ? <TaskCalendarView tasks={props.tasks} anchor={calendarAnchor} setAnchor={setCalendarAnchor} openTask={props.openTask} /> : viewMode === "gantt" ? <TaskGanttView tasks={props.tasks} anchor={ganttAnchor} setAnchor={setGanttAnchor} openTask={props.openTask} canEditTask={(task) => canManageTaskTimeline(props.currentUser, task, props.users, props.projectRecords)} savingTaskId={props.ganttDateSavingTaskId} onUpdateDates={props.updateDatesFromGantt} /> : <><div className="task-table-wrap"><table className={`task-table task-data-table task-table-ltr${props.showEmployeeFilter ? "" : " member-task-table"}`}><thead><tr><th>Task</th>{props.showEmployeeFilter && <th>Employee</th>}<th>Created By</th>{props.showDisciplineColumn && <th>Discipline</th>}<th>Created Date</th><th>Start Date</th><th>Due Date</th><th>Priority</th><th>Hours</th><th>Status</th><th>Manager Review</th><th>Indicator</th><th>Issue Link</th></tr></thead><tbody>{props.tasks.map((task) => {
+    <div className="filters task-filters-with-views"><div className="task-filter-cluster"><label className="search-box task-search-box"><span>⌕</span><input value={props.search} onChange={(event) => props.setSearch(event.target.value)} placeholder={props.lockedProjectCode ? "Search tasks..." : "Search tasks or projects..."} /></label>{props.showEmployeeFilter && <select value={props.employeeFilter} onChange={(event) => props.setEmployeeFilter(event.target.value)} aria-label="Filter by employee"><option value="all">All employees</option>{props.employees.map((employee) => <option key={employee.name} value={employee.name}>{employee.name} ({employee.discipline})</option>)}</select>}{props.showDisciplineColumn && <select value={props.disciplineFilter} onChange={(event) => props.setDisciplineFilter(event.target.value)} aria-label="Filter by discipline"><option value="all">All disciplines</option>{disciplines.map((discipline) => <option key={discipline} value={discipline}>{discipline}</option>)}</select>}{!props.lockedProjectCode && <select value={props.projectFilter} onChange={(event) => props.setProjectFilter(event.target.value)} aria-label="Filter by project"><option value="all">All projects</option>{props.projects.map((project) => <option key={project}>{project}</option>)}</select>}<select value={props.statusFilter} onChange={(event) => props.setStatusFilter(event.target.value)} aria-label="Filter by status"><option value="all">All employee statuses</option>{employeeStatusKeys.map((value) => <option key={value} value={value}>{tableStatusLabel[value]}</option>)}</select><select value={props.reviewFilter} onChange={(event) => props.setReviewFilter(event.target.value)} aria-label="Filter by manager review">{props.lockedProjectCode && <option value="unapproved">Unapproved</option>}<option value="all">All manager reviews</option>{Object.entries(tableCheckLabel).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select><label className="due-date-filter"><span>Due Date</span><input type="date" value={props.dueDateFilter} onChange={(event) => props.setDueDateFilter(event.target.value)} aria-label="Filter by due date" /></label><button type="button" className="clear-filters-button" onClick={clearFilters} disabled={!filtersActive} aria-label="Clear all task filters" title="Clear filters"><span className="filter-clear-icon" aria-hidden="true" /></button></div><div className="task-view-cluster"><div className="task-view-switcher" role="group" aria-label="Task view"><button type="button" className={viewMode === "table" ? "active" : ""} onClick={() => { setTaskSort({ key: "createdAt", direction: "desc" }); setViewMode("table"); }}><TaskViewIcon view="table" />Table</button><button type="button" className={viewMode === "kanban" ? "active" : ""} onClick={() => setViewMode("kanban")}><TaskViewIcon view="kanban" />Kanban</button><button type="button" className={viewMode === "calendar" ? "active" : ""} onClick={() => setViewMode("calendar")}><TaskViewIcon view="calendar" />Calendar</button><button type="button" className={viewMode === "gantt" ? "active" : ""} onClick={() => setViewMode("gantt")}><TaskViewIcon view="gantt" />Gantt</button></div></div><span className="count-badge filter-count" dir="ltr">{props.filteredCount} {props.filteredCount === 1 ? "Task" : "Tasks"}</span></div>
+    {props.loading ? <div className="loading-state"><div className="spinner" /><p>جاري تحميل المهام...</p></div> : props.tasks.length === 0 && viewMode !== "kanban" ? <div className="empty-state"><strong>لا توجد مهام مطابقة</strong><p>غيّر خيارات البحث أو أضف مهمة جديدة.</p></div> : viewMode === "kanban" ? employeeStatusKanban && props.currentUser ? <EmployeeTaskKanbanBoard tasks={props.tasks} openTask={props.openTask} currentUser={props.currentUser} savingTaskId={props.kanbanStatusSavingTaskId} onStatusChange={props.updateStatusFromKanban} /> : <TaskKanbanBoard tasks={props.tasks} openTask={props.openTask} createTask={() => props.createTask(props.lockedProjectCode || "")} canReorder={managementCanReorderKanban} hideApproved={props.reviewFilter === "unapproved"} savingTaskId={props.kanbanReviewSavingTaskId} onReviewChange={props.updateReviewFromKanban} /> : viewMode === "calendar" ? <TaskCalendarView tasks={props.tasks} anchor={calendarAnchor} setAnchor={setCalendarAnchor} openTask={props.openTask} /> : viewMode === "gantt" ? <TaskGanttView tasks={props.tasks} anchor={ganttAnchor} setAnchor={setGanttAnchor} openTask={props.openTask} canEditTask={(task) => canManageTaskTimeline(props.currentUser, task, props.users, props.projectRecords)} savingTaskId={props.ganttDateSavingTaskId} onUpdateDates={props.updateDatesFromGantt} /> : <><div className="task-table-wrap"><table className={`task-table task-data-table task-table-ltr${props.showEmployeeFilter ? "" : " member-task-table"}`}><thead><tr>{sortHeader("title", "Task")}{props.showEmployeeFilter && sortHeader("employee", "Employee")}{sortHeader("createdBy", "Created By")}{props.showDisciplineColumn && sortHeader("discipline", "Discipline")}{sortHeader("createdAt", "Created Date")}{sortHeader("startDate", "Start Date")}{sortHeader("dueDate", "Due Date")}{sortHeader("priority", "Priority")}{sortHeader("hours", "Hours")}{sortHeader("status", "Status")}{sortHeader("managerReview", "Manager Review")}{sortHeader("indicator", "Indicator")}{sortHeader("issueLink", "Issue Link")}</tr></thead><tbody>{sortedTasks.map((task) => {
 	      const flag = taskFlag(task);
 	      const entries = timeEntriesByTaskId.get(task.id) || [];
 	      const taskSubtasks = subtasksByTaskId.get(task.id) || [];
@@ -3372,7 +3533,7 @@ function TaskTable(props: TaskTableProps) {
       const canEditProgress = canEditTaskCompletion(props.currentUser, task);
       return <tr key={task.id} onClick={() => props.openTask(task)} tabIndex={0} onKeyDown={(event) => event.key === "Enter" && props.openTask(task)}><td><div className="task-cell"><div className="task-title-progress"><TaskProgressControl task={task} canEdit={canEditProgress} busy={props.completionSavingTaskId === task.id} onChange={(value) => props.updateCompletion(task.id, value)} /><strong>{task.title}</strong></div><div className="task-tags">{task.originatedByName && <span className="employee-origin-tag">From employee · {task.originatedByName}</span>}{task.visibility === "private" && <span className="private-badge">Private</span>}{subtaskCount > 0 && <span className="subtask-indicator" title={`${completedSubtaskCount}/${subtaskCount} subtasks completed`} aria-label={`${subtaskCount} subtasks`}>☑ <small>{subtaskCount}</small></span>}{noteCount > 0 && <span className="note-indicator" title={`${noteCount} notes`} aria-label={`${noteCount} notes`}>▰ <small>{noteCount}</small></span>}{attachmentCount > 0 && <span className="attachment-count task-attachment-indicator" title={`${attachmentCount} attachments`} aria-label={`${attachmentCount} attachments`}>📎 <small>{attachmentCount}</small></span>}</div><small>{task.expectedOutput}</small></div></td>{props.showEmployeeFilter && <td><div className="employee-cell"><UserAvatar user={employee} name={task.employeeName} /><strong>{task.employeeName}</strong></div></td>}<td><div className="employee-cell creator-person-cell" title={creatorName}><UserAvatar user={creator} name={creatorName} /><strong>{creatorName}</strong></div></td>{props.showDisciplineColumn && <td><span className="task-discipline">{task.employeeDiscipline || employee?.discipline || "—"}</span></td>}<td><span className="due-date" dir="ltr">{formatCreatedDate(task.createdAt)}</span></td><td><span className="due-date" dir="ltr">{task.startDate ? formatDueDate(task.startDate) : "—"}</span></td><td><span className="due-date" dir="ltr">{formatDueDate(task.taskDate)}</span></td><td><span className={`pill priority-${task.priority}`}>{tablePriorityLabel[task.priority]}</span></td><td><strong className={active ? "live-hours" : ""}>{logged ? logged.toFixed(2) : "—"}{active && <i />}</strong><small className="hours-note"> / {task.plannedHours || "—"}h</small></td><td><span className={`pill status-${task.status}`}>{tableStatusLabel[task.status]}</span></td><td><span className={`pill check-${task.managerCheck}`}>{tableCheckLabel[task.managerCheck]}</span></td><td><span className={`flag flag-${flag.key}`}>{flag.label}</span></td><td>{issueLink ? <button type="button" className={`record-link-button ${task.createdAt <= issueLink.createdAt ? "task-first" : "issue-first"}`} onClick={(event) => { event.stopPropagation(); props.openIssue(issueLink); }}>{issueLink.issueNumber}</button> : <span>—</span>}</td></tr>;
     })}</tbody></table></div>
-      <div className="mobile-task-list">{props.tasks.map((task) => { const flag = taskFlag(task); const entries = timeEntriesByTaskId.get(task.id) || []; const taskSubtasks = subtasksByTaskId.get(task.id) || []; const detailsLoaded = props.detailsLoadedTaskIds.has(task.id); const subtaskCount = detailsLoaded ? taskSubtasks.length : task.subtaskCount || taskSubtasks.length; const attachmentCount = detailsLoaded ? attachmentsByTaskId.get(task.id)?.length || 0 : task.attachmentCount || 0; const noteCount = detailsLoaded ? props.commentCounts.get(task.id) || 0 : task.commentCount || 0; const logged = taskLoggedHours(task, entries, props.clock); const creatorName = task.createdByName || usersByEmail.get(task.createdBy.toLowerCase())?.displayName || "Unknown user"; return <button className="mobile-task" key={task.id} onClick={() => props.openTask(task)}><div className="mobile-task-top"><div className="task-tags">{task.originatedByName && <span className="employee-origin-tag">From employee · {task.originatedByName}</span>}{task.visibility === "private" && <span className="private-badge">Private</span>}{subtaskCount > 0 && <span className="subtask-indicator">☑ <small>{subtaskCount}</small></span>}{noteCount > 0 && <span className="note-indicator">▰ <small>{noteCount}</small></span>}{attachmentCount > 0 && <span className="attachment-count task-attachment-indicator">📎 <small>{attachmentCount}</small></span>}</div><span className={`flag flag-${flag.key}`}>{flag.label}</span></div><strong>{task.title}</strong><small>{props.showEmployeeFilter ? `${task.employeeName} · ` : ""}<span className="mobile-date-label">Created by</span> {creatorName} · <span className="mobile-date-label">Created</span> <span className="due-date" dir="ltr">{formatCreatedDate(task.createdAt)}</span>{task.startDate && <> · <span className="mobile-date-label">Start</span> <span className="due-date" dir="ltr">{formatDueDate(task.startDate)}</span></>} · <span className="mobile-date-label">Due</span> <span className="due-date" dir="ltr">{formatDueDate(task.taskDate)}</span></small><div className="mobile-task-bottom"><span className={`pill status-${task.status}`}>{tableStatusLabel[task.status]}</span><span>{task.completionPercent}% · {logged.toFixed(2)}/{task.plannedHours}h</span></div></button>; })}</div>
+      <div className="mobile-task-list">{sortedTasks.map((task) => { const flag = taskFlag(task); const entries = timeEntriesByTaskId.get(task.id) || []; const taskSubtasks = subtasksByTaskId.get(task.id) || []; const detailsLoaded = props.detailsLoadedTaskIds.has(task.id); const subtaskCount = detailsLoaded ? taskSubtasks.length : task.subtaskCount || taskSubtasks.length; const attachmentCount = detailsLoaded ? attachmentsByTaskId.get(task.id)?.length || 0 : task.attachmentCount || 0; const noteCount = detailsLoaded ? props.commentCounts.get(task.id) || 0 : task.commentCount || 0; const logged = taskLoggedHours(task, entries, props.clock); const creatorName = task.createdByName || usersByEmail.get(task.createdBy.toLowerCase())?.displayName || "Unknown user"; return <button className="mobile-task" key={task.id} onClick={() => props.openTask(task)}><div className="mobile-task-top"><div className="task-tags">{task.originatedByName && <span className="employee-origin-tag">From employee · {task.originatedByName}</span>}{task.visibility === "private" && <span className="private-badge">Private</span>}{subtaskCount > 0 && <span className="subtask-indicator">☑ <small>{subtaskCount}</small></span>}{noteCount > 0 && <span className="note-indicator">▰ <small>{noteCount}</small></span>}{attachmentCount > 0 && <span className="attachment-count task-attachment-indicator">📎 <small>{attachmentCount}</small></span>}</div><span className={`flag flag-${flag.key}`}>{flag.label}</span></div><strong>{task.title}</strong><small>{props.showEmployeeFilter ? `${task.employeeName} · ` : ""}<span className="mobile-date-label">Created by</span> {creatorName} · <span className="mobile-date-label">Created</span> <span className="due-date" dir="ltr">{formatCreatedDate(task.createdAt)}</span>{task.startDate && <> · <span className="mobile-date-label">Start</span> <span className="due-date" dir="ltr">{formatDueDate(task.startDate)}</span></>} · <span className="mobile-date-label">Due</span> <span className="due-date" dir="ltr">{formatDueDate(task.taskDate)}</span></small><div className="mobile-task-bottom"><span className={`pill status-${task.status}`}>{tableStatusLabel[task.status]}</span><span>{task.completionPercent}% · {logged.toFixed(2)}/{task.plannedHours}h</span></div></button>; })}</div>
       {props.tab === "overview" && props.filteredCount > 7 && <button className="text-button" onClick={props.showAll}><ButtonLabel en="View all tasks →" ar="عرض جميع المهام" /></button>}</>}
   </section>;
 }
@@ -3546,7 +3707,7 @@ function TaskDrawer({ selectedId, form, setOpen, saveTask, deleteTask, saving, c
     return users
       .filter((user) => allowedEmails.has(user.email.toLowerCase()) && user.email.toLowerCase() !== currentUser.email.toLowerCase())
       .sort((left, right) => left.displayName.localeCompare(right.displayName));
-  }, [currentUser, employee?.discipline, selectedProject, task, users]);
+  }, [currentUser, employee, selectedProject, task, users]);
   const filteredMentionCandidates = mentionQuery === null ? [] : mentionCandidates.filter((user) => {
     const query = mentionQuery.trim().toLowerCase();
     return !query || `${user.displayName} ${user.email} ${user.discipline}`.toLowerCase().includes(query);
@@ -3575,10 +3736,13 @@ function TaskDrawer({ selectedId, form, setOpen, saveTask, deleteTask, saving, c
     });
   };
   useEffect(() => {
-    setMentionQuery(null);
-    setMentionStart(-1);
-    setMentionActiveIndex(0);
-    setMentionedEmails([]);
+    const reset = window.setTimeout(() => {
+      setMentionQuery(null);
+      setMentionStart(-1);
+      setMentionActiveIndex(0);
+      setMentionedEmails([]);
+    }, 0);
+    return () => window.clearTimeout(reset);
   }, [selectedId]);
   const managerSameDiscipline = Boolean(currentUser?.role === "manager" && currentUser.discipline && employee?.discipline === currentUser.discipline);
   const managerProjectMember = Boolean(currentUser?.role === "manager" && selectedProject?.memberEmails.includes(currentUser.email));
