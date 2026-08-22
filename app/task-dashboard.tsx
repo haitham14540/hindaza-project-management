@@ -174,7 +174,10 @@ type UserForm = Pick<User, "email" | "displayName" | "role" | "discipline"> & { 
 type Tab = "overview" | "tasks" | "rfi" | "issues" | "projects" | "team" | "reports" | "activity";
 type DirectoryView = "cards" | "table";
 type ProjectWorkspaceTab = "tasks" | "issues" | "rfi" | "notes" | "mom";
-type ReportMetric = "all" | "approved" | "wip" | "pending";
+type ReportMetric = "all" | "approved" | "wip" | "pending" | "closed";
+type ReportGroup = "project" | "employee" | "discipline";
+type OverviewTaskMetric = "all" | "approved" | "pending" | "closed" | "wip";
+type OverviewIssueMetric = "all" | "open" | "closed";
 
 type OverviewIssue = {
   id: number;
@@ -730,13 +733,15 @@ export default function TaskDashboard() {
   const [projectView, setProjectView] = useState<DirectoryView>("table");
   const [reportPeriod, setReportPeriod] = useState<"week" | "month" | "custom">("month");
   const [reportType, setReportType] = useState<"tasks" | "issues" | "rfi">("tasks");
-  const [reportGroup, setReportGroup] = useState<"project" | "employee">("project");
+  const [reportGroup, setReportGroup] = useState<ReportGroup>("project");
   const [reportAnchor, setReportAnchor] = useState(localToday());
   const [reportCustomStart, setReportCustomStart] = useState(localToday());
   const [reportCustomEnd, setReportCustomEnd] = useState(localToday());
   const [reportScope, setReportScope] = useState("all");
   const [reportDialogMetric, setReportDialogMetric] = useState<ReportMetric | null>(null);
   const [reportRowKey, setReportRowKey] = useState("");
+  const [overviewTaskMetric, setOverviewTaskMetric] = useState<OverviewTaskMetric | null>(null);
+  const [overviewIssueMetric, setOverviewIssueMetric] = useState<OverviewIssueMetric | null>(null);
   const [uiPreferencesReady, setUiPreferencesReady] = useState(false);
 
   const taskCommentCounts = useMemo(() => {
@@ -969,7 +974,7 @@ export default function TaskDashboard() {
         if (saved.projectView === "table" || saved.projectView === "cards") setProjectView(saved.projectView);
         if (saved.reportPeriod === "week" || saved.reportPeriod === "month" || saved.reportPeriod === "custom") setReportPeriod(saved.reportPeriod);
         if (saved.reportType === "tasks" || saved.reportType === "issues" || saved.reportType === "rfi") setReportType(saved.reportType);
-        if (saved.reportGroup === "project" || saved.reportGroup === "employee") setReportGroup(saved.reportGroup);
+        if (saved.reportGroup === "project" || saved.reportGroup === "employee" || saved.reportGroup === "discipline") setReportGroup(saved.reportGroup);
         if (typeof saved.reportAnchor === "string") setReportAnchor(saved.reportAnchor);
         if (typeof saved.reportCustomStart === "string") setReportCustomStart(saved.reportCustomStart);
         if (typeof saved.reportCustomEnd === "string") setReportCustomEnd(saved.reportCustomEnd);
@@ -1039,16 +1044,20 @@ export default function TaskDashboard() {
       setSelectedProjectCode(url.searchParams.get("project") || "");
       const section = url.searchParams.get("section");
       if (section === "tasks" || section === "issues" || section === "rfi" || section === "notes" || section === "mom") setProjectWorkspaceTab(section);
-      const historyState = event.state as { hindazaEmployeeTasks?: unknown; hindazaEmployeeEdit?: unknown; hindazaReportTasks?: unknown; hindazaReportRow?: unknown; hindazaReportProjectEdit?: unknown; hindazaReportEmployeeEdit?: unknown; hindazaUserEdit?: unknown; hindazaUserProjectEdit?: unknown } | null;
+      const historyState = event.state as { hindazaEmployeeTasks?: unknown; hindazaEmployeeEdit?: unknown; hindazaReportTasks?: unknown; hindazaReportRow?: unknown; hindazaOverviewTasks?: unknown; hindazaOverviewIssues?: unknown; hindazaReportProjectEdit?: unknown; hindazaReportEmployeeEdit?: unknown; hindazaUserEdit?: unknown; hindazaUserProjectEdit?: unknown } | null;
       const employeeTasksState = typeof historyState?.hindazaEmployeeTasks === "string" ? historyState.hindazaEmployeeTasks : null;
       const employeeEditState = typeof historyState?.hindazaEmployeeEdit === "string" ? historyState.hindazaEmployeeEdit : null;
       const reportTasksState = historyState?.hindazaReportTasks;
-      const reportMetricState = reportTasksState === "all" || reportTasksState === "approved" || reportTasksState === "wip" || reportTasksState === "pending" ? reportTasksState : null;
+      const reportMetricState = reportTasksState === "all" || reportTasksState === "approved" || reportTasksState === "wip" || reportTasksState === "pending" || reportTasksState === "closed" ? reportTasksState : null;
+      const overviewTaskState = historyState?.hindazaOverviewTasks;
+      const overviewIssueState = historyState?.hindazaOverviewIssues;
+      setOverviewTaskMetric(overviewTaskState === "all" || overviewTaskState === "approved" || overviewTaskState === "pending" || overviewTaskState === "closed" || overviewTaskState === "wip" ? overviewTaskState : null);
+      setOverviewIssueMetric(overviewIssueState === "all" || overviewIssueState === "open" || overviewIssueState === "closed" ? overviewIssueState : null);
       const reportRowState = typeof historyState?.hindazaReportRow === "string" ? historyState.hindazaReportRow : "";
       const reportRowSeparator = reportRowState.indexOf(":");
       if (reportRowSeparator > 0) {
         const restoredGroup = reportRowState.slice(0, reportRowSeparator);
-        if (restoredGroup === "project" || restoredGroup === "employee") setReportGroup(restoredGroup);
+        if (restoredGroup === "project" || restoredGroup === "employee" || restoredGroup === "discipline") setReportGroup(restoredGroup);
         setReportRowKey(reportRowState.slice(reportRowSeparator + 1));
       } else setReportRowKey("");
       const reportProjectEditId = Number(historyState?.hindazaReportProjectEdit);
@@ -1185,6 +1194,16 @@ export default function TaskDashboard() {
           closeReportTasks();
           return;
         }
+        if (overviewTaskMetric) {
+          event.preventDefault();
+          closeOverviewTasksToOverview();
+          return;
+        }
+        if (overviewIssueMetric) {
+          event.preventDefault();
+          closeOverviewIssuesToOverview();
+          return;
+        }
         if (employeeTasksEmail) {
           closeEmployeeTasks();
           return;
@@ -1223,7 +1242,7 @@ export default function TaskDashboard() {
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [employeeTasksEmail, reportDialogMetric, projectDrawerOpen, projectDrawerReturnToReport, projectDrawerReturnToUserEmail, userDrawerOpen, userDrawerReturnToEmployeeTasks, userDrawerReturnToReport]);
+  }, [employeeTasksEmail, reportDialogMetric, overviewTaskMetric, overviewIssueMetric, projectDrawerOpen, projectDrawerReturnToReport, projectDrawerReturnToUserEmail, userDrawerOpen, userDrawerReturnToEmployeeTasks, userDrawerReturnToReport]);
 
   useEffect(() => {
     function onPointerDown(event: PointerEvent) {
@@ -1394,6 +1413,7 @@ export default function TaskDashboard() {
   const reportProjectCodes = useMemo(() => new Set(projects.map((project) => project.code)), [projects]);
   const reportEligibleTasks = useMemo(() => tasks.filter((task) => reportProjectCodes.has(task.project)), [tasks, reportProjectCodes]);
   const reportEmployees = useMemo(() => Array.from(new Set(reportEligibleTasks.map((task) => task.employeeName).filter(Boolean))).sort(), [reportEligibleTasks]);
+  const reportDisciplines = useMemo(() => Array.from(new Set(reportEligibleTasks.map((task) => task.employeeDiscipline).filter(Boolean))).sort(), [reportEligibleTasks]);
   useEffect(() => {
     if (loading || reportAnchorAutoSelectedRef.current || reportPeriod === "custom" || reportEligibleTasks.length === 0) return;
     reportAnchorAutoSelectedRef.current = true;
@@ -1407,13 +1427,13 @@ export default function TaskDashboard() {
     }
   }, [loading, reportEligibleTasks, reportAnchor, reportPeriod]);
   const reportTasks = useMemo(() => customRangeInvalid ? [] : reportEligibleTasks.filter((task) => task.taskDate >= range.start && task.taskDate <= range.end && (
-    reportScope === "all" || (reportGroup === "project" ? task.project === reportScope : task.employeeName === reportScope)
+    reportScope === "all" || (reportGroup === "project" ? task.project === reportScope : reportGroup === "employee" ? task.employeeName === reportScope : task.employeeDiscipline === reportScope)
   )), [reportEligibleTasks, range, reportScope, reportGroup, customRangeInvalid]);
 
   const reportRows = useMemo(() => {
-    const keys = reportGroup === "project" ? projectCodes : reportEmployees;
+    const keys = reportGroup === "project" ? projectCodes : reportGroup === "employee" ? reportEmployees : reportDisciplines;
     return keys.map((key) => {
-      const rows = reportTasks.filter((task) => reportGroup === "project" ? task.project === key : task.employeeName === key);
+      const rows = reportTasks.filter((task) => reportGroup === "project" ? task.project === key : reportGroup === "employee" ? task.employeeName === key : task.employeeDiscipline === key);
       return {
         key,
         label: reportGroup === "project" ? projectReportLabel(projects, key) : key,
@@ -1430,13 +1450,14 @@ export default function TaskDashboard() {
     }).filter((row) => row.total > 0).sort((a, b) => reportGroup === "project"
       ? a.key.localeCompare(b.key, undefined, { numeric: true, sensitivity: "base" })
       : b.total - a.total || a.key.localeCompare(b.key));
-  }, [reportTasks, reportGroup, projectCodes, reportEmployees, projects]);
+  }, [reportTasks, reportGroup, projectCodes, reportEmployees, reportDisciplines, projects]);
 
   const reportSummary = useMemo(() => ({
     total: reportTasks.length,
     approved: reportTasks.filter((task) => task.managerCheck === "approved").length,
     wip: reportTasks.filter((task) => task.managerCheck === "new").length,
     pending: reportTasks.filter((task) => task.managerCheck === "pending").length,
+    closed: reportTasks.filter((task) => task.status === "done").length,
     returned: reportTasks.filter((task) => task.managerCheck === "returned").length,
     planned: reportTasks.reduce((sum, task) => sum + task.plannedHours, 0),
     actual: reportTasks.reduce((sum, task) => sum + task.actualHours, 0),
@@ -1446,10 +1467,21 @@ export default function TaskDashboard() {
 
   const reportDialogTasks = useMemo(() => {
     if (!reportDialogMetric || reportDialogMetric === "all") return reportTasks;
+    if (reportDialogMetric === "closed") return reportTasks.filter((task) => task.status === "done");
     const managerCheck = reportDialogMetric === "wip" ? "new" : reportDialogMetric;
     return reportTasks.filter((task) => task.managerCheck === managerCheck);
   }, [reportTasks, reportDialogMetric]);
-  const reportRowTasks = useMemo(() => !reportRowKey ? [] : reportTasks.filter((task) => reportGroup === "project" ? task.project === reportRowKey : task.employeeName === reportRowKey), [reportTasks, reportGroup, reportRowKey]);
+  const reportRowTasks = useMemo(() => !reportRowKey ? [] : reportTasks.filter((task) => reportGroup === "project" ? task.project === reportRowKey : reportGroup === "employee" ? task.employeeName === reportRowKey : task.employeeDiscipline === reportRowKey), [reportTasks, reportGroup, reportRowKey]);
+  const overviewDialogTasks = useMemo(() => {
+    if (!overviewTaskMetric || overviewTaskMetric === "all") return tasks;
+    if (overviewTaskMetric === "closed") return tasks.filter((task) => task.status === "done");
+    if (overviewTaskMetric === "wip") return tasks.filter((task) => task.managerCheck === "new" || task.status === "in_progress");
+    return tasks.filter((task) => task.managerCheck === overviewTaskMetric);
+  }, [tasks, overviewTaskMetric]);
+  const overviewDialogIssues = useMemo(() => {
+    if (!overviewIssueMetric || overviewIssueMetric === "all") return overviewIssues;
+    return overviewIssueMetric === "closed" ? overviewIssues.filter((issue) => issue.status === "closed") : overviewIssues.filter((issue) => issue.status === "open" || issue.status === "re_open");
+  }, [overviewIssues, overviewIssueMetric]);
 
   function openProjectWorkspace(projectCode: string, section: ProjectWorkspaceTab = "tasks") {
     setSelectedProjectCode(projectCode);
@@ -1553,16 +1585,81 @@ export default function TaskDashboard() {
     else setReportDialogMetric(null);
   }
 
+  function openOverviewTasks(metric: OverviewTaskMetric) {
+    const url = new URL(window.location.href);
+    url.searchParams.delete("task");
+    window.history.pushState({ ...window.history.state, hindazaOverviewTasks: metric, hindazaOverviewIssues: null, hindazaTask: null }, "", url);
+    setOverviewIssueMetric(null);
+    setOverviewTaskMetric(metric);
+  }
+
+  function closeOverviewTasks() {
+    if (window.history.state?.hindazaOverviewTasks) window.history.back();
+    else setOverviewTaskMetric(null);
+  }
+
+  function closeOverviewTasksToOverview() {
+    const url = new URL(window.location.href);
+    url.searchParams.set("view", "overview");
+    url.searchParams.delete("project");
+    url.searchParams.delete("section");
+    url.searchParams.delete("task");
+    window.history.replaceState({ ...window.history.state, hindazaOverviewTasks: null, hindazaOverviewIssues: null, hindazaTask: null }, "", url);
+    setTab("overview");
+    setSelectedProjectCode("");
+    setOverviewTaskMetric(null);
+  }
+
+  function changeOverviewTaskMetric(metric: OverviewTaskMetric) {
+    if (overviewTaskMetric === metric) return;
+    const url = new URL(window.location.href);
+    url.searchParams.delete("task");
+    window.history.pushState({ ...window.history.state, hindazaOverviewTasks: metric, hindazaOverviewIssues: null, hindazaTask: null }, "", url);
+    setOverviewTaskMetric(metric);
+  }
+
+  function openOverviewIssues(metric: OverviewIssueMetric) {
+    const url = new URL(window.location.href);
+    window.history.pushState({ ...window.history.state, hindazaOverviewIssues: metric, hindazaOverviewTasks: null, hindazaTask: null }, "", url);
+    setOverviewTaskMetric(null);
+    setOverviewIssueMetric(metric);
+  }
+
+  function closeOverviewIssues() {
+    if (window.history.state?.hindazaOverviewIssues) window.history.back();
+    else setOverviewIssueMetric(null);
+  }
+
+  function closeOverviewIssuesToOverview() {
+    const url = new URL(window.location.href);
+    url.searchParams.set("view", "overview");
+    url.searchParams.delete("project");
+    url.searchParams.delete("section");
+    url.searchParams.delete("task");
+    window.history.replaceState({ ...window.history.state, hindazaOverviewTasks: null, hindazaOverviewIssues: null, hindazaTask: null }, "", url);
+    setTab("overview");
+    setSelectedProjectCode("");
+    setOverviewIssueMetric(null);
+  }
+
+  function changeOverviewIssueMetric(metric: OverviewIssueMetric) {
+    if (overviewIssueMetric === metric) return;
+    const url = new URL(window.location.href);
+    window.history.pushState({ ...window.history.state, hindazaOverviewIssues: metric, hindazaOverviewTasks: null, hindazaTask: null }, "", url);
+    setOverviewIssueMetric(metric);
+  }
+
   function openReportTask(task: Task) {
     const url = new URL(window.location.href);
     url.searchParams.set("view", "projects");
     url.searchParams.set("project", task.project);
     url.searchParams.set("section", "tasks");
     url.searchParams.set("task", String(task.id));
-    window.history.pushState({ ...window.history.state, hindazaReportTasks: null, hindazaReportRow: null, hindazaTask: task.id }, "", url);
+    window.history.pushState({ ...window.history.state, hindazaReportTasks: null, hindazaReportRow: null, hindazaOverviewTasks: null, hindazaTask: task.id }, "", url);
     deepLinkedTaskRef.current = task.id;
     setReportDialogMetric(null);
     setReportRowKey("");
+    setOverviewTaskMetric(null);
     openProjectWorkspace(task.project, "tasks");
     openTask(task);
   }
@@ -2718,6 +2815,8 @@ export default function TaskDashboard() {
           showProjects={openProjectDirectory}
           showTasks={() => { const project = projects.find((item) => item.status === "active") || projects[0]; if (project) openProjectWorkspace(project.code, "tasks"); else openProjectDirectory(); }}
           showIssues={() => { const project = projects.find((item) => item.status === "active") || projects[0]; if (project) openProjectWorkspace(project.code, "issues"); else openProjectDirectory(); }}
+          openTaskMetric={openOverviewTasks}
+          openIssueMetric={openOverviewIssues}
         />}
 
         {tab === "projects" && selectedProject && <section className="project-workspace" aria-label={`${selectedProject.name} workspace`}>
@@ -2798,15 +2897,15 @@ export default function TaskDashboard() {
             <div className="report-filter-grid">
               <label><span>Calendar Period</span><select value={reportPeriod} onChange={(event) => { setReportPeriod(event.target.value as "week" | "month" | "custom"); setReportScope("all"); }}><option value="week">Week</option><option value="month">Month</option><option value="custom">Custom Range</option></select></label>
               {reportPeriod !== "custom" ? <label><span>{reportPeriod === "week" ? "Select Week" : "Select Month"}</span><input type={reportPeriod === "week" ? "week" : "month"} value={reportPeriod === "week" ? (() => { const start = new Date(`${range.start}T12:00:00`); const firstThursday = new Date(start); firstThursday.setDate(start.getDate() + 4 - (start.getDay() || 7)); const yearStart = new Date(firstThursday.getFullYear(), 0, 1); const week = Math.ceil((((firstThursday.getTime() - yearStart.getTime()) / 86400000) + 1) / 7); return `${firstThursday.getFullYear()}-W${String(week).padStart(2, "0")}`; })() : reportAnchor.slice(0, 7)} onChange={(event) => changeReportCalendar(event.currentTarget.value)} /></label> : <><label><span>From</span><input type="date" value={reportCustomStart} onChange={(event) => setReportCustomStart(event.target.value)} /></label><label><span>To</span><input type="date" min={reportCustomStart || undefined} value={reportCustomEnd} onChange={(event) => setReportCustomEnd(event.target.value)} /></label></>}
-              <label><span>Group By</span><select value={reportGroup} onChange={(event) => { setReportGroup(event.target.value as "project" | "employee"); setReportScope("all"); }}><option value="project">Project</option><option value="employee">Employee</option></select></label>
-              <label><span>{reportGroup === "project" ? "Project" : "Employee"}</span><select value={reportScope} onChange={(event) => setReportScope(event.target.value)}><option value="all">All</option>{reportGroup === "project" ? projectCodes.map((code) => <option key={code} value={code}>{projectReportLabel(projects, code)}</option>) : reportEmployees.map((employeeName) => <option key={employeeName} value={employeeName}>{employeeName}</option>)}</select></label>
+              <label><span>Group By</span><select value={reportGroup} onChange={(event) => { setReportGroup(event.target.value as ReportGroup); setReportScope("all"); }}><option value="project">Project</option><option value="employee">Employee</option><option value="discipline">Discipline</option></select></label>
+              <label><span>{reportGroup === "project" ? "Project" : reportGroup === "employee" ? "Employee" : "Discipline"}</span><select value={reportScope} onChange={(event) => setReportScope(event.target.value)}><option value="all">All</option>{reportGroup === "project" ? projectCodes.map((code) => <option key={code} value={code}>{projectReportLabel(projects, code)}</option>) : reportGroup === "employee" ? reportEmployees.map((employeeName) => <option key={employeeName} value={employeeName}>{employeeName}</option>) : reportDisciplines.map((discipline) => <option key={discipline} value={discipline}>{discipline}</option>)}</select></label>
             </div>
             {reportPeriod !== "custom" ? <div className="period-nav"><button type="button" onClick={() => moveReport(-1)}>← Previous</button><div><strong>{formatDate(range.start)} — {formatDate(range.end)}</strong><small>{reportPeriodLabel}</small></div><button type="button" onClick={() => moveReport(1)}>Next →</button></div> : <div className="report-range-summary"><strong>{formatDate(range.start)} — {formatDate(range.end)}</strong></div>}
             <div className="export-actions"><button className="report-download-icon-button excel-button" onClick={exportExcel} disabled={!reportRows.length} aria-label="Download Excel report" title="Download Excel"><ActionIcon kind="excel" /></button><button className="report-download-icon-button pdf-button" onClick={exportPdf} disabled={!reportRows.length} aria-label="Download PDF report" title="Download PDF"><ActionIcon kind="pdf" /></button></div>
           </div>
           <div className="report-content">
-            <section className="report-stats report-filter-stats"><button type="button" onClick={() => openReportTasks("all")}><span>All Tasks</span><strong>{reportSummary.total}</strong></button><button type="button" onClick={() => openReportTasks("approved")}><span>Manager Approved</span><strong>{reportSummary.approved}</strong></button><button type="button" onClick={() => openReportTasks("wip")}><span>WIP</span><strong>{reportSummary.wip}</strong></button><button type="button" onClick={() => openReportTasks("pending")}><span>Needs Review</span><strong>{reportSummary.pending}</strong></button></section>
-            <section className="panel chart-panel"><div className="panel-heading"><div><h2>{reportGroup === "project" ? "Project Task Review" : "Employee Task Review"}</h2></div><span className="count-badge">{displayedReportRows.length} groups</span></div>
+            <section className="report-stats report-filter-stats"><button type="button" onClick={() => openReportTasks("all")}><span>All Tasks</span><strong>{reportSummary.total}</strong></button><button type="button" onClick={() => openReportTasks("approved")}><span>Manager Approved</span><strong>{reportSummary.approved}</strong></button><button type="button" onClick={() => openReportTasks("wip")}><span>WIP</span><strong>{reportSummary.wip}</strong></button><button type="button" onClick={() => openReportTasks("pending")}><span>Needs Review</span><strong>{reportSummary.pending}</strong></button><button type="button" onClick={() => openReportTasks("closed")}><span>Closed</span><strong>{reportSummary.closed}</strong></button></section>
+            <section className="panel chart-panel"><div className="panel-heading"><div><h2>{reportGroup === "discipline" ? "Discipline Task Review" : reportGroup === "project" ? "Project Task Review" : "Employee Task Review"}</h2></div><span className="count-badge">{displayedReportRows.length} groups</span></div>
               {displayedReportRows.length === 0 ? <div className="empty-state"><strong>No data for this filter</strong><p>Change the calendar period or selected scope.</p></div> : <div className="bar-chart">{displayedReportRows.map((row) => <div className="bar-chart-row report-clickable-row" key={row.key} role="button" tabIndex={0} onClick={() => openReportRow(row.key)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") openReportRow(row.key); }}><strong title={row.label}>{row.label}<small className="report-project-count">({reportGroup === "project" ? `${row.employeeCount} employees` : `${row.projectCount} projects`})</small></strong><div className="bar-track report-review-track"><i className="bar-approved" style={{ width: `${(row.approved / row.total) * 100}%` }}>{row.approved > 0 && <b>{row.approved}</b>}</i><i className="bar-wip" style={{ width: `${(row.wip / row.total) * 100}%` }}>{row.wip > 0 && <b>{row.wip}</b>}</i><i className="bar-pending" style={{ width: `${(row.pending / row.total) * 100}%` }}>{row.pending > 0 && <b>{row.pending}</b>}</i><i className="bar-returned" style={{ width: `${(row.returned / row.total) * 100}%` }}>{row.returned > 0 && <b>{row.returned}</b>}</i></div><span>{row.total}</span></div>)}<div className="chart-legend"><span><i className="legend-approved" />Manager Approved</span><span><i className="legend-wip" />WIP</span><span><i className="legend-pending" />Needs Review</span><span><i className="legend-returned" />Returned</span></div></div>}
             </section>
           </div>
@@ -2820,9 +2919,11 @@ export default function TaskDashboard() {
       {projectRemovalWarning && <div className="drawer-layer dependency-warning-layer" role="dialog" aria-modal="true" aria-label="Project deletion blocked"><button className="drawer-backdrop" onClick={() => setProjectRemovalWarning(null)} aria-label="Close warning" /><section className="dependency-warning-dialog project-dependency-warning"><div className="dependency-warning-icon">!</div><h2>Project cannot be deleted</h2><h3>لا يمكن حذف المشروع حاليًا</h3><p><strong>{projectRemovalWarning.projectCode} · {projectRemovalWarning.projectName}</strong> still contains linked records. Remove all items below, then try deleting the project again.</p><p dir="rtl">يحتوي المشروع على بيانات مرتبطة. يجب إزالة جميع العناصر التالية أولًا ثم إعادة محاولة الحذف.</p><div className="project-dependency-counts"><div><strong>{projectRemovalWarning.dependencies.tasks}</strong><span>Tasks</span><small>مهام</small></div><div><strong>{projectRemovalWarning.dependencies.issues}</strong><span>Issues</span><small>مشاكل</small></div><div><strong>{projectRemovalWarning.dependencies.team}</strong><span>Team</span><small>أعضاء الفريق</small></div><div><strong>{projectRemovalWarning.dependencies.rfi}</strong><span>RFI</span><small>طلبات معلومات</small></div></div><div className="project-dependency-note">Only an empty project can be deleted · يمكن حذف المشروع فقط عندما يكون فارغًا بالكامل</div><button className="secondary-button dependency-close" onClick={() => setProjectRemovalWarning(null)}><ButtonLabel en="Close" ar="إغلاق" /></button></section></div>}
 
       {userRemovalWarning && <div className="drawer-layer dependency-warning-layer" role="dialog" aria-modal="true" aria-label="Employee assigned tasks warning"><button className="drawer-backdrop" onClick={() => setUserRemovalWarning(null)} aria-label="Close warning" /><section className="dependency-warning-dialog"><div className="dependency-warning-icon">!</div><h2>Employee has assigned tasks</h2><h3>لدى الموظف مهام موكلة إليه</h3><p><strong>{userRemovalWarning.employeeName}</strong> has {userRemovalWarning.taskCount} assigned task(s). Reassign these tasks before deleting the employee.</p><p dir="rtl">يجب تغيير الموظف المسؤول عن هذه المهام قبل حذف الموظف من النظام.</p><div className="dependency-project-links">{userRemovalWarning.projects.map((item) => <button key={item.project} onClick={() => reviewEmployeeTasks(userRemovalWarning.employeeName, item.project)}><span>↗</span><strong>Open {item.project} tasks</strong><small>{item.taskCount} tasks</small></button>)}</div><button className="secondary-button dependency-close" onClick={() => setUserRemovalWarning(null)}><ButtonLabel en="Cancel" ar="إلغاء" /></button></section></div>}
-      {reportDialogMetric && <ReportTasksDialog metric={reportDialogMetric} groupBy={reportGroup} tasks={reportDialogTasks} projects={projects} users={users} timeEntries={timeEntries} clock={clock} currentUser={currentUser} updateCompletion={updateTaskCompletion} completionSavingTaskId={completionSavingTaskId} onClose={closeReportTasks} onOpenTask={openReportTask} />}
-      {reportRowKey && <ReportTasksDialog metric="all" title={reportGroup === "project" ? projectReportLabel(projects, reportRowKey) : reportRowKey} groupBy="project" tasks={reportRowTasks} projects={projects} users={users} timeEntries={timeEntries} clock={clock} currentUser={currentUser} updateCompletion={updateTaskCompletion} completionSavingTaskId={completionSavingTaskId} projectCode={reportGroup === "project" ? reportRowKey : ""} employee={reportGroup === "employee" ? users.find((user) => user.displayName === reportRowKey) || null : null} hideEmployeeColumn={reportGroup === "employee"} onOpenProject={openReportProjectTasks} onProjectSettings={openReportProjectSettings} onEmployeeSettings={openReportEmployeeSettings} onClose={closeReportRow} onOpenTask={openReportTask} />}
-      {employeeTasksEmail && <EmployeeTasksDialog employee={users.find((user) => user.email === employeeTasksEmail) || null} tasks={tasks.filter((task) => task.employeeEmail === employeeTasksEmail)} projects={projects} timeEntries={timeEntries} clock={clock} currentUser={currentUser} updateCompletion={updateTaskCompletion} completionSavingTaskId={completionSavingTaskId} onClose={() => setEmployeeTasksEmail(null)} onOpenTask={openEmployeeTask} onEditEmployee={openUserFromEmployeeTasks} />}
+      {reportDialogMetric && <ReportTasksDialog metric={reportDialogMetric} groupBy={reportGroup} tasks={reportDialogTasks} projects={projects} users={users} timeEntries={timeEntries} clock={clock} currentUser={currentUser} updateCompletion={updateTaskCompletion} completionSavingTaskId={completionSavingTaskId} onProjectSettings={openReportProjectSettings} onEmployeeSettings={openReportEmployeeSettings} onClose={closeReportTasks} onOpenTask={openReportTask} />}
+      {reportRowKey && <ReportTasksDialog metric="all" title={reportGroup === "project" ? projectReportLabel(projects, reportRowKey) : reportRowKey} groupBy={reportGroup === "project" ? "employee" : "project"} tasks={reportRowTasks} projects={projects} users={users} timeEntries={timeEntries} clock={clock} currentUser={currentUser} updateCompletion={updateTaskCompletion} completionSavingTaskId={completionSavingTaskId} projectCode={reportGroup === "project" ? reportRowKey : ""} employee={reportGroup === "employee" ? users.find((user) => user.displayName === reportRowKey) || null : null} hideEmployeeColumn={reportGroup === "employee"} onOpenProject={openReportProjectTasks} onProjectSettings={openReportProjectSettings} onEmployeeSettings={openReportEmployeeSettings} onClose={closeReportRow} onOpenTask={openReportTask} />}
+      {overviewTaskMetric && <ReportTasksDialog metric="all" title="Overview Tasks" groupBy="project" tasks={overviewDialogTasks} projects={projects} users={users} timeEntries={timeEntries} clock={clock} currentUser={currentUser} updateCompletion={updateTaskCompletion} completionSavingTaskId={completionSavingTaskId} metricButtons={[{ label: "All Tasks", metric: "all", count: tasks.length }, { label: "Pending", metric: "pending", count: tasks.filter((task) => task.managerCheck === "pending").length }, { label: "New/WIP", metric: "wip", count: tasks.filter((task) => task.managerCheck === "new" || task.status === "in_progress").length }, { label: "Approved", metric: "approved", count: tasks.filter((task) => task.managerCheck === "approved").length }]} activeMetric={overviewTaskMetric} onMetricSelect={changeOverviewTaskMetric} overviewFilters onProjectSettings={openReportProjectSettings} onClose={closeOverviewTasksToOverview} onOpenTask={openReportTask} />}
+      {overviewIssueMetric && <OverviewIssuesDialog metric={overviewIssueMetric} issues={overviewDialogIssues} projects={projects} onMetricSelect={changeOverviewIssueMetric} onClose={closeOverviewIssuesToOverview} onOpenIssue={openIssueFromOverview} onProjectSettings={openReportProjectSettings} />}
+      {employeeTasksEmail && <EmployeeTasksDialog employee={users.find((user) => user.email === employeeTasksEmail) || null} tasks={tasks.filter((task) => task.employeeEmail === employeeTasksEmail)} projects={projects} timeEntries={timeEntries} clock={clock} currentUser={currentUser} updateCompletion={updateTaskCompletion} completionSavingTaskId={completionSavingTaskId} onClose={() => setEmployeeTasksEmail(null)} onOpenTask={openEmployeeTask} onEditEmployee={openUserFromEmployeeTasks} onProjectSettings={openReportProjectSettings} />}
       {taskDrawerOpen && <TaskDrawer selectedId={selectedTaskId} form={taskForm} setOpen={setTaskDrawerOpen} saveTask={saveTask} deleteTask={deleteTask} saving={saving} currentUser={currentUser} users={users} projects={tab === "projects" && selectedProject ? [selectedProject] : projects} openProjectSettings={openProjectFromTask} updateForm={updateTaskForm} comments={comments.filter((comment) => comment.taskId === selectedTaskId)} commentDraft={commentDraft} setCommentDraft={setCommentDraft} addComment={addComment} updateComment={updateComment} deleteComment={deleteComment} savingComment={savingComment} task={tasks.find((task) => task.id === selectedTaskId) || null} timeEntries={timeEntries.filter((entry) => entry.taskId === selectedTaskId)} clock={clock} updateTimer={updateTimer} updateCompletion={updateTaskCompletion} completionSavingTaskId={completionSavingTaskId} updateWorkSession={updateWorkSession} deleteWorkSession={deleteWorkSession} savingTimer={savingTimer} submitPrivateTask={submitPrivateTask} subtasks={subtasks.filter((subtask) => subtask.taskId === selectedTaskId)} draftSubtasks={draftSubtasks} updateDraftSubtask={updateDraftSubtask} deleteDraftSubtask={deleteDraftSubtask} subtaskDraft={subtaskDraft} setSubtaskDraft={setSubtaskDraft} addSubtask={addSubtask} toggleSubtask={toggleSubtask} updateSubtaskTitle={updateSubtaskTitle} deleteSubtask={deleteSubtask} subtaskBusy={subtaskBusy} attachments={taskAttachments.filter((attachment) => attachment.taskId === selectedTaskId)} draftAttachments={draftTaskAttachments} addDraftAttachments={addDraftTaskAttachments} deleteDraftAttachment={deleteDraftTaskAttachment} uploadAttachment={uploadTaskAttachment} deleteAttachment={deleteTaskAttachment} attachmentBusy={taskAttachmentBusy} attachmentProgress={taskAttachmentProgress} issueLink={taskIssueLinks.find((link) => link.convertedTaskId === selectedTaskId) || null} onOpenIssue={(link) => { setTaskDrawerOpen(false); setSelectedTaskId(null); window.setTimeout(() => openLinkedIssue(link), 0); }} onIssueCreated={syncIssueLink} />}
       {projectDrawerOpen && <ProjectDrawer selectedId={selectedProjectId} form={projectForm} setForm={setProjectForm} setOpen={(open) => { if (!open && (projectDrawerReturnToReport || projectDrawerReturnToUserEmail)) { window.history.back(); return; } setProjectDrawerOpen(open); if (!open) { setProjectDrawerReturnToTask(false); setProjectDrawerReturnToReport(false); setProjectDrawerReturnToUserEmail(null); } }} saveProject={saveProject} deleteProject={deleteProject} saving={saving} users={users} tasks={tasks} currentUser={currentUser} projectCode={projects.find((project) => project.id === selectedProjectId)?.code || projectForm.code} onResolveMemberTasks={reviewMemberProjectTasks} onEditUser={openUserFromProject} />}
       {userDrawerOpen && <UserDrawer selectedEmail={selectedUserEmail} selectedUser={users.find((user) => user.email === selectedUserEmail) || null} form={userForm} setForm={setUserForm} setOpen={(open) => { if (!open && (userDrawerReturnToEmployeeTasks || userDrawerReturnToReport)) { window.history.back(); return; } setUserDrawerOpen(open); if (!open) { setUserDrawerReturnToProject(false); setUserDrawerReturnToEmployeeTasks(null); setUserDrawerReturnToReport(false); if (window.history.state?.hindazaUserEdit) window.history.replaceState({ ...window.history.state, hindazaUserEdit: null, hindazaUserProjectEdit: null }, "", window.location.href); } }} saveUser={saveUser} deleteUser={deleteUser} saving={saving} currentUser={currentUser} projects={projects} onProjectSettings={openProjectFromUser} onProfileImageChange={(email, profileImageKey) => { setUsers((current) => current.map((user) => user.email === email ? { ...user, profileImageKey } : user)); setCurrentUser((current) => current?.email === email ? { ...current, profileImageKey } : current); }} />}
@@ -2895,7 +2996,7 @@ function TaskRecordIndicators({ task }: { task: Task }) {
   </span>;
 }
 
-function ReportTasksDialog({ metric, title, groupBy, tasks, projects, users, timeEntries, clock, currentUser, updateCompletion, completionSavingTaskId, projectCode = "", employee = null, hideEmployeeColumn = false, onOpenProject, onProjectSettings, onEmployeeSettings, onClose, onOpenTask }: { metric: ReportMetric; title?: string; groupBy: "project" | "employee"; tasks: Task[]; projects: Project[]; users: User[]; timeEntries: TaskTimeEntry[]; clock: number; currentUser: User | null; updateCompletion: (taskId: number, completionPercent: number) => void; completionSavingTaskId: number | null; projectCode?: string; employee?: User | null; hideEmployeeColumn?: boolean; onOpenProject?: (projectCode: string) => void; onProjectSettings?: (project: Project) => void; onEmployeeSettings?: (user: User) => void; onClose: () => void; onOpenTask: (task: Task) => void; }) {
+function ReportTasksDialog({ metric, title, groupBy, tasks, projects, users, timeEntries, clock, currentUser, updateCompletion, completionSavingTaskId, projectCode = "", employee = null, hideEmployeeColumn = false, metricButtons = [], activeMetric = "all", overviewFilters = false, onMetricSelect, onOpenProject, onProjectSettings, onEmployeeSettings, onClose, onOpenTask }: { metric: ReportMetric; title?: string; groupBy: ReportGroup; tasks: Task[]; projects: Project[]; users: User[]; timeEntries: TaskTimeEntry[]; clock: number; currentUser: User | null; updateCompletion: (taskId: number, completionPercent: number) => void; completionSavingTaskId: number | null; projectCode?: string; employee?: User | null; hideEmployeeColumn?: boolean; metricButtons?: Array<{ label: string; metric: OverviewTaskMetric; count: number }>; activeMetric?: OverviewTaskMetric; overviewFilters?: boolean; onMetricSelect?: (metric: OverviewTaskMetric) => void; onOpenProject?: (projectCode: string) => void; onProjectSettings?: (project: Project) => void; onEmployeeSettings?: (user: User) => void; onClose: () => void; onOpenTask: (task: Task) => void; }) {
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(() => new Set());
   const [taskSort, setTaskSort] = useState<WindowTaskSort>({ key: "createdAt", direction: "desc" });
   const [employeeFilter, setEmployeeFilter] = useState("all");
@@ -2904,14 +3005,15 @@ function ReportTasksDialog({ metric, title, groupBy, tasks, projects, users, tim
   const [disciplineFilter, setDisciplineFilter] = useState("all");
   const [dueDateFilter, setDueDateFilter] = useState("");
   const groupsRef = useRef<HTMLDivElement>(null);
-  const labels: Record<ReportMetric, string> = { all: "All Tasks", approved: "Manager Approved", wip: "WIP", pending: "Needs Review" };
+  const labels: Record<ReportMetric, string> = { all: "All Tasks", approved: "Manager Approved", wip: "WIP", pending: "Needs Review", closed: "Closed Tasks" };
   const dialogTitle = title || labels[metric];
   const dialogProject = projects.find((project) => project.code === projectCode);
   useEffect(() => {
+    if (overviewFilters) return;
     const closeOnEscape = (event: KeyboardEvent) => { if (event.key === "Escape") onClose(); };
     window.addEventListener("keydown", closeOnEscape);
     return () => window.removeEventListener("keydown", closeOnEscape);
-  }, [onClose]);
+  }, [onClose, overviewFilters]);
   const employeeNames = useMemo(() => Array.from(new Set(tasks.map((task) => task.employeeName).filter(Boolean))).sort(), [tasks]);
   const taskDisciplines = useMemo(() => Array.from(new Set(tasks.map((task) => task.employeeDiscipline).filter(Boolean))).sort(), [tasks]);
   const timeEntriesByTaskId = useMemo(() => rowsByTaskId(timeEntries), [timeEntries]);
@@ -2921,7 +3023,7 @@ function ReportTasksDialog({ metric, title, groupBy, tasks, projects, users, tim
   const groups = useMemo(() => {
     const grouped = new Map<string, Task[]>();
     visibleTasks.forEach((task) => {
-      const key = groupBy === "project" ? task.project : task.employeeName;
+      const key = groupBy === "project" ? task.project : groupBy === "employee" ? task.employeeName : task.employeeDiscipline || "Unspecified";
       grouped.set(key, [...(grouped.get(key) || []), task]);
     });
     return Array.from(grouped.entries()).sort(([a], [b]) => a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" }));
@@ -2952,8 +3054,8 @@ function ReportTasksDialog({ metric, title, groupBy, tasks, projects, users, tim
     const printedGroups = groups.map(([key, groupTasks]) => {
       const project = groupBy === "project" ? projects.find((item) => item.code === key) : null;
       const employee = groupBy === "employee" ? users.find((item) => item.displayName === key) : null;
-      const heading = groupBy === "project" ? project?.name || key : employee?.displayName || key;
-      const subheading = groupBy === "project" ? key : employee?.discipline || "Employee";
+      const heading = groupBy === "project" ? project?.name || key : groupBy === "employee" ? employee?.displayName || key : key;
+      const subheading = groupBy === "project" ? key : groupBy === "employee" ? employee?.discipline || "Employee" : "Discipline";
       const rows = groupTasks.map((task) => {
         const logged = taskLoggedHours(task, timeEntriesByTaskId.get(task.id) || [], clock);
         const flag = taskFlag(task);
@@ -2968,12 +3070,15 @@ function ReportTasksDialog({ metric, title, groupBy, tasks, projects, users, tim
     <button className="drawer-backdrop" onClick={onClose} aria-label="Close report tasks" />
     <section className={`employee-tasks-dialog report-tasks-dialog${hideEmployeeColumn ? " employee-specific-report" : ""}`}>
       <header><div className={employee ? "employee-cell" : "report-dialog-heading"}>{employee && <UserAvatar user={employee} name={employee.displayName} className="employee-dialog-avatar" />}<div className="report-dialog-heading"><p>REPORT TASKS</p><h2>{dialogTitle}</h2><span>{visibleTasks.length} of {tasks.length} tasks</span></div></div><div className="employee-tasks-header-actions">{employee && onEmployeeSettings && <button type="button" className="employee-tasks-settings" onClick={() => onEmployeeSettings(employee)} aria-label={`Edit ${employee.displayName}`} title="Employee settings">⚙</button>}{dialogProject && onProjectSettings && <button type="button" className="employee-tasks-settings" onClick={() => onProjectSettings(dialogProject)} aria-label={`Edit ${dialogProject.name}`} title="Project settings">⚙</button>}<button type="button" className="employee-tasks-print" onClick={printReportTasks} aria-label="Print report tasks as PDF" title="Print / Save as PDF"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 8V3h10v5M7 17H5a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2M7 13h10v8H7z" /><path d="M17.5 11h.01" /></svg></button><button type="button" className="employee-tasks-close" onClick={onClose} aria-label="Close">×</button></div></header>
-      <div className="report-dialog-filterbar">{!hideEmployeeColumn && <select value={employeeFilter} onChange={(event) => setEmployeeFilter(event.target.value)} aria-label="Filter report tasks by employee"><option value="all">All Employees</option>{employeeNames.map((name) => <option key={name} value={name}>{name}</option>)}</select>}<select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)} aria-label="Filter report tasks by status"><option value="all">All Statuses</option>{employeeStatusKeys.map((value) => <option key={value} value={value}>{tableStatusLabel[value]}</option>)}</select><select value={reviewFilter} onChange={(event) => setReviewFilter(event.target.value)} aria-label="Filter report tasks by manager review"><option value="all">All Manager Reviews</option>{Object.entries(tableCheckLabel).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select><select value={disciplineFilter} onChange={(event) => setDisciplineFilter(event.target.value)} aria-label="Filter report tasks by discipline"><option value="all">All Disciplines</option>{taskDisciplines.map((discipline) => <option key={discipline} value={discipline}>{discipline}</option>)}</select><label><span>Due Date</span><input type="date" value={dueDateFilter} onChange={(event) => setDueDateFilter(event.target.value)} /></label>{projectCode && onOpenProject && <button type="button" className="report-open-project-button" onClick={() => onOpenProject(projectCode)}>Open Project Tasks</button>}<small>Click a task row to open it. Use Back to return.</small></div>
+      {metricButtons.length > 0 && <div className="employee-tasks-toolbar overview-task-toolbar"><div>{metricButtons.map((item) => <button type="button" key={item.metric} className={activeMetric === item.metric ? "active" : ""} onClick={() => onMetricSelect?.(item.metric)}>{item.label} <b>{item.count}</b></button>)}</div>{overviewFilters && <div className="overview-task-toolbar-filters"><select value={disciplineFilter} onChange={(event) => setDisciplineFilter(event.target.value)} aria-label="Filter overview tasks by discipline"><option value="all">All Disciplines</option>{taskDisciplines.map((discipline) => <option key={discipline} value={discipline}>{discipline}</option>)}</select><select value={employeeFilter} onChange={(event) => setEmployeeFilter(event.target.value)} aria-label="Filter overview tasks by employee"><option value="all">All Employees</option>{employeeNames.map((name) => <option key={name} value={name}>{name}</option>)}</select></div>}<small>Choose a task group, then click a task to open it.</small></div>}
+      {!overviewFilters && <div className="report-dialog-filterbar">{!hideEmployeeColumn && <select value={employeeFilter} onChange={(event) => setEmployeeFilter(event.target.value)} aria-label="Filter report tasks by employee"><option value="all">All Employees</option>{employeeNames.map((name) => <option key={name} value={name}>{name}</option>)}</select>}<select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)} aria-label="Filter report tasks by status"><option value="all">All Statuses</option>{employeeStatusKeys.map((value) => <option key={value} value={value}>{tableStatusLabel[value]}</option>)}</select><select value={reviewFilter} onChange={(event) => setReviewFilter(event.target.value)} aria-label="Filter report tasks by manager review"><option value="all">All Manager Reviews</option>{Object.entries(tableCheckLabel).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select><select value={disciplineFilter} onChange={(event) => setDisciplineFilter(event.target.value)} aria-label="Filter report tasks by discipline"><option value="all">All Disciplines</option>{taskDisciplines.map((discipline) => <option key={discipline} value={discipline}>{discipline}</option>)}</select><label><span>Due Date</span><input type="date" value={dueDateFilter} onChange={(event) => setDueDateFilter(event.target.value)} /></label>{projectCode && onOpenProject && <button type="button" className="report-open-project-button" onClick={() => onOpenProject(projectCode)}>Open Project Tasks</button>}<small>Click a task row to open it. Use Back to return.</small></div>}
       <div className={`employee-project-groups report-task-group-count-${Math.min(groups.length, 3)}`} ref={groupsRef} onWheel={handleWheel}><div className="employee-project-groups-content">{groups.length === 0 ? <div className="comments-empty">No tasks match this report filter.</div> : groups.map(([key, groupTasks]) => {
         const project = groupBy === "project" ? projects.find((item) => item.code === key) : null;
         const groupEmployee = groupBy === "employee" ? users.find((item) => item.displayName === key) : null;
+        const canEditProjectGroup = Boolean(project && onProjectSettings);
+        const canEditEmployeeGroup = Boolean(groupEmployee && onEmployeeSettings);
         const collapsed = collapsedGroups.has(key);
-        return <section className="employee-project-group" key={key}><button type="button" className={`employee-project-heading${employee && project && onProjectSettings ? " with-settings" : ""}`} onClick={() => toggleGroup(key)} aria-expanded={!collapsed}><span>{collapsed ? "+" : "−"}</span><div><strong>{groupBy === "project" ? project?.name || key : groupEmployee?.displayName || key}</strong><small>{groupBy === "project" ? key : groupEmployee?.discipline || "Employee"}</small></div><em>{groupTasks.length}</em>{employee && project && onProjectSettings && <span className="report-project-settings" role="button" tabIndex={0} title={`Project settings for ${project.name}`} aria-label={`Project settings for ${project.name}`} onClick={(event) => { event.stopPropagation(); onProjectSettings(project); }} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); event.stopPropagation(); onProjectSettings(project); } }}>⚙</span>}</button>{!collapsed && <div className={`employee-task-table-wrap${groupTasks.length > 4 ? " has-more-tasks" : ""}`} tabIndex={groupTasks.length > 4 ? 0 : undefined}><table className="employee-task-table"><thead><tr><th>Task</th>{!hideEmployeeColumn && <th>Employee</th>}<th>Created By</th><th>Created Date</th><th>Due Date</th><th>Status</th><th>Manager Review</th><th>Hours</th><th>Indicator</th></tr></thead><tbody>{groupTasks.map((task) => {
+        return <section className="employee-project-group" key={key}><button type="button" className={`employee-project-heading${canEditProjectGroup || canEditEmployeeGroup ? " with-settings" : ""}`} onClick={() => toggleGroup(key)} aria-expanded={!collapsed}><span>{collapsed ? "+" : "−"}</span><div><strong>{groupBy === "project" ? project?.name || key : groupBy === "employee" ? groupEmployee?.displayName || key : key}</strong><small>{groupBy === "project" ? key : groupBy === "employee" ? groupEmployee?.discipline || "Employee" : "Discipline"}</small></div><em>{groupTasks.length}</em>{canEditProjectGroup && <span className="report-project-settings" role="button" tabIndex={0} title={`Project settings for ${project!.name}`} aria-label={`Project settings for ${project!.name}`} onClick={(event) => { event.stopPropagation(); onProjectSettings!(project!); }} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); event.stopPropagation(); onProjectSettings!(project!); } }}>⚙</span>}{canEditEmployeeGroup && <span className="report-project-settings" role="button" tabIndex={0} title={`Employee settings for ${groupEmployee!.displayName}`} aria-label={`Employee settings for ${groupEmployee!.displayName}`} onClick={(event) => { event.stopPropagation(); onEmployeeSettings!(groupEmployee!); }} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); event.stopPropagation(); onEmployeeSettings!(groupEmployee!); } }}>⚙</span>}</button>{!collapsed && <div className={`employee-task-table-wrap${groupTasks.length > 4 ? " has-more-tasks" : ""}`} tabIndex={groupTasks.length > 4 ? 0 : undefined}><table className="employee-task-table"><thead><tr><th>Task</th>{!hideEmployeeColumn && <th>Employee</th>}<th>Created By</th><th>Created Date</th><th>Due Date</th><th>Status</th><th>Manager Review</th><th>Hours</th><th>Indicator</th></tr></thead><tbody>{groupTasks.map((task) => {
           const taskEntries = timeEntriesByTaskId.get(task.id) || [];
           const logged = taskLoggedHours(task, taskEntries, clock);
           const active = task.status === "in_progress" || activeTaskIds.has(task.id);
@@ -2988,7 +3093,7 @@ function ReportTasksDialog({ metric, title, groupBy, tasks, projects, users, tim
   </div>;
 }
 
-function EmployeeTasksDialog({ employee, tasks, projects, timeEntries, clock, currentUser, updateCompletion, completionSavingTaskId, onClose, onOpenTask, onEditEmployee }: { employee: User | null; tasks: Task[]; projects: Project[]; timeEntries: TaskTimeEntry[]; clock: number; currentUser: User | null; updateCompletion: (taskId: number, completionPercent: number) => void; completionSavingTaskId: number | null; onClose: () => void; onOpenTask: (task: Task) => void; onEditEmployee: (user: User) => void; }) {
+function EmployeeTasksDialog({ employee, tasks, projects, timeEntries, clock, currentUser, updateCompletion, completionSavingTaskId, onClose, onOpenTask, onEditEmployee, onProjectSettings }: { employee: User | null; tasks: Task[]; projects: Project[]; timeEntries: TaskTimeEntry[]; clock: number; currentUser: User | null; updateCompletion: (taskId: number, completionPercent: number) => void; completionSavingTaskId: number | null; onClose: () => void; onOpenTask: (task: Task) => void; onEditEmployee: (user: User) => void; onProjectSettings: (project: Project) => void; }) {
   const [showAll, setShowAll] = useState(false);
   const [taskSort, setTaskSort] = useState<WindowTaskSort>({ key: "createdAt", direction: "desc" });
   const [collapsedProjects, setCollapsedProjects] = useState<Set<string>>(() => new Set());
@@ -3047,7 +3152,7 @@ function EmployeeTasksDialog({ employee, tasks, projects, timeEntries, clock, cu
       <div className="employee-project-groups" ref={projectGroupsRef} onWheel={handleDialogWheel}><div className="employee-project-groups-content">{groups.length === 0 ? <div className="comments-empty">No tasks match this filter · لا توجد مهام مطابقة</div> : groups.map(([projectCode, projectTasks]) => {
         const project = projects.find((item) => item.code === projectCode);
         const collapsed = collapsedProjects.has(projectCode);
-        return <section className="employee-project-group" key={projectCode}><button type="button" className="employee-project-heading" onClick={() => toggleProject(projectCode)} aria-expanded={!collapsed}><span>{collapsed ? "+" : "−"}</span><div><strong>{project?.name || projectCode}</strong><small>{projectCode}</small></div><em>{projectTasks.length}</em></button>{!collapsed && <div className={`employee-task-table-wrap${projectTasks.length > 4 ? " has-more-tasks" : ""}`} tabIndex={projectTasks.length > 4 ? 0 : undefined} aria-label={projectTasks.length > 4 ? `${project?.name || projectCode}: scroll for more tasks` : undefined}><table className="employee-task-table"><thead><tr><th>Task</th><th>Created By</th><th>Created Date</th><th>Due Date</th><th>Status</th><th>Manager Review</th><th>Hours</th><th>Indicator</th></tr></thead><tbody>{projectTasks.map((task) => {
+        return <section className="employee-project-group" key={projectCode}><button type="button" className={`employee-project-heading${project ? " with-settings" : ""}`} onClick={() => toggleProject(projectCode)} aria-expanded={!collapsed}><span>{collapsed ? "+" : "−"}</span><div><strong>{project?.name || projectCode}</strong><small>{projectCode}</small></div><em>{projectTasks.length}</em>{project && <span className="report-project-settings" role="button" tabIndex={0} title={`Project settings for ${project.name}`} aria-label={`Project settings for ${project.name}`} onClick={(event) => { event.stopPropagation(); onProjectSettings(project); }} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); event.stopPropagation(); onProjectSettings(project); } }}>⚙</span>}</button>{!collapsed && <div className={`employee-task-table-wrap${projectTasks.length > 4 ? " has-more-tasks" : ""}`} tabIndex={projectTasks.length > 4 ? 0 : undefined} aria-label={projectTasks.length > 4 ? `${project?.name || projectCode}: scroll for more tasks` : undefined}><table className="employee-task-table"><thead><tr><th>Task</th><th>Created By</th><th>Created Date</th><th>Due Date</th><th>Status</th><th>Manager Review</th><th>Hours</th><th>Indicator</th></tr></thead><tbody>{projectTasks.map((task) => {
           const taskEntries = timeEntriesByTaskId.get(task.id) || [];
           const logged = taskLoggedHours(task, taskEntries, clock);
           const active = task.status === "in_progress" || activeTaskIds.has(task.id);
@@ -3057,6 +3162,71 @@ function EmployeeTasksDialog({ employee, tasks, projects, timeEntries, clock, cu
           const canEditProgress = canEditTaskCompletion(currentUser, task);
           return <tr className="employee-task-clickable-row" key={task.id} onClick={(event) => { if (event.ctrlKey || event.metaKey || event.shiftKey || event.button !== 0 || (event.target as HTMLElement).closest("a, button, details")) return; onOpenTask(task); }}><td><div className="window-task-title-progress"><TaskProgressControl task={task} canEdit={canEditProgress} busy={completionSavingTaskId === task.id} onChange={(value) => updateCompletion(task.id, value)} /><a href={href} onClick={openTaskLink}><span className="employee-task-title"><strong dir="auto">{task.title}</strong>{active && <i className="employee-task-live-pulse" title="Working now" aria-label="Working now" />}</span><TaskRecordIndicators task={task} /><small>{task.expectedOutput || "—"}</small></a></div></td><td><a href={href} onClick={openTaskLink}>{task.createdByName || "Unknown user"}</a></td><td dir="ltr"><a href={href} onClick={openTaskLink}>{formatCreatedDate(task.createdAt)}</a></td><td dir="ltr"><a href={href} onClick={openTaskLink}>{formatDueDate(task.taskDate)}</a></td><td><a href={href} onClick={openTaskLink}><span className={`pill status-${task.status}`}>{tableStatusLabel[task.status]}</span></a></td><td><a href={href} onClick={openTaskLink}><span className={`pill check-${task.managerCheck}`}>{tableCheckLabel[task.managerCheck]}</span></a></td><td><a href={href} onClick={openTaskLink}>{logged ? `${logged.toFixed(2)}h` : "—"}</a></td><td><a href={href} onClick={openTaskLink}><span className={`flag flag-${flag.key}`}>{flag.label}</span></a></td></tr>;
         })}</tbody></table></div>}</section>;
+      })}</div></div>
+    </section>
+  </div>;
+}
+
+function OverviewIssuesDialog({ metric, issues, projects, onMetricSelect, onClose, onOpenIssue, onProjectSettings }: { metric: OverviewIssueMetric; issues: OverviewIssue[]; projects: Project[]; onMetricSelect: (metric: OverviewIssueMetric) => void; onClose: () => void; onOpenIssue: (id: number) => void; onProjectSettings: (project: Project) => void; }) {
+  const [statusView, setStatusView] = useState<OverviewIssueMetric>(metric);
+  const [disciplineFilter, setDisciplineFilter] = useState("all");
+  const [collapsedProjects, setCollapsedProjects] = useState<Set<string>>(() => new Set());
+  const projectGroupsRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    setStatusView(metric);
+  }, [metric]);
+  useEffect(() => {
+    const closeOnEscape = (event: KeyboardEvent) => { if (event.key === "Escape") onClose(); };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [onClose]);
+  const issueDisciplines = useMemo(() => Array.from(new Set(issues.map((issue) => issue.discipline).filter(Boolean))).sort(), [issues]);
+  const visibleIssues = useMemo(() => issues.filter((issue) => (statusView === "all" || (statusView === "closed" ? issue.status === "closed" : issue.status === "open" || issue.status === "re_open")) && (disciplineFilter === "all" || issue.discipline === disciplineFilter)), [issues, statusView, disciplineFilter]);
+  const groups = useMemo(() => {
+    const grouped = new Map<string, OverviewIssue[]>();
+    visibleIssues.forEach((issue) => grouped.set(issue.projectCode, [...(grouped.get(issue.projectCode) || []), issue]));
+    return Array.from(grouped.entries()).sort(([a], [b]) => a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" }));
+  }, [visibleIssues]);
+  const toggleProject = (projectCode: string) => setCollapsedProjects((current) => {
+    const next = new Set(current);
+    if (next.has(projectCode)) next.delete(projectCode); else next.add(projectCode);
+    return next;
+  });
+  const handleDialogWheel = (event: React.WheelEvent<HTMLDivElement>) => {
+    const outer = projectGroupsRef.current;
+    if (!outer || !event.deltaY) return;
+    const target = event.target as HTMLElement;
+    const inner = target.closest(".employee-task-table-wrap.has-more-tasks") as HTMLElement | null;
+    let remaining = event.deltaY;
+    if (inner) {
+      const available = event.deltaY > 0 ? Math.max(0, inner.scrollHeight - inner.clientHeight - inner.scrollTop) : Math.max(0, inner.scrollTop);
+      const consumed = Math.min(Math.abs(event.deltaY), available);
+      inner.scrollTop += Math.sign(event.deltaY) * consumed;
+      remaining = Math.sign(event.deltaY) * (Math.abs(event.deltaY) - consumed);
+    }
+    event.preventDefault();
+    if (remaining) outer.scrollTop += remaining;
+  };
+  const printOverviewIssues = () => {
+    const popup = window.open("", "_blank", "width=1200,height=820");
+    if (!popup) return;
+    const printedGroups = groups.map(([projectCode, projectIssues]) => {
+      const project = projects.find((item) => item.code === projectCode);
+      const rows = projectIssues.map((issue) => `<tr><td><strong>${escapeXml(issue.issueNumber)}</strong><small>${escapeXml(issue.description)}</small></td><td>${escapeXml(issue.raisedByName || "Unknown user")}</td><td>${escapeXml(issue.discipline || "-")}</td><td>${escapeXml(issue.category || "-")}</td><td>${escapeXml(issue.priority)}</td><td>${escapeXml(issue.status.replace("_", " "))}</td><td>${escapeXml(formatDueDate(issue.issueDate))}</td></tr>`).join("");
+      return `<section class="group"><header><div><strong>${escapeXml(project?.name || projectCode)}</strong><small>${escapeXml(projectCode)}</small></div><b>${projectIssues.length}</b></header><table><thead><tr><th>Issue</th><th>Raised By</th><th>Discipline</th><th>Category</th><th>Priority</th><th>Status</th><th>Date</th></tr></thead><tbody>${rows}</tbody></table></section>`;
+    }).join("");
+    popup.document.write(`<!doctype html><html dir="ltr"><head><meta charset="utf-8"><title>Overview Issues - HINDAZA</title><style>@page{size:A4 landscape;margin:10mm}*{box-sizing:border-box;-webkit-print-color-adjust:exact;print-color-adjust:exact}body{margin:0;font-family:Arial,Tahoma,sans-serif;color:#1d1d1d}.head{display:flex;align-items:center;justify-content:space-between;gap:22px;padding-bottom:13px;border-bottom:4px solid #ffd200}.logo{width:220px;max-height:76px;object-fit:contain;object-position:left center}.meta{text-align:right}.meta p{margin:0 0 4px;color:#8b6c00;font-size:9px;letter-spacing:.14em}.meta h1{margin:0;font-size:22px}.meta span{display:block;margin-top:5px;color:#6e777b;font-size:9px}.group{margin:14px 0;border:1px solid #d9d9d3;border-radius:9px;overflow:hidden;break-inside:avoid}.group>header{display:flex;align-items:center;justify-content:space-between;padding:9px 11px;background:#fffbed}.group>header strong,.group>header small{display:block}.group>header small{margin-top:3px;color:#8a6e00;font-size:8px}.group>header b{min-width:24px;height:24px;display:grid;place-items:center;border-radius:50%;background:#ffd200;font-size:9px}table{width:100%;border-collapse:collapse;table-layout:fixed}th,td{padding:8px;border-top:1px solid #e5e5e0;text-align:left;font-size:8px;vertical-align:top;overflow-wrap:anywhere}th{background:#f2f3f1;color:#667278;font-size:7px}th:first-child{width:35%}td strong,td small{display:block}td small{margin-top:3px;color:#818b90}.footer{margin-top:18px;padding-top:8px;border-top:1px solid #ddd;color:#81898d;font-size:8px}</style></head><body><div class="head"><img class="logo" src="/report-logo.png" alt="HINDAZA"><div class="meta"><p>OVERVIEW ISSUES</p><h1>Project Issues</h1><span>${visibleIssues.length} filtered issues · Grouped by project</span></div></div>${printedGroups || '<div class="group"><header>No issues match this filter.</header></div>'}<div class="footer">Generated from HINDAZA Project Management</div><script>window.onload=()=>window.print()</script></body></html>`);
+    popup.document.close();
+  };
+  return <div className="drawer-layer employee-tasks-layer overview-issues-layer" role="dialog" aria-modal="true" aria-label="Overview issues">
+    <button className="drawer-backdrop" onClick={onClose} aria-label="Close overview issues" />
+    <section className="employee-tasks-dialog report-tasks-dialog overview-issue-dialog">
+      <header><div className="report-dialog-heading"><p>OVERVIEW ISSUES</p><h2>Project Issues</h2><span>{visibleIssues.length} of {issues.length} issues</span></div><div className="employee-tasks-header-actions"><button type="button" className="employee-tasks-print" onClick={printOverviewIssues} aria-label="Print overview issues as PDF" title="Print / Save as PDF"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 8V3h10v5M7 17H5a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2M7 13h10v8H7z" /><path d="M17.5 11h.01" /></svg></button><button type="button" className="employee-tasks-close" onClick={onClose} aria-label="Close">×</button></div></header>
+      <div className="employee-tasks-toolbar overview-issue-toolbar"><div><button type="button" className={statusView === "all" ? "active" : ""} onClick={() => onMetricSelect("all")}>All Issues</button><button type="button" className={statusView === "open" ? "active" : ""} onClick={() => onMetricSelect("open")}>Open / Re-opened</button><button type="button" className={statusView === "closed" ? "active" : ""} onClick={() => onMetricSelect("closed")}>Closed</button></div><div className="overview-issue-toolbar-filters"><select value={disciplineFilter} onChange={(event) => setDisciplineFilter(event.target.value)} aria-label="Filter overview issues by discipline"><option value="all">All Disciplines</option>{issueDisciplines.map((discipline) => <option key={discipline} value={discipline}>{discipline}</option>)}</select></div><small>Click an issue to open it. Use Back to return.</small></div>
+      <div className={`employee-project-groups report-task-group-count-${Math.min(groups.length, 3)}`} ref={projectGroupsRef} onWheel={handleDialogWheel}><div className="employee-project-groups-content">{groups.length === 0 ? <div className="comments-empty">No issues match this filter.</div> : groups.map(([projectCode, projectIssues]) => {
+        const project = projects.find((item) => item.code === projectCode);
+        const collapsed = collapsedProjects.has(projectCode);
+        return <section className="employee-project-group" key={projectCode}><button type="button" className={`employee-project-heading${project ? " with-settings" : ""}`} onClick={() => toggleProject(projectCode)} aria-expanded={!collapsed}><span>{collapsed ? "+" : "-"}</span><div><strong>{project?.name || projectCode}</strong><small>{projectCode}</small></div><em>{projectIssues.length}</em>{project && <span className="report-project-settings" role="button" tabIndex={0} title={`Project settings for ${project.name}`} aria-label={`Project settings for ${project.name}`} onClick={(event) => { event.stopPropagation(); onProjectSettings(project); }} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); event.stopPropagation(); onProjectSettings(project); } }}>⚙</span>}</button>{!collapsed && <div className={`employee-task-table-wrap${projectIssues.length > 4 ? " has-more-tasks" : ""}`} tabIndex={projectIssues.length > 4 ? 0 : undefined}><table className="employee-task-table overview-issue-table"><thead><tr><th>Issue</th><th>Raised By</th><th>Discipline</th><th>Priority</th><th>Status</th><th>Date</th></tr></thead><tbody>{projectIssues.map((issue) => <tr className="employee-task-clickable-row" key={issue.id} onClick={() => onOpenIssue(issue.id)}><td><strong dir="auto">{issue.issueNumber}</strong><small>{issue.description}</small></td><td>{issue.raisedByName || "Unknown user"}</td><td>{issue.discipline || "-"}</td><td><span className={`issue-pill issue-priority-${issue.priority}`}>{issue.priority}</span></td><td><span className={`issue-pill issue-status-${issue.status}`}>{issue.status.replace("_", " ")}</span></td><td dir="ltr">{formatDueDate(issue.issueDate)}</td></tr>)}</tbody></table></div>}</section>;
       })}</div></div>
     </section>
   </div>;
@@ -3076,6 +3246,8 @@ function ProjectOverviewDashboard(props: {
   showProjects: () => void;
   showTasks: () => void;
   showIssues: () => void;
+  openTaskMetric: (metric: OverviewTaskMetric) => void;
+  openIssueMetric: (metric: OverviewIssueMetric) => void;
 }) {
   const timeEntriesByTaskId = useMemo(() => rowsByTaskId(props.timeEntries), [props.timeEntries]);
   const activeTaskIds = useMemo(() => new Set(props.timeEntries.filter((entry) => !entry.endedAt).map((entry) => entry.taskId)), [props.timeEntries]);
@@ -3086,6 +3258,11 @@ function ProjectOverviewDashboard(props: {
   const pendingReview = props.tasks.filter((task) => task.managerCheck === "pending");
   const openIssues = props.issues.filter((issue) => issue.status !== "closed");
   const criticalIssues = openIssues.filter((issue) => issue.priority === "critical");
+  const approvedTasks = props.tasks.filter((task) => task.managerCheck === "approved").length;
+  const closedTasks = props.tasks.filter((task) => task.status === "done").length;
+  const wipTasks = props.tasks.filter((task) => task.managerCheck === "new" || task.status === "in_progress").length;
+  const openIssueCount = props.issues.filter((issue) => issue.status === "open" || issue.status === "re_open").length;
+  const closedIssueCount = props.issues.filter((issue) => issue.status === "closed").length;
   const completion = props.tasks.length ? Math.round((props.tasks.filter((task) => task.status === "done").length / props.tasks.length) * 100) : 0;
   const plannedHours = props.tasks.reduce((sum, task) => sum + task.plannedHours, 0);
   const actualHours = props.tasks.reduce((sum, task) => sum + taskLoggedHours(task, timeEntriesByTaskId.get(task.id) || [], props.clock), 0);
@@ -3111,10 +3288,10 @@ function ProjectOverviewDashboard(props: {
     <div className="overview-kpis">
       {props.isEmployee
         ? <article className="overview-kpi kpi-projects employee-project-kpi"><span>Active Projects</span><strong>{activeProjects.length}</strong></article>
-        : <button className="overview-kpi kpi-projects" onClick={props.showProjects}><span>Active Projects</span><strong>{activeProjects.length}</strong><small>{completedProjects} completed · {onHoldProjects} on hold · {props.projects.length} total</small><i>↗</i></button>}
-      <button className="overview-kpi kpi-progress" onClick={props.showTasks}><span>Task Completion</span><strong>{completion}%</strong><small>{props.tasks.length - openTasks.length} of {props.tasks.length} complete</small><div className="overview-mini-progress"><i style={{ width: `${completion}%` }} /></div></button>
-      <button className="overview-kpi kpi-tasks" onClick={props.showTasks}><span>Open Tasks</span><strong>{openTasks.length}</strong><small>{pendingReview.length} pending review</small><i>↗</i></button>
-      <button className="overview-kpi kpi-issues" onClick={props.showIssues}><span>Open Issues</span><strong>{openIssues.length}</strong><small>{criticalIssues.length} critical</small><i>↗</i></button>
+        : <button className="overview-kpi kpi-projects" onClick={props.showProjects}><span>Active Projects</span><strong>{activeProjects.length}</strong><small>{completedProjects} completed · {onHoldProjects} on hold · {props.projects.length} total</small></button>}
+      <button className="overview-kpi kpi-tasks" onClick={() => props.openTaskMetric("all")}><span>Tasks</span><strong>{props.tasks.length}</strong><small className="overview-kpi-inline-metrics"><span className="metric-pending">Pending {pendingReview.length}</span><i>-</i><span className="metric-wip">New/WIP {wipTasks}</span><i>-</i><span className="metric-approved">Approved {approvedTasks}</span></small></button>
+      <button className="overview-kpi kpi-issues" onClick={() => props.openIssueMetric("all")}><span>Issues</span><strong>{props.issues.length}</strong><small className="overview-kpi-inline-metrics"><span className="metric-open">Open {openIssueCount}</span><i>-</i><span className="metric-approved">Closed {closedIssueCount}</span></small></button>
+      <button className="overview-kpi kpi-rfi" onClick={props.showProjects}><span>RFI</span><strong>0</strong><small>Ready for future RFI workflow</small><i>?</i></button>
       <article className="overview-kpi kpi-hours"><span>Workload</span><strong>{actualHours.toFixed(1)}h</strong><small>{plannedHours.toFixed(1)}h planned</small><em>{plannedHours ? `${Math.round((actualHours / plannedHours) * 100)}% used` : "No hours planned"}</em></article>
     </div>
 

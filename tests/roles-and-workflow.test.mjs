@@ -1517,7 +1517,7 @@ test("V115 uses calendar reports and dedicated task and issue project dialogs", 
   assert.doesNotMatch(dashboard, /Weekly or monthly, grouped by project or employee/);
   assert.match(dashboard, /className="report-project-count"/);
   assert.match(dashboard, /hindazaReportRow/);
-  assert.match(dashboard, /className="report-dialog-filterbar"/);
+  assert.match(dashboard, /report-dialog-filterbar/);
   assert.match(dashboard, /Open Project Tasks/);
   assert.match(dashboard, /reportRowKey && <ReportTasksDialog/);
   assert.match(issues, /hindazaIssueProject/);
@@ -2481,4 +2481,52 @@ test("V177 refines note controls and sorts issues and task dialogs from creation
   assert.match(dashboard, /useWindowTaskTableSorting\("\.report-tasks-dialog"/);
   assert.match(dashboard, /useWindowTaskTableSorting\("\.employee-tasks-dialog:not\(\.report-tasks-dialog\)"/);
   assert.match(styles, /\.notes-image-align/);
+});
+
+test("V178 adds overview drilldowns, discipline reports, issue mentions, and editable client replies", async () => {
+  const [dashboard, issuesModule, issuesApi, issueCommentsApi, styles] = await Promise.all([
+    source("app/task-dashboard.tsx"),
+    source("app/issues-module.tsx"),
+    source("app/api/issues/route.ts"),
+    source("app/api/issue-comments/route.ts"),
+    source("app/globals.css"),
+  ]);
+  assert.match(issuesApi, /clientReply: cleanText\(payload\.clientReply, 4_000\)/);
+  assert.match(issueCommentsApi, /notifyMentionedUsers/);
+  assert.match(issueCommentsApi, /mentionedEmails/);
+  assert.match(issuesModule, /Client Response · رد العميل/);
+  assert.match(issuesModule, /comment-mention-menu/);
+  assert.match(dashboard, /type ReportGroup = "project" \| "employee" \| "discipline"/);
+  assert.match(dashboard, /<option value="discipline">Discipline<\/option>/);
+  assert.match(dashboard, /hindazaOverviewTasks/);
+  assert.match(dashboard, /OverviewIssuesDialog/);
+  assert.match(dashboard, /groupBy=\{reportGroup === "project" \? "employee" : "project"\}/);
+  assert.match(dashboard, /kpi-rfi/);
+  assert.match(dashboard, /metricButtons=\{\[/);
+  assert.match(dashboard, /overview-task-toolbar/);
+  assert.match(dashboard, /label: "All Tasks"[\s\S]*label: "Pending"[\s\S]*label: "New\/WIP"[\s\S]*label: "Approved"/);
+  assert.doesNotMatch(dashboard, /label: "Closed", metric: "closed"/);
+  assert.match(dashboard, /overviewFilters/);
+  assert.match(dashboard, /overview-task-toolbar-filters/);
+  assert.match(dashboard, /closeOverviewTasksToOverview/);
+  assert.match(dashboard, /closeOverviewIssuesToOverview/);
+  assert.match(dashboard, /overviewFilters[\s\S]*onClose=\{closeOverviewTasksToOverview\}/);
+  assert.match(dashboard, /OverviewIssuesDialog[\s\S]*onClose=\{closeOverviewIssuesToOverview\}/);
+  assert.match(dashboard, /changeOverviewTaskMetric/);
+  assert.match(dashboard, /changeOverviewIssueMetric/);
+  assert.match(dashboard, /overview-issue-toolbar-filters/);
+  assert.match(dashboard, /Filter overview issues by discipline/);
+  assert.doesNotMatch(dashboard, /kpi-projects"[\s\S]*<i>↗<\/i>/);
+  assert.doesNotMatch(dashboard, /className="overview-kpi-open"/);
+  assert.doesNotMatch(dashboard, /overview-kpi-breakdown/);
+  assert.match(dashboard, /overview-kpi-inline-metrics/);
+  assert.match(dashboard, /<i>-<\/i>/);
+  assert.match(dashboard, /metric-pending/);
+  assert.match(dashboard, /metric-wip/);
+  assert.match(dashboard, /metric-open/);
+  assert.match(styles, /\.report-dialog-filterbar select, \.report-dialog-filterbar input \{[^}]*font-size: 10px/);
+  assert.match(styles, /\.overview-kpi-inline-metrics/);
+  assert.match(styles, /\.overview-task-toolbar-filters/);
+  assert.match(styles, /\.overview-issue-toolbar-filters/);
+  assert.doesNotMatch(styles, /\.overview-kpi-breakdown/);
 });

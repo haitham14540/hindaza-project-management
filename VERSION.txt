@@ -1,4 +1,4 @@
 HINDAZA Project Management
-Version: V121
-Source commit: 9e41c7d4245471683f0af120cb95b3b3ca1db33d
-Export date: 2026-08-15
+Version: V185
+Source commit: local-v185-beta
+Export date: 2026-08-22

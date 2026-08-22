@@ -56,6 +56,28 @@ async function notifyCounterpart(
   });
 }
 
+async function notifyMentionedUsers(
+  db: Awaited<ReturnType<typeof getDb>>,
+  currentUser: Awaited<ReturnType<typeof getCurrentUser>>,
+  issue: typeof projectIssues.$inferSelect,
+  mentionedEmails: string[],
+) {
+  const uniqueEmails = Array.from(new Set(mentionedEmails.map((email) => email.toLowerCase()).filter((email) => email && email !== currentUser.email.toLowerCase())));
+  if (!uniqueEmails.length) return;
+  const recipients = await db.select({ email: users.email }).from(users)
+    .where(and(inArray(users.email, uniqueEmails), eq(users.active, true)));
+  if (!recipients.length) return;
+  await createNotifications(db, recipients.map((recipient) => ({
+    recipientEmail: recipient.email,
+    type: "issue_note_added",
+    issueId: issue.id,
+    title: "You were mentioned in an issue · تمت الإشارة إليك في مشكلة",
+    message: `${issue.issueNumber} · ${currentUser.displayName} mentioned you`,
+    actorName: currentUser.displayName,
+    actorLabel: "Mentioned By",
+  })));
+}
+
 export async function POST(request: Request) {
   try {
     const currentUser = await getCurrentUser(request);
@@ -64,6 +86,7 @@ export async function POST(request: Request) {
     const issueId = Number(payload.issueId);
     const section = payload.section === "client" ? "client" as const : "internal" as const;
     const body = cleanText(payload.body);
+    const mentionedEmails = Array.isArray(payload.mentionedEmails) ? payload.mentionedEmails.map((email) => cleanText(email, 180)).filter(Boolean) : [];
     if (!Number.isInteger(issueId)) return Response.json({ error: "Invalid issue id." }, { status: 400 });
     if (!body) return Response.json({ error: "Write a note before posting." }, { status: 400 });
     const db = await getDb();
@@ -74,6 +97,7 @@ export async function POST(request: Request) {
     const [note] = await db.insert(issueComments).values({ issueId, section, authorEmail: currentUser.email, authorName: currentUser.displayName, body }).returning();
     await db.update(projectIssues).set({ updatedAt: sql`CURRENT_TIMESTAMP` }).where(eq(projectIssues.id, issueId));
     await notifyCounterpart(db, currentUser, issue, creatorEmail, section);
+    await notifyMentionedUsers(db, currentUser, issue, mentionedEmails);
     await recordActivity(db, currentUser, { action: "note_added", entityType: "issue", entityId: issueId, entityLabel: issue.issueNumber, projectCode: issue.projectCode, details: `${section === "client" ? "Client response" : "Issue"} note: ${body}` });
     return Response.json({ note }, { status: 201 });
   } catch (error) {
