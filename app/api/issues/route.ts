@@ -374,7 +374,7 @@ export async function PATCH(request: Request) {
       issueDate: coreLocked ? existing.issueDate : cleanText(payload.issueDate, 10) || existing.issueDate,
       resolvedDate: status === "closed" ? cleanText(payload.resolvedDate, 10) || (existing.status === "closed" && existing.resolvedDate ? existing.resolvedDate : operationalDate()) : "",
       comments: existing.comments,
-      clientReply: existing.clientReply,
+      clientReply: cleanText(payload.clientReply, 4_000),
       updatedAt: sql`CURRENT_TIMESTAMP`,
     }).where(eq(projectIssues.id, id)).returning();
     await rememberCategory(db, category, currentUser.email);

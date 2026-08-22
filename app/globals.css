@@ -686,7 +686,7 @@ button.task-gantt-label { width: 100%; border-top: 0; border-bottom: 0; border-l
 .report-range-summary { margin: 0 18px 14px; padding: 10px 12px; border: 1px solid #ead58a; border-radius: 9px; background: #fffbed; color: #6d5900; text-align: center; font-size: 10px; }
 .report-date-warning { grid-column: 1 / -1; padding: 11px 14px; border: 1px solid #df7479; border-radius: 10px; background: #fff0f1; color: #a2242d; text-align: center; font-size: 10px; font-weight: 850; }
 .report-dialog-filterbar { padding: 10px 14px; display: grid; grid-template-columns: repeat(5, minmax(120px, 1fr)) auto; align-items: end; gap: 8px; border-bottom: 1px solid #e2e2dc; background: white; }
-.report-dialog-filterbar select, .report-dialog-filterbar input { width: 100%; min-height: 34px; border: 1px solid #d7dfdf; border-radius: 8px; background: white; color: #35444a; padding: 7px 9px; font-size: 8px; }
+.report-dialog-filterbar select, .report-dialog-filterbar input { width: 100%; min-height: 34px; border: 1px solid #d7dfdf; border-radius: 8px; background: white; color: #35444a; padding: 7px 9px; font-size: 10px; }
 .report-dialog-filterbar label { display: grid; gap: 3px; }
 .report-dialog-filterbar label span { color: #758187; font-size: 7px; font-weight: 850; }
 .report-dialog-filterbar > small { grid-column: 1 / -1; color: #899398; font-size: 8px; }
@@ -1332,12 +1332,33 @@ button.overview-kpi:hover { transform: translateY(-2px); border-color: #d8bc35; 
 .overview-kpi.kpi-progress::before { background: #2f8063; }
 .overview-kpi.kpi-tasks::before { background: #d6ad00; }
 .overview-kpi.kpi-issues::before { background: #c7545d; }
+.overview-kpi.kpi-rfi::before { background: #4f7f8c; }
 .overview-kpi.kpi-hours::before { background: #7665a7; }
 .overview-kpi > span { display: block; color: #717a7e; font-size: 10px; font-weight: 900; letter-spacing: .04em; text-transform: uppercase; }
 .overview-kpi > strong { display: block; margin-top: 13px; color: #171717; font-size: 31px; line-height: 1; }
 .overview-kpi > small { display: block; margin-top: 9px; color: #8b9497; font-size: 9px; }
 .overview-kpi > i { position: absolute; top: 16px; right: 16px; width: 25px; height: 25px; display: grid; place-items: center; border-radius: 8px; background: #f2f2ee; color: #565c5e; font-size: 12px; font-style: normal; }
 .overview-kpi > em { display: inline-flex; margin-top: 10px; padding: 4px 7px; border-radius: 999px; background: #f3effa; color: #675687; font-size: 8px; font-style: normal; font-weight: 900; }
+.overview-kpi-inline-metrics { display: flex; flex-wrap: wrap; gap: 4px 13px; align-items: center; margin-top: 9px; color: #8b9497; font-size: 9px; font-weight: 850; }
+.overview-kpi-inline-metrics span { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
+.overview-kpi-inline-metrics i { margin-inline: 2px; color: #a7b0b4; font-size: 8px; font-style: normal; font-weight: 900; }
+.overview-kpi-inline-metrics .metric-pending { color: #b86b00; }
+.overview-kpi-inline-metrics .metric-wip { color: #347a9b; }
+.overview-kpi-inline-metrics .metric-approved { color: #2f8063; }
+.overview-kpi-inline-metrics .metric-open { color: #c7545d; }
+.overview-task-toolbar button b, .overview-issue-toolbar button b { margin-inline-start: 6px; font-size: 10px; }
+.overview-task-toolbar { display: grid; grid-template-columns: minmax(0, auto) minmax(320px, 520px); align-items: center; gap: 10px 14px; }
+.overview-task-toolbar > div:first-child { display: flex; flex-wrap: wrap; gap: 8px; }
+.overview-task-toolbar-filters { display: grid; grid-template-columns: repeat(2, minmax(150px, 1fr)); gap: 8px; }
+.overview-task-toolbar-filters select { width: 100%; min-height: 34px; border: 1px solid #d7dfdf; border-radius: 8px; background: white; color: #35444a; padding: 7px 9px; font-size: 10px; }
+.overview-task-toolbar > small { grid-column: 1 / -1; }
+.overview-issue-toolbar { display: grid; grid-template-columns: minmax(0, auto) minmax(170px, 260px); align-items: center; gap: 10px 14px; }
+.overview-issue-toolbar > div:first-child { display: flex; flex-wrap: wrap; gap: 8px; }
+.overview-issue-toolbar-filters select { width: 100%; min-height: 34px; border: 1px solid #d7dfdf; border-radius: 8px; background: white; color: #35444a; padding: 7px 9px; font-size: 10px; }
+.overview-issue-toolbar > small { grid-column: 1 / -1; }
+.overview-issue-dialog .overview-issue-table { min-width: 980px; }
+.overview-issue-dialog .employee-task-table td:first-child strong, .overview-issue-dialog .employee-task-table td:first-child small { display: block; }
+.overview-issue-dialog .employee-task-table td:first-child small { margin-top: 4px; color: #717c82; }
 .overview-mini-progress { height: 5px; margin-top: 12px; overflow: hidden; border-radius: 99px; background: #e9eeeb; }
 .overview-mini-progress i { display: block; height: 100%; border-radius: inherit; background: #2f8063; }
 .overview-main-grid { display: grid; grid-template-columns: minmax(0, 1.65fr) minmax(290px, .7fr); gap: 18px; align-items: stretch; }
